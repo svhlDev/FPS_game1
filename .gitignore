@@ -49,3 +49,6 @@ Thumbs.db
 
 # Source drop folder (copies live in Assets/Scripts/Flight)
 /files_claude/
+
+# Build output
+/Builds/

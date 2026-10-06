@@ -346,7 +346,7 @@ public class FlyingVehicle : MonoBehaviour
 
     void UpdateAim(Mouse mouse)
     {
-        if (!IsOccupied || mouse == null) return;
+        if (!IsOccupied || mouse == null || Cursor.lockState != CursorLockMode.Locked) return;
         Vector2 s = mouse.delta.ReadValue() * steerSensitivity;
         aimYaw += s.x;
         aimPitch = Mathf.Clamp(aimPitch - s.y, -80f, 80f);

@@ -111,6 +111,7 @@ public class FirstPersonController : MonoBehaviour
         spawnRot = transform.rotation;
         SpawnTime = Time.time;
         killHeight = TrafficAuthority.LayerAltitude(LaneLayer.Lower) - killDepthBelowLowestLayer;
+        VehicleHUD.Ensure();
     }
 
     void OnEnable()
@@ -136,7 +137,8 @@ public class FirstPersonController : MonoBehaviour
         // Cars moved this frame; make their colliders match before we query against them.
         Physics.SyncTransforms();
 
-        Vector2 look = mouse.delta.ReadValue() * lookSensitivity;
+        // No mouse look while the cursor is released (Esc).
+        Vector2 look = Cursor.lockState == CursorLockMode.Locked ? mouse.delta.ReadValue() * lookSensitivity : Vector2.zero;
         transform.Rotate(0f, look.x, 0f);
         pitch = Mathf.Clamp(pitch - look.y, -85f, 85f);
         cameraRoot.localRotation = Quaternion.Euler(pitch, 0f, 0f);
