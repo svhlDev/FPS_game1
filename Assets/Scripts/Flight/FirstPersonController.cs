@@ -53,8 +53,6 @@ public class FirstPersonController : MonoBehaviour
     [Header("Rear grab")]
     [Tooltip("Catch a grab point when your hands come within this distance of it.")]
     public float grabRadius = 1.5f;
-    [Tooltip("Seconds you can hang before your grip gives out.")]
-    public float hangTime = 6f;
     [Tooltip("Max body sway from the car's acceleration (m).")]
     public float swayAmount = 0.5f;
     [Tooltip("Sway per m/s^2 of car acceleration, before the swayAmount clamp.")]
@@ -92,7 +90,7 @@ public class FirstPersonController : MonoBehaviour
 
     VehicleGrabPoint hang;            // grab point we're hanging from
     Vector3 hangLocal;                // grab point in the car's yaw-only frame
-    float hangLeft, regrabAt;
+    float regrabAt;
     Vector3 sway, swayVel;
 
     Vector3 spawnPos;
@@ -362,7 +360,6 @@ public class FirstPersonController : MonoBehaviour
         hangLocal = Quaternion.Inverse(rot) * (best.transform.position - car.PlatformPosition);
         platformYaw = rot.eulerAngles.y;
         lastCarLocalVel = Quaternion.Inverse(rot) * Flat(car.Velocity);
-        hangLeft = hangTime;
         sway = swayVel = Vector3.zero;
         airVel = Vector3.zero;
         verticalVelocity = 0f;
@@ -389,14 +386,8 @@ public class FirstPersonController : MonoBehaviour
         sway = Vector3.SmoothDamp(sway, swayTarget, ref swayVel, 0.25f);
         UpdateHangPosition(car, rot);
 
-        hangLeft -= dt;
         if (kb.spaceKey.wasPressedThisFrame) { ClimbUp(car); return; }
-        bool ctrl = kb.leftCtrlKey.wasPressedThisFrame || kb.rightCtrlKey.wasPressedThisFrame;
-        if (ctrl || hangLeft <= 0f)
-        {
-            if (hangLeft <= 0f) Flash("Grip gone");
-            LetGo(carVel);
-        }
+        if (kb.leftCtrlKey.wasPressedThisFrame || kb.rightCtrlKey.wasPressedThisFrame) LetGo(carVel);
     }
 
     void UpdateHangPosition(FlyingVehicle car, Quaternion rot)
@@ -477,17 +468,7 @@ public class FirstPersonController : MonoBehaviour
         if (assistActive) GUI.Label(new Rect(cx - 40, cy + 20, 200, 25), "[ BOOTS LOCK ]");
 
         if (hang != null)
-        {
-            float frac = Mathf.Clamp01(hangLeft / hangTime);
-            var bar = new Rect(cx - 100, Screen.height - 70, 200, 12);
-            var prev = GUI.color;
-            GUI.color = new Color(0f, 0f, 0f, 0.6f);
-            GUI.DrawTexture(bar, Texture2D.whiteTexture);
-            GUI.color = Color.Lerp(Color.red, Color.green, frac);
-            GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * frac, bar.height), Texture2D.whiteTexture);
-            GUI.color = prev;
-            GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "GRIP   Space climb | Ctrl let go");
-        }
+            GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "HANGING   Space climb | Ctrl let go");
         else if (platform != null && grounded)
             GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "E take car | Space jump");
     }

@@ -38,6 +38,9 @@ public class LanePath : MonoBehaviour
     readonly List<float> cumulative = new List<float>();
     public float Length { get; private set; }
 
+    // Cars currently attached to this lane (Lane mode). Maintained by FlyingVehicle via TrafficSystem.
+    [NonSerialized] public readonly List<FlyingVehicle> Cars = new List<FlyingVehicle>();
+
     void OnEnable() => Rebuild();
     void OnValidate() => Rebuild();
     void Update() { if (!Application.isPlaying) Rebuild(); }
@@ -70,7 +73,7 @@ public class LanePath : MonoBehaviour
         cumulative.Add(Length);
     }
 
-    float WrapDistance(float d) => closedLoop && Length > 0f ? Mathf.Repeat(d, Length) : Mathf.Clamp(d, 0f, Length);
+    public float WrapDistance(float d) => closedLoop && Length > 0f ? Mathf.Repeat(d, Length) : Mathf.Clamp(d, 0f, Length);
 
     public void Sample(float distance, out Vector3 position, out Vector3 forward)
     {

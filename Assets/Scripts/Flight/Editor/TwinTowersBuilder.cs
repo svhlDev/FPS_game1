@@ -227,6 +227,7 @@ public static class TwinTowersBuilder
         {
             var cop = Slab(policeRoot, $"Police_{i}", posts[i] + Vector3.up * (MiddleAltitude + PoliceAboveMiddle),
                            new Vector3(CarWidth, CarHalfHeight * 2f, CarLength), policeMat);
+            AddKinematicBody(cop.gameObject);
             cop.gameObject.AddComponent<PoliceUnit>();
         }
 

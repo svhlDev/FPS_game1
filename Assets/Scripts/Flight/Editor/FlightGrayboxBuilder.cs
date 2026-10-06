@@ -210,6 +210,7 @@ public static class FlightGrayboxBuilder
             var cop = Slab(policeRoot, $"Police_{i}",
                 new Vector3(Avenue(posts[i, 0]) + 15f, LaneAltitude + 8f, Avenue(posts[i, 1]) + 15f),
                 new Vector3(3f, 1.5f, 5f), policeMat);
+            AddKinematicBody(cop.gameObject);
             cop.gameObject.AddComponent<PoliceUnit>();
         }
 
@@ -384,9 +385,21 @@ public static class FlightGrayboxBuilder
         cockpit.SetParent(root.transform, false);
         cockpit.localPosition = new Vector3(0f, 1.2f, 0.5f);
 
+        AddKinematicBody(root);
         var v = root.AddComponent<FlyingVehicle>();
         v.cockpitAnchor = cockpit;
         return v;
+    }
+
+    // Moving colliders need a kinematic Rigidbody so physics doesn't treat them as static geometry.
+    // Still moved by script through the transform, exactly as before.
+    internal static Rigidbody AddKinematicBody(GameObject go)
+    {
+        var rb = go.AddComponent<Rigidbody>();
+        rb.isKinematic = true;
+        rb.useGravity = false;
+        rb.interpolation = RigidbodyInterpolation.None;
+        return rb;
     }
 
     // Visible rack across the back of a car with a VehicleGrabPoint on its rear edge. No collider:

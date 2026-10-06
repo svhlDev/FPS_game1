@@ -105,10 +105,30 @@ public class FlyingVehicle : MonoBehaviour
     public Vector3 BodyHalfExtents => colHalf;
     public Vector3 BodyCenterLocal => colCenter;
     public static IReadOnlyList<FlyingVehicle> Active => All;
+    // The car the player is driving, if any.
+    public static FlyingVehicle Driven { get; private set; }
+    // Lane this car is registered on for the traffic AI (only while in Lane mode).
+    public LanePath RegisteredPath => registeredPath;
+    public float LaneDistance => distance;
+    public LaneLayer CurrentLayer => currentLayer;
+    // Slot in TrafficSystem.States for the current frame.
+    public int TrafficIndex { get; set; } = -1;
+
+    // HUD readouts (drawn by VehicleHUD).
+    public float HudSpeed => Mode == FlightMode.Lane ? speed : velocity.magnitude;
+    public float MagnetHold => magnetHold;
+    public bool IsLayerOpen(LaneLayer layer) => IsAvailable(layer);
+    public bool InNoSwitchZone => path != null && path.IsNoSwitch(distance);
+    public string FlashMessage => Time.time < flashUntil ? flash : null;
+
     // A traffic agent: nobody driving and it knows which lane it belongs to.
     bool IsAI => !IsOccupied && path != null;
     static readonly List<FlyingVehicle> All = new List<FlyingVehicle>();
-    public FlightMode Mode { get; private set; } = FlightMode.Lane;
+    // Changing mode keeps the lane's car list in sync (registered only while in Lane mode).
+    public FlightMode Mode { get => mode; private set { mode = value; SyncLaneRegistration(); } }
+    FlightMode mode = FlightMode.Lane;
+    LanePath registeredPath;
+    bool started;
 
     LaneLayer currentLayer;
     int cycleDir = 1;
@@ -132,11 +152,31 @@ public class FlyingVehicle : MonoBehaviour
     readonly Collider[] overlapBuf = new Collider[16];
     static int collisionMask;   // everything except the on-foot player
 
-    void OnEnable() => All.Add(this);
-    void OnDisable() => All.Remove(this);
+    void OnEnable()
+    {
+        All.Add(this);
+        SyncLaneRegistration();
+    }
+
+    void OnDisable()
+    {
+        All.Remove(this);
+        SyncLaneRegistration();
+        if (Driven == this) Driven = null;
+    }
+
+    void SyncLaneRegistration()
+    {
+        LanePath want = started && isActiveAndEnabled && mode == FlightMode.Lane ? path : null;
+        if (want == registeredPath) return;
+        TrafficSystem.Unregister(this, registeredPath);
+        registeredPath = want;
+        if (want != null) TrafficSystem.Register(this, want);
+    }
 
     void Start()
     {
+        started = true;
         allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
         int playerLayer = LayerMask.NameToLayer("Player");
@@ -155,6 +195,7 @@ public class FlyingVehicle : MonoBehaviour
             currentOffset = startLayer == LaneLayer.Middle ? Vector2.zero : o0 * w0;
             velocity = path.SmoothForward(startDistance) * speed;
         }
+        SyncLaneRegistration();
     }
 
     void Update()
@@ -460,48 +501,57 @@ public class FlyingVehicle : MonoBehaviour
     }
 
     // Speed limit, then: follow the car ahead at followGap, and yield at crossings.
+    // Uses the TrafficSystem snapshot: the leader is the next car on our lane and layer,
+    // and only cars in the neighbouring grid cells are checked for conflicts.
     float AITargetSpeed(Vector3 fwd)
     {
+        TrafficSystem.EnsureBuilt();
         float target = aiCruiseSpeed;
+        int self = TrafficIndex;
+        var states = TrafficSystem.States;
+        if (self < 0 || self >= TrafficSystem.Count || states[self].car != this) return target;
+
         Vector3 me = transform.position;
         float range2 = yieldLookRange * yieldLookRange;
         float carLength = colHalf.z * 2f;
-        float leaderAhead = float.MaxValue, leaderSpeed = 0f;
+        var mine = states[self];
 
-        foreach (var other in All)
+        // Same lane, same layer: follow the car ahead.
+        if (mine.leader >= 0 && mine.leaderGap <= yieldLookRange)
         {
-            if (other == this) continue;
-            Vector3 r = other.transform.position - me;
-            if (r.sqrMagnitude > range2) continue;
-            float ahead = Vector3.Dot(r, fwd);
-            if (ahead <= 0f) continue;
-
-            // Same lane, same direction: a leader to follow.
-            Vector3 lat = r - fwd * ahead;
-            bool sameDir = Vector3.Dot(other.transform.forward, fwd) > 0.7f;
-            if (sameDir && Mathf.Abs(lat.y) < 4f && new Vector2(lat.x, lat.z).magnitude < 4f)
-            {
-                if (ahead < leaderAhead) { leaderAhead = ahead; leaderSpeed = Vector3.Dot(other.velocity, fwd); }
-                continue;
-            }
-
-            // Anything else on a collision course (crossings, cars cutting in).
-            Vector3 u = other.velocity - velocity;
-            float uu = u.sqrMagnitude;
-            float tca = uu > 1e-3f ? Mathf.Clamp(-Vector3.Dot(r, u) / uu, 0f, yieldHorizon) : 0f;
-            if ((r + u * tca).sqrMagnitude > yieldClearance * yieldClearance) continue;
-
-            float otherAhead = Vector3.Dot(-r, other.transform.forward);
-            bool iYield = other.IsOccupied || ahead > otherAhead + 0.01f ||
-                          (Mathf.Abs(ahead - otherAhead) <= 0.01f && GetHashCode() > other.GetHashCode());
-            if (iYield) target = Mathf.Min(target, Mathf.Max(0f, Vector3.Dot(other.velocity, fwd) * 0.9f));
+            float gap = mine.leaderGap - carLength;
+            float follow = gap < minGap ? 0f : Vector3.Dot(states[mine.leader].vel, fwd) + followGain * (gap - followGap);
+            target = Mathf.Min(target, Mathf.Max(0f, follow));
         }
 
-        if (leaderAhead < float.MaxValue)
+        // Anything else on a collision course (crossings, cars cutting in, the player's car).
+        TrafficSystem.CellOf(me, out int cx, out int cz);
+        for (int dx = -1; dx <= 1; dx++)
+        for (int dz = -1; dz <= 1; dz++)
         {
-            float gap = leaderAhead - carLength;
-            float follow = gap < minGap ? 0f : leaderSpeed + followGain * (gap - followGap);
-            target = Mathf.Min(target, Mathf.Max(0f, follow));
+            if (!TrafficSystem.TryCell(cx + dx, cz + dz, out int start, out int count)) continue;
+            for (int k = start; k < start + count; k++)
+            {
+                int j = TrafficSystem.CellCar(k);
+                if (j == self) continue;
+                ref var other = ref states[j];
+                if (other.path != null && other.path == mine.path && other.layer == mine.layer) continue; // leader handles it
+
+                Vector3 r = other.pos - me;
+                if (r.sqrMagnitude > range2) continue;
+                float ahead = Vector3.Dot(r, fwd);
+                if (ahead <= 0f) continue;
+
+                Vector3 u = other.vel - velocity;
+                float uu = u.sqrMagnitude;
+                float tca = uu > 1e-3f ? Mathf.Clamp(-Vector3.Dot(r, u) / uu, 0f, yieldHorizon) : 0f;
+                if ((r + u * tca).sqrMagnitude > yieldClearance * yieldClearance) continue;
+
+                float otherAhead = Vector3.Dot(-r, other.fwd);
+                bool iYield = other.occupied || ahead > otherAhead + 0.01f ||
+                              (Mathf.Abs(ahead - otherAhead) <= 0.01f && GetHashCode() > other.car.GetHashCode());
+                if (iYield) target = Mathf.Min(target, Mathf.Max(0f, Vector3.Dot(other.vel, fwd) * 0.9f));
+            }
         }
         return target;
     }
@@ -673,6 +723,8 @@ public class FlyingVehicle : MonoBehaviour
         zoom = 0f;
         yaw = transform.eulerAngles.y;
         aimYaw = yaw; aimPitch = 0f;
+        Driven = this;
+        VehicleHUD.Ensure();
         TrafficAuthority.Instance?.SetPlayerVehicle(this);
     }
 
@@ -683,6 +735,7 @@ public class FlyingVehicle : MonoBehaviour
         var who = driver;
         driver = null;
         eArmed = false;
+        if (Driven == this) Driven = null;
 
         // From here the car is a traffic agent again: on its lane it just carries on,
         // off it, it finds its way back.
@@ -709,18 +762,4 @@ public class FlyingVehicle : MonoBehaviour
     }
 
     void Flash(string msg) { flash = msg; flashUntil = Time.time + 2f; }
-
-    void OnGUI()
-    {
-        if (!IsOccupied) return;
-        float shownSpeed = Mode == FlightMode.Lane ? speed : velocity.magnitude;
-        string where = Mode == FlightMode.Free ? "none" : currentLayer.ToString();
-        GUI.Label(new Rect(20, 20, 500, 25), $"Mode: {Mode}   Layer: {where}   Speed: {shownSpeed:0}");
-        if (Mode == FlightMode.Lane && path != null)
-            GUI.Label(new Rect(20, 45, 700, 25),
-                $"Magnet: {magnetHold * 100f:0}%   Upper open: {IsAvailable(LaneLayer.Upper)}   Lower open: {IsAvailable(LaneLayer.Lower)}   No-switch: {path.IsNoSwitch(distance)}");
-        if (Time.time < flashUntil) GUI.Label(new Rect(20, 70, 500, 25), flash);
-        GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
-            "Space: cycle layer   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof");
-    }
 }
