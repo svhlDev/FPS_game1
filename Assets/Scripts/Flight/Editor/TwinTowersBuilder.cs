@@ -37,14 +37,15 @@ public static class TwinTowersBuilder
     const float OuterRingRadius = InnerRingRadius + (RingsPerTower - 1) * RingSpacing;
     const float TowerDistance = 2f * OuterRingRadius + RingSpacing;
 
-    // Traffic
-    const int CarsPerLane = 6;
-    const float SpeedMin = 33f, SpeedMax = 37f;
-    const float SpacingJitter = 0.3f;       // fraction of the even spacing
+    // Traffic: rush hour. 18 cars x 9 lanes x 2 towers = 324.
+    const int CarsPerLane = 18;
+    const float SpeedMin = 18f, SpeedMax = 20f;
+    const float SpacingJitter = 0.1f;       // fraction of the even spacing
+    const float MinSpawnGap = 15f;          // followGap (9) + car length (6), centre to centre
 
     // Decks
     const float DeckRingGap = 6f;           // deck stops this short of the innermost ring's centreline
-    const float DeckAboveRoof = 1f;         // deck top above a middle-layer car roof
+    const float DeckAboveRoof = 1f;         // deck top above an upper-layer car roof
     const float DeckWidth = 24f;
     const float DeckThickness = 1.5f;
     const int ParkedCarsOnStart = 2;
@@ -56,7 +57,10 @@ public static class TwinTowersBuilder
     const float PoliceAboveMiddle = 12f;
 
     static float MiddleAltitude => LayerAltitudes[1];
-    static float DeckTop => MiddleAltitude + CarHalfHeight + DeckAboveRoof;
+    static float UpperAltitude => LayerAltitudes[2];
+    // Decks sit at the top layer, so a jump that misses an upper car can still land on the
+    // middle or lower layer below. Spawn (and so fall respawn) moves with the start deck.
+    static float DeckTop => UpperAltitude + CarHalfHeight + DeckAboveRoof;
 
     [MenuItem("Tools/Build Twin Towers")]
     public static void Build()
@@ -99,6 +103,7 @@ public static class TwinTowersBuilder
             GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
         };
         var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
+        var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
         var rng = new System.Random(11);
@@ -144,7 +149,8 @@ public static class TwinTowersBuilder
             lanes.Add(MakeRing($"B_Ring{r}", lanesRoot, ccw));
         }
 
-        // Traffic: CarsPerLane on each layer of each ring, evenly spaced with jitter.
+        // Traffic: CarsPerLane on each layer of each ring, evenly spaced with small jitter,
+        // never closer than MinSpawnGap (fewer cars on a lane too short to fit them all).
         var trafficRoot = new GameObject("Traffic").transform;
         int carIndex = 0;
         foreach (var path in lanes)
@@ -152,12 +158,16 @@ public static class TwinTowersBuilder
             float L = path.Length;
             for (int layer = 0; layer < 3; layer++)
             {
-                float phase = (float)rng.NextDouble();
-                for (int i = 0; i < CarsPerLane; i++)
+                int count = Mathf.Min(CarsPerLane, Mathf.FloorToInt(L / MinSpawnGap));
+                float spacing = L / count;
+                float maxJitter = Mathf.Min(SpacingJitter * spacing, (spacing - MinSpawnGap) * 0.5f);
+                float phase = (float)rng.NextDouble() * spacing;
+                for (int i = 0; i < count; i++)
                 {
-                    float jitter = ((float)rng.NextDouble() * 2f - 1f) * SpacingJitter;
-                    float start = Mathf.Repeat((i + phase + jitter) / CarsPerLane * L, L);
+                    float jitter = ((float)rng.NextDouble() * 2f - 1f) * maxJitter;
+                    float start = Mathf.Repeat(phase + i * spacing + jitter, L);
                     var v = CreateVehicle($"Traffic_{carIndex++:000}", Pick(trafficMats, rng));
+                    if (carIndex % RackEvery == 0) AddRearRack(v, rackMat);
                     v.transform.SetParent(trafficRoot, false);
                     v.path = path;
                     v.startDistance = start;

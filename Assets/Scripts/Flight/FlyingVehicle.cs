@@ -25,7 +25,7 @@ public class FlyingVehicle : MonoBehaviour
     public float startDistance = 0f;
     public LaneLayer startLayer = LaneLayer.Middle;
     [Tooltip("Traffic speed limit. Around 35 cars hold every bend on the magnet alone.")]
-    public float aiCruiseSpeed = 35f;
+    public float aiCruiseSpeed = 20f;
     public float middleLaneMaxSpeed = 70f;
     public float sideLaneMaxSpeed = 35f;
     public float acceleration = 25f;
@@ -101,6 +101,10 @@ public class FlyingVehicle : MonoBehaviour
     public Quaternion PlatformRotation => Quaternion.Euler(0f, yaw, 0f);
     // Top of the body collider in world space.
     public float RoofY => transform.position.y + colCenter.y + colHalf.y;
+    // Body collider half size and centre, in the car's own frame.
+    public Vector3 BodyHalfExtents => colHalf;
+    public Vector3 BodyCenterLocal => colCenter;
+    public static IReadOnlyList<FlyingVehicle> Active => All;
     // A traffic agent: nobody driving and it knows which lane it belongs to.
     bool IsAI => !IsOccupied && path != null;
     static readonly List<FlyingVehicle> All = new List<FlyingVehicle>();

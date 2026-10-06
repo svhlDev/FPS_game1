@@ -23,6 +23,7 @@ public static class FlightGrayboxBuilder
     const float LoopOverhang = 60f;      // loops turn around just outside the city
     const int CarsPerLane = 10;
     const float PlatformTop = 30f;
+    internal const int RackEvery = 3;     // every Nth traffic car gets a rear rack to catch
 
     static float Avenue(int k) => -Half + k * Pitch;                // lane corridors
     static float BlockCenter(int i) => -Half + Pitch * 0.5f + i * Pitch;
@@ -68,6 +69,7 @@ public static class FlightGrayboxBuilder
             GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
         };
         var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
+        var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
         var rng = new System.Random(7);
@@ -156,6 +158,7 @@ public static class FlightGrayboxBuilder
                 float speed = 33f + (float)rng.NextDouble() * 4f; // around the 35 limit
 
                 var v = CreateVehicle($"Traffic_{carIndex++:000}", Pick(trafficMats, rng));
+                if (carIndex % RackEvery == 0) AddRearRack(v, rackMat); // index-based so the RNG sequence is untouched
                 v.transform.SetParent(trafficRoot, false);
                 v.path = path;
                 v.startDistance = start;
@@ -384,6 +387,22 @@ public static class FlightGrayboxBuilder
         var v = root.AddComponent<FlyingVehicle>();
         v.cockpitAnchor = cockpit;
         return v;
+    }
+
+    // Visible rack across the back of a car with a VehicleGrabPoint on its rear edge. No collider:
+    // it would overlap the body and the car's own collision would push against it.
+    internal static void AddRearRack(FlyingVehicle v, Material mat)
+    {
+        var rack = Slab(v.transform, "RearRack", Vector3.zero, Vector3.one, mat);
+        Object.DestroyImmediate(rack.GetComponent<Collider>());
+        rack.localPosition = new Vector3(0f, 0.55f, -3.35f);
+        rack.localRotation = Quaternion.identity;
+        rack.localScale = new Vector3(2.4f, 0.3f, 0.7f);
+
+        var grab = new GameObject("GrabPoint").transform;
+        grab.SetParent(v.transform, false);
+        grab.localPosition = new Vector3(0f, 0.7f, -3.7f);
+        grab.gameObject.AddComponent<VehicleGrabPoint>();
     }
 
     internal static void SetMat(GameObject go, Material m) => go.GetComponent<Renderer>().sharedMaterial = m;
