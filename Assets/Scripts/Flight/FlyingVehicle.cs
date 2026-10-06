@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -11,8 +12,11 @@ using UnityEngine.InputSystem;
 // Space        : cycle layers (ping-pong)
 // Ctrl (tap)   : Lane <-> Layer (magnet off / magnet on to nearest lane in range)
 // Ctrl + Space : Free <-> Layer
+// E tap / hold : exit through the door / onto the roof
 public enum FlightMode { Lane, Layer, Free }
 
+// Moves before the player so a rider standing on the roof is carried with this frame's motion.
+[DefaultExecutionOrder(-10)]
 public class FlyingVehicle : MonoBehaviour
 {
     [Header("Lane")]
@@ -20,8 +24,8 @@ public class FlyingVehicle : MonoBehaviour
     public LanePath path;
     public float startDistance = 0f;
     public LaneLayer startLayer = LaneLayer.Middle;
-    [Tooltip("Speed when nobody is driving (traffic).")]
-    public float aiCruiseSpeed = 40f;
+    [Tooltip("Traffic speed limit. Around 35 cars hold every bend on the magnet alone.")]
+    public float aiCruiseSpeed = 35f;
     public float middleLaneMaxSpeed = 70f;
     public float sideLaneMaxSpeed = 35f;
     public float acceleration = 25f;
@@ -57,12 +61,49 @@ public class FlyingVehicle : MonoBehaviour
     public float headingTurnRate = 90f;
     public float pitchTurnRate = 60f;
 
+    [Header("Collisions")]
+    [Tooltip("0 = dead stop on impact, 1 = full rebound.")]
+    public float bounciness = 0.25f;
+    [Tooltip("Speed lost scraping along walls and other cars.")]
+    public float scrapeFriction = 0.2f;
+    public float impactShake = 0.35f;
+
+    [Header("Traffic AI")]
+    [Tooltip("Gap kept to the car in front, in metres (car is 6 m long, so 9 = 1.5 cars).")]
+    public float followGap = 9f;
+    [Tooltip("Below this gap the car brakes to a stop.")]
+    public float minGap = 3f;
+    [Tooltip("How hard it closes or opens the gap toward followGap.")]
+    public float followGain = 0.8f;
+    [Tooltip("Speed while finding its way back to its lane after being knocked off.")]
+    public float recoverSpeed = 12f;
+    [Tooltip("Aims this far ahead on the lane while returning, so it merges instead of hitting it square.")]
+    public float recoverLead = 15f;
+    public float yieldLookRange = 80f;
+    [Tooltip("Cars closer than this at closest approach count as a conflict.")]
+    public float yieldClearance = 7f;
+    [Tooltip("Seconds ahead to look for conflicts.")]
+    public float yieldHorizon = 3f;
+
     [Header("Camera")]
     public Transform cockpitAnchor;
     public float maxCameraDistance = 14f;
     public float zoomStep = 0.2f;
 
+    [Header("Exit")]
+    [Tooltip("Hold E this long to exit onto the roof instead of through the door.")]
+    public float roofExitHoldTime = 0.35f;
+
     public bool IsOccupied => driver != null;
+    public Vector3 Velocity => velocity;
+    // Frame a rider stands in: yaw only, so banking and pitch never fling them.
+    public Vector3 PlatformPosition => transform.position;
+    public Quaternion PlatformRotation => Quaternion.Euler(0f, yaw, 0f);
+    // Top of the body collider in world space.
+    public float RoofY => transform.position.y + colCenter.y + colHalf.y;
+    // A traffic agent: nobody driving and it knows which lane it belongs to.
+    bool IsAI => !IsOccupied && path != null;
+    static readonly List<FlyingVehicle> All = new List<FlyingVehicle>();
     public FlightMode Mode { get; private set; } = FlightMode.Lane;
 
     LaneLayer currentLayer;
@@ -77,15 +118,39 @@ public class FlyingVehicle : MonoBehaviour
     FirstPersonController driver;
     Camera cam;
     int enterFrame = -1;
+    bool eArmed; float eDownTime;
     LanePath[] allLanes;
     string flash; float flashUntil;
+    BoxCollider bodyCol;
+    Vector3 colHalf, colCenter;
+    float shake;
+    readonly RaycastHit[] hitBuf = new RaycastHit[16];
+    readonly Collider[] overlapBuf = new Collider[16];
+    static int collisionMask;   // everything except the on-foot player
+
+    void OnEnable() => All.Add(this);
+    void OnDisable() => All.Remove(this);
 
     void Start()
     {
         allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
+        int playerLayer = LayerMask.NameToLayer("Player");
+        collisionMask = Physics.DefaultRaycastLayers & ~(playerLayer >= 0 ? 1 << playerLayer : 0);
+        bodyCol = GetComponentInChildren<BoxCollider>();
+        if (bodyCol != null)
+        {
+            colHalf = Vector3.Scale(bodyCol.size, bodyCol.transform.lossyScale) * 0.5f;
+            colCenter = transform.InverseTransformPoint(bodyCol.transform.TransformPoint(bodyCol.center));
+        }
         if (path == null) { Mode = FlightMode.Layer; parked = true; currentLayer = TrafficAuthority.NearestLayer(transform.position.y); }
-        else { distance = startDistance; currentLayer = startLayer; speed = aiCruiseSpeed; }
+        else
+        {
+            distance = startDistance; currentLayer = startLayer; speed = aiCruiseSpeed;
+            float w0 = path.LaneWeight(startLayer, startDistance, out var o0);
+            currentOffset = startLayer == LaneLayer.Middle ? Vector2.zero : o0 * w0;
+            velocity = path.SmoothForward(startDistance) * speed;
+        }
     }
 
     void Update()
@@ -96,12 +161,13 @@ public class FlyingVehicle : MonoBehaviour
 
         switch (Mode)
         {
-            case FlightMode.Lane:
-                if (IsOccupied) UpdateLaneMagnetic(kb, mouse);
-                else UpdateLaneTraffic();
+            case FlightMode.Lane: UpdateLaneMagnetic(kb, mouse); break;
+            case FlightMode.Layer:
+                if (IsAI) UpdateRecover(); else UpdateLayer(kb, mouse);
                 break;
-            case FlightMode.Layer: UpdateLayer(kb, mouse); break;
-            case FlightMode.Free: UpdateFree(kb, mouse); break;
+            case FlightMode.Free:
+                if (IsAI) UpdateRecover(); else UpdateFree(kb, mouse);
+                break;
         }
     }
 
@@ -120,7 +186,13 @@ public class FlyingVehicle : MonoBehaviour
             if (!ctrlComboUsed) ToggleLaneLock();
             ctrlComboUsed = false;
         }
-        if (kb.eKey.wasPressedThisFrame && Time.frameCount != enterFrame) Exit();
+        // Tap E = door, hold E = roof. Only presses made after entering count.
+        if (kb.eKey.wasPressedThisFrame && Time.frameCount != enterFrame) { eArmed = true; eDownTime = Time.time; }
+        if (eArmed)
+        {
+            if (kb.eKey.wasReleasedThisFrame) Exit(false);
+            else if (kb.eKey.isPressed && Time.time - eDownTime >= roofExitHoldTime) Exit(true);
+        }
     }
 
     void OnSpace()
@@ -252,13 +324,19 @@ public class FlyingVehicle : MonoBehaviour
 
     // ---------- movement ----------
 
-    // Player-driven lane mode: free flight plus a magnetic pull toward the line.
+    // Lane mode for player AND traffic: free flight plus a magnetic pull toward the line.
+    // The player supplies throttle/steer/strafe; traffic only manages its speed.
     void UpdateLaneMagnetic(Keyboard kb, Mouse mouse)
     {
         if (path == null) { Mode = FlightMode.Layer; return; }
         float dt = Time.deltaTime;
         Vector2 input = MoveInput(kb);
         UpdateAim(mouse);
+
+        // Traffic drifts back to its preferred side lane whenever it legally can.
+        if (IsAI && currentLayer == LaneLayer.Middle && startLayer != LaneLayer.Middle &&
+            IsAvailable(startLayer) && !path.IsNoSwitch(distance))
+            currentLayer = startLayer;
 
         distance = path.Project(transform.position, distance);
         Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
@@ -272,9 +350,9 @@ public class FlyingVehicle : MonoBehaviour
 
         if (d > captureRadius)
         {
-            Mode = FlightMode.Layer;
+            Mode = FlightMode.Layer; // traffic switches to recovery from here
             magnetHold = 0f;
-            Flash("Broke free of the lane");
+            if (IsOccupied) Flash("Broke free of the lane");
             return;
         }
 
@@ -299,10 +377,18 @@ public class FlyingVehicle : MonoBehaviour
         float fwdSpeed = Vector3.Dot(hv, carFwd);
         Vector3 side = hv - carFwd * fwdSpeed;
 
-        float max = currentLayer == LaneLayer.Middle ? middleLaneMaxSpeed : sideLaneMaxSpeed;
-        if (input.y > 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, acceleration * dt);
-        else if (input.y < 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, braking * dt);
-        if (fwdSpeed > max) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, braking * dt);
+        if (IsOccupied)
+        {
+            float max = currentLayer == LaneLayer.Middle ? middleLaneMaxSpeed : sideLaneMaxSpeed;
+            if (input.y > 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, acceleration * dt);
+            else if (input.y < 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, braking * dt);
+            if (fwdSpeed > max) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, braking * dt);
+        }
+        else
+        {
+            float target = AITargetSpeed(carFwd);
+            fwdSpeed = Mathf.MoveTowards(fwdSpeed, target, (target < fwdSpeed ? braking : acceleration) * dt);
+        }
 
         side += carRight * input.x * strafeAcceleration * dt;
         side *= Mathf.Exp(-lateralGrip * dt);
@@ -320,26 +406,180 @@ public class FlyingVehicle : MonoBehaviour
         Vector3 pos = transform.position + hv * dt;
         pos.y = Mathf.SmoothDamp(pos.y, linePoint.y, ref altVel, laneChangeSmoothTime);
         velocity = new Vector3(hv.x, altVel, hv.z);
-        speed = fwdSpeed;
 
         float bank = Mathf.Clamp(-Vector3.Dot(hv, carRight) * 0.6f, -20f, 20f);
         float p = Mathf.Clamp(-altVel * 1.5f, -20f, 20f);
-        transform.SetPositionAndRotation(pos, heading * Quaternion.Euler(p, 0f, bank));
+        Quaternion rot = heading * Quaternion.Euler(p, 0f, bank);
+        pos = MoveAndCollide(transform.position, pos - transform.position, rot);
+        speed = Vector3.Dot(velocity, carFwd);
+        transform.SetPositionAndRotation(pos, rot);
     }
 
-    // Unoccupied traffic: rides the line, smoothed.
-    void UpdateLaneTraffic()
+    // Knocked off its lane: fly the straight 3D line back to the nearest point on it
+    // (aiming a little ahead so it merges), slowly, then switch the magnet back on.
+    void UpdateRecover()
     {
-        if (path == null) { Mode = FlightMode.Layer; return; }
         float dt = Time.deltaTime;
-        speed = Mathf.MoveTowards(speed, aiCruiseSpeed, acceleration * dt);
-        distance += speed * dt;
+        distance = path.Project(transform.position, distance, 120f);
+        float w = path.LaneWeight(currentLayer, distance, out var laneOff);
+        if (currentLayer != LaneLayer.Middle && w <= 0.01f) currentLayer = LaneLayer.Middle;
+        currentOffset = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
+        offsetVel = Vector2.zero;
 
-        Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
-        transform.position = linePoint;
-        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(laneFwd, Vector3.up), 8f * dt);
-        velocity = laneFwd * speed;
-        yaw = transform.eulerAngles.y;
+        path.Sample(distance, out var nearBase, out _);
+        Vector3 nearFwd = Flat(path.SmoothForward(distance));
+        Vector3 nearest = path.ToWorld(nearBase, nearFwd, currentOffset);
+        path.Sample(distance + recoverLead, out var aimBase, out _);
+        Vector3 aimPoint = path.ToWorld(aimBase, path.SmoothForward(distance + recoverLead), currentOffset);
+
+        Vector3 to = aimPoint - transform.position;
+        Vector3 desired = to.sqrMagnitude > 1e-4f ? to.normalized * recoverSpeed : Vector3.zero;
+        velocity = Vector3.MoveTowards(velocity, desired, acceleration * dt);
+
+        Vector3 flatVel = new Vector3(velocity.x, 0f, velocity.z);
+        if (flatVel.sqrMagnitude > 0.5f)
+            yaw = Mathf.MoveTowardsAngle(yaw, Quaternion.LookRotation(flatVel).eulerAngles.y, headingTurnRate * dt);
+        Quaternion rot = Quaternion.Euler(0f, yaw, 0f);
+        Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
+        transform.SetPositionAndRotation(pos, rot);
+
+        Vector3 off = nearest - pos;
+        float vertical = Mathf.Abs(off.y);
+        off.y = 0f;
+        off -= nearFwd * Vector3.Dot(off, nearFwd);
+        if (off.magnitude < captureRadius * 0.3f && vertical < 3f)
+        {
+            Mode = FlightMode.Lane; // locked on again; it will accelerate back to the limit
+            altVel = 0f;
+            speed = Vector3.Dot(velocity, nearFwd);
+        }
+    }
+
+    // Speed limit, then: follow the car ahead at followGap, and yield at crossings.
+    float AITargetSpeed(Vector3 fwd)
+    {
+        float target = aiCruiseSpeed;
+        Vector3 me = transform.position;
+        float range2 = yieldLookRange * yieldLookRange;
+        float carLength = colHalf.z * 2f;
+        float leaderAhead = float.MaxValue, leaderSpeed = 0f;
+
+        foreach (var other in All)
+        {
+            if (other == this) continue;
+            Vector3 r = other.transform.position - me;
+            if (r.sqrMagnitude > range2) continue;
+            float ahead = Vector3.Dot(r, fwd);
+            if (ahead <= 0f) continue;
+
+            // Same lane, same direction: a leader to follow.
+            Vector3 lat = r - fwd * ahead;
+            bool sameDir = Vector3.Dot(other.transform.forward, fwd) > 0.7f;
+            if (sameDir && Mathf.Abs(lat.y) < 4f && new Vector2(lat.x, lat.z).magnitude < 4f)
+            {
+                if (ahead < leaderAhead) { leaderAhead = ahead; leaderSpeed = Vector3.Dot(other.velocity, fwd); }
+                continue;
+            }
+
+            // Anything else on a collision course (crossings, cars cutting in).
+            Vector3 u = other.velocity - velocity;
+            float uu = u.sqrMagnitude;
+            float tca = uu > 1e-3f ? Mathf.Clamp(-Vector3.Dot(r, u) / uu, 0f, yieldHorizon) : 0f;
+            if ((r + u * tca).sqrMagnitude > yieldClearance * yieldClearance) continue;
+
+            float otherAhead = Vector3.Dot(-r, other.transform.forward);
+            bool iYield = other.IsOccupied || ahead > otherAhead + 0.01f ||
+                          (Mathf.Abs(ahead - otherAhead) <= 0.01f && GetHashCode() > other.GetHashCode());
+            if (iYield) target = Mathf.Min(target, Mathf.Max(0f, Vector3.Dot(other.velocity, fwd) * 0.9f));
+        }
+
+        if (leaderAhead < float.MaxValue)
+        {
+            float gap = leaderAhead - carLength;
+            float follow = gap < minGap ? 0f : leaderSpeed + followGain * (gap - followGap);
+            target = Mathf.Min(target, Mathf.Max(0f, follow));
+        }
+        return target;
+    }
+
+    // Sweep the car's box along its move, stop at the first hit, then push out of
+    // anything still overlapping (e.g. traffic that drove into us).
+    Vector3 MoveAndCollide(Vector3 from, Vector3 delta, Quaternion rot)
+    {
+        if (bodyCol == null) return from + delta;
+        float dist = delta.magnitude;
+        Vector3 moved = delta;
+        const float skin = 0.05f;
+
+        if (dist > 1e-5f)
+        {
+            Vector3 dir = delta / dist;
+            int n = Physics.BoxCastNonAlloc(from + rot * colCenter, colHalf, dir, hitBuf, rot, dist + skin,
+                                            collisionMask, QueryTriggerInteraction.Ignore);
+            float best = float.MaxValue; int bestIdx = -1;
+            for (int i = 0; i < n; i++)
+            {
+                if (hitBuf[i].collider == bodyCol || hitBuf[i].distance <= 0f) continue;
+                if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bestIdx = i; }
+            }
+            if (bestIdx >= 0)
+            {
+                moved = dir * Mathf.Max(0f, best - skin);
+                Bounce(hitBuf[bestIdx].normal, hitBuf[bestIdx].collider);
+            }
+        }
+
+        Vector3 pos = from + moved;
+        Vector3 bodyPos = pos + rot * bodyCol.transform.localPosition;
+        Quaternion bodyRot = rot * bodyCol.transform.localRotation;
+        int count = Physics.OverlapBoxNonAlloc(pos + rot * colCenter, colHalf, overlapBuf, rot,
+                                               collisionMask, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            var c = overlapBuf[i];
+            if (c == bodyCol) continue;
+            if (Physics.ComputePenetration(bodyCol, bodyPos, bodyRot, c, c.transform.position, c.transform.rotation,
+                                           out Vector3 sepDir, out float sepDist))
+            {
+                pos += sepDir * sepDist;
+                bodyPos += sepDir * sepDist;
+                Bounce(sepDir, c);
+            }
+        }
+        return pos;
+    }
+
+    void Bounce(Vector3 normal, Collider other)
+    {
+        var otherCar = other.GetComponentInParent<FlyingVehicle>();
+        Vector3 otherVel = otherCar != null ? otherCar.velocity : Vector3.zero;
+        Vector3 rel = velocity - otherVel;
+        float vn = Vector3.Dot(rel, normal);
+        if (vn >= 0f) return;
+
+        if (otherCar != null)
+        {
+            // Equal masses: split the impulse so the other car gets shoved too.
+            float j = -(1f + bounciness) * vn * 0.5f;
+            Vector3 tangential = rel - normal * vn;
+            velocity += normal * j - tangential * scrapeFriction * 0.5f;
+            otherCar.velocity -= normal * j - tangential * scrapeFriction * 0.5f;
+            otherCar.AddImpact(-vn);
+        }
+        else
+        {
+            rel -= (1f + bounciness) * vn * normal;
+            rel *= 1f - scrapeFriction;
+            velocity = rel;
+        }
+        AddImpact(-vn);
+    }
+
+    void AddImpact(float impact)
+    {
+        if (!IsOccupied) return;
+        if (impact > 2f) shake = Mathf.Min(1f, shake + impact / 25f);
+        if (impact > 15f) Flash("CRASH");
     }
 
     void UpdateLayer(Keyboard kb, Mouse mouse)
@@ -364,7 +604,9 @@ public class FlyingVehicle : MonoBehaviour
 
         float bank = Mathf.Clamp(-Vector3.Dot(hv, heading * Vector3.right) * 0.6f, -20f, 20f);
         float p = Mathf.Clamp(-altVel * 1.5f, -20f, 20f);
-        transform.SetPositionAndRotation(pos, heading * Quaternion.Euler(p, 0f, bank));
+        Quaternion rot = heading * Quaternion.Euler(p, 0f, bank);
+        pos = MoveAndCollide(transform.position, pos - transform.position, rot);
+        transform.SetPositionAndRotation(pos, rot);
     }
 
     void UpdateFree(Keyboard kb, Mouse mouse)
@@ -383,7 +625,7 @@ public class FlyingVehicle : MonoBehaviour
         float rate = wish.sqrMagnitude > velocity.sqrMagnitude ? acceleration : braking;
         velocity = Vector3.MoveTowards(velocity, wish, rate * dt);
 
-        Vector3 pos = transform.position + velocity * dt;
+        Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
         if (pos.y < minAltitude) { pos.y = minAltitude; velocity.y = Mathf.Max(0f, velocity.y); }
         transform.SetPositionAndRotation(pos, rot);
     }
@@ -404,6 +646,11 @@ public class FlyingVehicle : MonoBehaviour
         Transform anchor = cockpitAnchor != null ? cockpitAnchor : transform;
         Quaternion look = Quaternion.Euler(aimPitch, aimYaw, 0f);
         Vector3 pos = anchor.position - look * Vector3.forward * (zoom * maxCameraDistance) + Vector3.up * (zoom * 2f);
+        if (shake > 0f)
+        {
+            pos += Random.insideUnitSphere * shake * impactShake;
+            shake = Mathf.MoveTowards(shake, 0f, 2f * Time.deltaTime);
+        }
         cam.transform.SetPositionAndRotation(pos, look);
     }
 
@@ -415,6 +662,7 @@ public class FlyingVehicle : MonoBehaviour
         driver = who;
         parked = false;
         enterFrame = Time.frameCount;
+        eArmed = false;
         cam = who.playerCamera;
         cam.transform.SetParent(null);
         who.gameObject.SetActive(false);
@@ -424,28 +672,28 @@ public class FlyingVehicle : MonoBehaviour
         TrafficAuthority.Instance?.SetPlayerVehicle(this);
     }
 
-    public void Exit()
+    // toRoof: stand on the roof centre facing the car's yaw, already locked on. The car keeps
+    // its mode, so the AI takes over (in its lane it drives on; off it, it flies back).
+    public void Exit(bool toRoof = false)
     {
         var who = driver;
         driver = null;
+        eArmed = false;
 
-        // Hand a lane car back to traffic without a jump: start the line where the car actually is.
-        if (Mode == FlightMode.Lane && path != null)
-        {
-            path.Sample(distance, out var basePos, out _);
-            Vector3 fwd = path.SmoothForward(distance);
-            Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
-            Vector3 rel = transform.position - basePos;
-            currentOffset = new Vector2(Vector3.Dot(rel, right), rel.y);
-            offsetVel = Vector2.zero;
-            speed = Mathf.Max(0f, speed);
-        }
+        // From here the car is a traffic agent again: on its lane it just carries on,
+        // off it, it finds its way back.
+        Mode = Mode == FlightMode.Free && path != null ? FlightMode.Layer : Mode;
 
-        who.transform.SetPositionAndRotation(transform.position + transform.right * 3f,
-                                             Quaternion.Euler(0f, transform.eulerAngles.y, 0f));
+        if (toRoof)
+            who.transform.SetPositionAndRotation(new Vector3(transform.position.x, RoofY + 0.02f, transform.position.z),
+                                                 PlatformRotation);
+        else
+            who.transform.SetPositionAndRotation(transform.position + transform.right * 3f,
+                                                 Quaternion.Euler(0f, transform.eulerAngles.y, 0f));
         who.gameObject.SetActive(true);
         who.AttachCamera(cam);
         who.BlockInteractThisFrame();
+        if (toRoof) who.MountPlatform(this);
         cam = null;
         TrafficAuthority.Instance?.SetPlayerVehicle(null);
     }
@@ -469,6 +717,6 @@ public class FlyingVehicle : MonoBehaviour
                 $"Magnet: {magnetHold * 100f:0}%   Upper open: {IsAvailable(LaneLayer.Upper)}   Lower open: {IsAvailable(LaneLayer.Lower)}   No-switch: {path.IsNoSwitch(distance)}");
         if (Time.time < flashUntil) GUI.Label(new Rect(20, 70, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
-            "Space: cycle layer   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit");
+            "Space: cycle layer   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof");
     }
 }
