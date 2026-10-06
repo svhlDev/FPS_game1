@@ -2,16 +2,20 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 // Three flight modes:
-//   Lane  : snapped to a lane. W/S throttle, A/D drift, Space cycles layers (ping-pong).
-//   Layer : free horizontal driving, altitude locked to the current layer. Mouse steers, WASD move/strafe.
-//   Free  : full 3D, unregistered. Mouse steers yaw+pitch, WASD move/strafe. Police get interested.
-// Ctrl (tap)     : Lane <-> Layer (release lane / snap to nearest lane in this layer)
-// Ctrl + Space   : Free <-> Layer (unlock from all layers / lock to nearest layer)
+//   Lane  : attached to a MAGNETIC lane. You fly freely; the lane pulls you toward it and
+//           turns you along it. Pull is strongest at the line and fades with distance.
+//           Steer far enough away and you break free.
+//   Layer : free horizontal flight, altitude locked to the current layer.
+//   Free  : full 3D, unregistered. Police get interested.
+// Mouse always aims the camera. The car turns toward the aim only while W/S is held (Halo style).
+// Space        : cycle layers (ping-pong)
+// Ctrl (tap)   : Lane <-> Layer (magnet off / magnet on to nearest lane in range)
+// Ctrl + Space : Free <-> Layer
 public enum FlightMode { Lane, Layer, Free }
 
 public class FlyingVehicle : MonoBehaviour
 {
-    [Header("Lane mode")]
+    [Header("Lane")]
     [Tooltip("Leave empty for a parked car that sits still until hijacked.")]
     public LanePath path;
     public float startDistance = 0f;
@@ -22,9 +26,25 @@ public class FlyingVehicle : MonoBehaviour
     public float sideLaneMaxSpeed = 35f;
     public float acceleration = 25f;
     public float braking = 40f;
+    [Tooltip("How quickly the magnetic line itself glides up/down when you change layer.")]
     public float laneChangeSmoothTime = 0.6f;
-    public float maxLateral = 4f;
-    public float lateralSpeed = 6f;
+
+    [Header("Lane magnet")]
+    [Tooltip("Sideways range of the magnet. Beyond it you break free. Also the range for Ctrl to attach.")]
+    public float captureRadius = 15f;
+    [Tooltip("Pull toward the line at full strength (m/s^2).")]
+    public float magnetStrength = 20f;
+    [Tooltip("How fast the magnet turns the car along the lane at full strength (deg/s). Keep below headingTurnRate so hard steering can break free.")]
+    public float magnetAlignRate = 70f;
+    [Tooltip("Damps sideways wobble around the line, scaled by magnet strength.")]
+    public float magnetDamping = 3f;
+    [Tooltip("Higher = the pull fades faster with distance.")]
+    public float magnetFalloff = 2f;
+    [Tooltip("Within this distance the pull eases off so the car settles on the line instead of jittering.")]
+    public float magnetSoftZone = 1.5f;
+    public float strafeAcceleration = 18f;
+    [Tooltip("How quickly sideways slide relative to the car bleeds off.")]
+    public float lateralGrip = 2.5f;
 
     [Header("Layer / Free mode")]
     public float layerMaxSpeed = 45f;
@@ -32,24 +52,27 @@ public class FlyingVehicle : MonoBehaviour
     public float strafeFactor = 0.6f;
     public float steerSensitivity = 0.12f;
     public float altitudeSmoothTime = 0.8f;
-    public float snapRadius = 25f;
     public float minAltitude = 1.5f;
+    [Tooltip("Deg/sec the car turns toward where you're looking, only while W or S is held. Lower = heavier.")]
+    public float headingTurnRate = 90f;
+    public float pitchTurnRate = 60f;
 
     [Header("Camera")]
     public Transform cockpitAnchor;
     public float maxCameraDistance = 14f;
     public float zoomStep = 0.2f;
-    public float lookSensitivity = 0.1f;
 
     public bool IsOccupied => driver != null;
     public FlightMode Mode { get; private set; } = FlightMode.Lane;
 
     LaneLayer currentLayer;
     int cycleDir = 1;
-    float distance, speed, lateral, zoom, camYaw, camPitch;
-    Vector2 currentOffset, offsetVel;
+    float distance, speed, zoom;
+    Vector2 currentOffset, offsetVel;   // offset of the magnetic line from the base path
     Vector3 velocity;
     float yaw, pitch, altVel;
+    float aimYaw, aimPitch;
+    float magnetHold;                   // 0..1, for the HUD
     bool parked, ctrlComboUsed;
     FirstPersonController driver;
     Camera cam;
@@ -73,7 +96,10 @@ public class FlyingVehicle : MonoBehaviour
 
         switch (Mode)
         {
-            case FlightMode.Lane: UpdateLane(kb); break;
+            case FlightMode.Lane:
+                if (IsOccupied) UpdateLaneMagnetic(kb, mouse);
+                else UpdateLaneTraffic();
+                break;
             case FlightMode.Layer: UpdateLayer(kb, mouse); break;
             case FlightMode.Free: UpdateFree(kb, mouse); break;
         }
@@ -89,7 +115,6 @@ public class FlyingVehicle : MonoBehaviour
             if (ctrl) { ctrlComboUsed = true; ToggleFree(); }
             else OnSpace();
         }
-        // Ctrl acts on release, so Ctrl+Space doesn't also trigger the lane toggle.
         if (kb.leftCtrlKey.wasReleasedThisFrame || kb.rightCtrlKey.wasReleasedThisFrame)
         {
             if (!ctrlComboUsed) ToggleLaneLock();
@@ -112,9 +137,8 @@ public class FlyingVehicle : MonoBehaviour
     void ToggleFree()
     {
         if (Mode == FlightMode.Free) { LockToNearestLayer(); return; }
-        if (Mode == FlightMode.Lane) velocity = transform.forward * speed;
         Mode = FlightMode.Free;
-        yaw = transform.eulerAngles.y; pitch = 0f;
+        pitch = 0f;
         Flash("FREE FLIGHT: unregistered");
     }
 
@@ -123,13 +147,11 @@ public class FlyingVehicle : MonoBehaviour
         switch (Mode)
         {
             case FlightMode.Lane:
-                velocity = transform.forward * speed;
-                yaw = transform.eulerAngles.y;
                 Mode = FlightMode.Layer;
-                Flash("Lane released");
+                Flash("Magnet off");
                 break;
             case FlightMode.Layer:
-                if (!TrySnapToLane()) Flash("No lane in range");
+                if (!TryAttachToLane()) Flash("No lane in range");
                 break;
             case FlightMode.Free:
                 Flash("Lock to a layer first (Ctrl+Space)");
@@ -175,9 +197,9 @@ public class FlyingVehicle : MonoBehaviour
         Flash($"Locked to {currentLayer} layer");
     }
 
-    bool TrySnapToLane()
+    bool TryAttachToLane()
     {
-        LanePath best = null; float bestD = 0f, bestSq = snapRadius * snapRadius;
+        LanePath best = null; float bestD = 0f, bestSq = captureRadius * captureRadius;
         foreach (var lp in allLanes)
         {
             if (lp == null) continue;
@@ -186,22 +208,17 @@ public class FlyingVehicle : MonoBehaviour
         }
         if (best == null) return false;
 
-        path = best; distance = bestD; Mode = FlightMode.Lane;
-        best.Sample(distance, out var basePos, out var fwd);
+        path = best;
+        distance = best.Project(transform.position, bestD);
         float w = best.LaneWeight(currentLayer, distance, out var laneOff);
-        Vector2 target = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
-
-        // Start from where we actually are and glide onto the lane.
-        Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
-        Vector3 residual = transform.position - best.ToWorld(basePos, fwd, target);
-        currentOffset = target + new Vector2(Vector3.Dot(residual, right), residual.y);
-        offsetVel = Vector2.zero; lateral = 0f;
-        speed = Mathf.Max(0f, Vector3.Dot(velocity, fwd));
-        Flash("Snapped to lane");
+        currentOffset = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
+        offsetVel = Vector2.zero;
+        Mode = FlightMode.Lane;
+        Flash("Magnet on");
         return true;
     }
 
-    // ---------- movement ----------
+    // ---------- helpers ----------
 
     Vector2 MoveInput(Keyboard kb)
     {
@@ -210,37 +227,119 @@ public class FlyingVehicle : MonoBehaviour
                            (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
     }
 
-    Vector2 SteerInput(Mouse mouse) =>
-        IsOccupied && mouse != null ? mouse.delta.ReadValue() * steerSensitivity : Vector2.zero;
-
-    void UpdateLane(Keyboard kb)
+    void UpdateAim(Mouse mouse)
     {
-        if (path == null) { Mode = FlightMode.Layer; return; }
-        float dt = Time.deltaTime;
+        if (!IsOccupied || mouse == null) return;
+        Vector2 s = mouse.delta.ReadValue() * steerSensitivity;
+        aimYaw += s.x;
+        aimPitch = Mathf.Clamp(aimPitch - s.y, -80f, 80f);
+    }
 
-        if (IsOccupied)
-        {
-            Vector2 input = MoveInput(kb);
-            float max = currentLayer == LaneLayer.Middle ? middleLaneMaxSpeed : sideLaneMaxSpeed;
-            if (input.y > 0f) speed = Mathf.MoveTowards(speed, max, acceleration * dt);
-            if (input.y < 0f) speed = Mathf.MoveTowards(speed, 0f, braking * dt);
-            if (speed > max) speed = Mathf.MoveTowards(speed, max, braking * dt);
-            lateral = Mathf.Clamp(lateral + input.x * lateralSpeed * dt, -maxLateral, maxLateral);
-        }
-        else speed = Mathf.MoveTowards(speed, aiCruiseSpeed, acceleration * dt);
+    static Vector3 Flat(Vector3 v) { v.y = 0f; return v.sqrMagnitude > 1e-6f ? v.normalized : Vector3.forward; }
 
-        distance += speed * dt;
-
+    // Updates the magnetic line's own layer offset (glides between layers, merges when a lane ends).
+    Vector3 UpdateLineOffset(out Vector3 laneFwd)
+    {
         float w = path.LaneWeight(currentLayer, distance, out Vector2 laneOffset);
         if (currentLayer != LaneLayer.Middle && w <= 0.01f) currentLayer = LaneLayer.Middle; // lane converged
         Vector2 target = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOffset * w;
         currentOffset = Vector2.SmoothDamp(currentOffset, target, ref offsetVel, laneChangeSmoothTime);
 
-        path.Sample(distance, out Vector3 basePos, out Vector3 fwd);
-        transform.position = path.ToWorld(basePos, fwd, currentOffset + new Vector2(lateral, 0f));
-        float p = Mathf.Clamp(-offsetVel.y * 1.5f, -20f, 20f);
-        transform.rotation = Quaternion.LookRotation(fwd, Vector3.up) * Quaternion.Euler(p, 0f, 0f);
-        velocity = fwd * speed;
+        path.Sample(distance, out Vector3 basePos, out _);
+        laneFwd = path.SmoothForward(distance);
+        return path.ToWorld(basePos, laneFwd, currentOffset);
+    }
+
+    // ---------- movement ----------
+
+    // Player-driven lane mode: free flight plus a magnetic pull toward the line.
+    void UpdateLaneMagnetic(Keyboard kb, Mouse mouse)
+    {
+        if (path == null) { Mode = FlightMode.Layer; return; }
+        float dt = Time.deltaTime;
+        Vector2 input = MoveInput(kb);
+        UpdateAim(mouse);
+
+        distance = path.Project(transform.position, distance);
+        Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
+        Vector3 laneFlat = Flat(laneFwd);
+
+        // Sideways distance to the line (horizontal only, ignoring progress along it).
+        Vector3 toLine = linePoint - transform.position;
+        toLine.y = 0f;
+        toLine -= laneFlat * Vector3.Dot(toLine, laneFlat);
+        float d = toLine.magnitude;
+
+        if (d > captureRadius)
+        {
+            Mode = FlightMode.Layer;
+            magnetHold = 0f;
+            Flash("Broke free of the lane");
+            return;
+        }
+
+        float w = Mathf.Pow(1f - d / captureRadius, magnetFalloff); // 1 at the line, 0 at the edge
+        magnetHold = w;
+
+        // Magnet turns the car along the lane and carries the camera aim with it,
+        // so the view flows through bends without you touching the mouse.
+        float laneYaw = Quaternion.LookRotation(laneFlat).eulerAngles.y;
+        float aligned = Mathf.MoveTowardsAngle(yaw, laneYaw, magnetAlignRate * w * dt);
+        float carried = Mathf.DeltaAngle(yaw, aligned);
+        yaw += carried;
+        aimYaw += carried;
+
+        // Your steering fights the magnet: it wins near the edge, struggles near the line.
+        if (input.y != 0f) yaw = Mathf.MoveTowardsAngle(yaw, aimYaw, headingTurnRate * dt);
+
+        Quaternion heading = Quaternion.Euler(0f, yaw, 0f);
+        Vector3 carFwd = heading * Vector3.forward, carRight = heading * Vector3.right;
+
+        Vector3 hv = new Vector3(velocity.x, 0f, velocity.z);
+        float fwdSpeed = Vector3.Dot(hv, carFwd);
+        Vector3 side = hv - carFwd * fwdSpeed;
+
+        float max = currentLayer == LaneLayer.Middle ? middleLaneMaxSpeed : sideLaneMaxSpeed;
+        if (input.y > 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, acceleration * dt);
+        else if (input.y < 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, braking * dt);
+        if (fwdSpeed > max) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, braking * dt);
+
+        side += carRight * input.x * strafeAcceleration * dt;
+        side *= Mathf.Exp(-lateralGrip * dt);
+        hv = carFwd * fwdSpeed + side;
+
+        // The pull: strongest at the line, eased inside the soft zone so it settles instead of jittering.
+        if (d > 1e-4f)
+        {
+            float ease = Mathf.Clamp01(d / magnetSoftZone);
+            hv += (toLine / d) * magnetStrength * w * ease * dt;
+        }
+        Vector3 vPerp = hv - laneFlat * Vector3.Dot(hv, laneFlat);
+        hv -= vPerp * Mathf.Clamp01(magnetDamping * w * dt);
+
+        Vector3 pos = transform.position + hv * dt;
+        pos.y = Mathf.SmoothDamp(pos.y, linePoint.y, ref altVel, laneChangeSmoothTime);
+        velocity = new Vector3(hv.x, altVel, hv.z);
+        speed = fwdSpeed;
+
+        float bank = Mathf.Clamp(-Vector3.Dot(hv, carRight) * 0.6f, -20f, 20f);
+        float p = Mathf.Clamp(-altVel * 1.5f, -20f, 20f);
+        transform.SetPositionAndRotation(pos, heading * Quaternion.Euler(p, 0f, bank));
+    }
+
+    // Unoccupied traffic: rides the line, smoothed.
+    void UpdateLaneTraffic()
+    {
+        if (path == null) { Mode = FlightMode.Layer; return; }
+        float dt = Time.deltaTime;
+        speed = Mathf.MoveTowards(speed, aiCruiseSpeed, acceleration * dt);
+        distance += speed * dt;
+
+        Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
+        transform.position = linePoint;
+        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(laneFwd, Vector3.up), 8f * dt);
+        velocity = laneFwd * speed;
+        yaw = transform.eulerAngles.y;
     }
 
     void UpdateLayer(Keyboard kb, Mouse mouse)
@@ -248,9 +347,11 @@ public class FlyingVehicle : MonoBehaviour
         if (parked && !IsOccupied) return;
         float dt = Time.deltaTime;
 
-        yaw += SteerInput(mouse).x;
-        Quaternion heading = Quaternion.Euler(0f, yaw, 0f);
         Vector2 input = MoveInput(kb);
+        UpdateAim(mouse);
+        if (input.y != 0f) yaw = Mathf.MoveTowardsAngle(yaw, aimYaw, headingTurnRate * dt);
+
+        Quaternion heading = Quaternion.Euler(0f, yaw, 0f);
         Vector3 wish = heading * new Vector3(input.x * strafeFactor, 0f, input.y) * layerMaxSpeed;
 
         Vector3 hv = new Vector3(velocity.x, 0f, velocity.z);
@@ -269,12 +370,15 @@ public class FlyingVehicle : MonoBehaviour
     void UpdateFree(Keyboard kb, Mouse mouse)
     {
         float dt = Time.deltaTime;
-        Vector2 steer = SteerInput(mouse);
-        yaw += steer.x;
-        pitch = Mathf.Clamp(pitch - steer.y, -80f, 80f);
+        Vector2 input = MoveInput(kb);
+        UpdateAim(mouse);
+        if (input.y != 0f)
+        {
+            yaw = Mathf.MoveTowardsAngle(yaw, aimYaw, headingTurnRate * dt);
+            pitch = Mathf.MoveTowards(pitch, aimPitch, pitchTurnRate * dt);
+        }
         Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
 
-        Vector2 input = MoveInput(kb);
         Vector3 wish = rot * new Vector3(input.x * strafeFactor, 0f, input.y) * freeMaxSpeed;
         float rate = wish.sqrMagnitude > velocity.sqrMagnitude ? acceleration : braking;
         velocity = Vector3.MoveTowards(velocity, wish, rate * dt);
@@ -292,23 +396,13 @@ public class FlyingVehicle : MonoBehaviour
         var mouse = Mouse.current;
         if (mouse != null)
         {
-            if (Mode == FlightMode.Lane) // mouse orbits only when the lane does the steering
-            {
-                Vector2 d = mouse.delta.ReadValue() * lookSensitivity;
-                camYaw += d.x;
-                camPitch = Mathf.Clamp(camPitch - d.y, -60f, 70f);
-            }
             float scroll = mouse.scroll.ReadValue().y;
             if (Mathf.Abs(scroll) > 0.01f) zoom = Mathf.Clamp01(zoom - Mathf.Sign(scroll) * zoomStep);
         }
-        if (Mode != FlightMode.Lane)
-        {
-            camYaw = Mathf.Lerp(camYaw, 0f, 5f * Time.deltaTime);
-            camPitch = Mathf.Lerp(camPitch, 0f, 5f * Time.deltaTime);
-        }
 
+        // Camera follows the aim, never the car's raw rotation, so it stays smooth in every mode.
         Transform anchor = cockpitAnchor != null ? cockpitAnchor : transform;
-        Quaternion look = transform.rotation * Quaternion.Euler(camPitch, camYaw, 0f);
+        Quaternion look = Quaternion.Euler(aimPitch, aimYaw, 0f);
         Vector3 pos = anchor.position - look * Vector3.forward * (zoom * maxCameraDistance) + Vector3.up * (zoom * 2f);
         cam.transform.SetPositionAndRotation(pos, look);
     }
@@ -324,8 +418,9 @@ public class FlyingVehicle : MonoBehaviour
         cam = who.playerCamera;
         cam.transform.SetParent(null);
         who.gameObject.SetActive(false);
-        zoom = 0f; camYaw = 0f; camPitch = 0f;
+        zoom = 0f;
         yaw = transform.eulerAngles.y;
+        aimYaw = yaw; aimPitch = 0f;
         TrafficAuthority.Instance?.SetPlayerVehicle(this);
     }
 
@@ -333,6 +428,19 @@ public class FlyingVehicle : MonoBehaviour
     {
         var who = driver;
         driver = null;
+
+        // Hand a lane car back to traffic without a jump: start the line where the car actually is.
+        if (Mode == FlightMode.Lane && path != null)
+        {
+            path.Sample(distance, out var basePos, out _);
+            Vector3 fwd = path.SmoothForward(distance);
+            Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
+            Vector3 rel = transform.position - basePos;
+            currentOffset = new Vector2(Vector3.Dot(rel, right), rel.y);
+            offsetVel = Vector2.zero;
+            speed = Mathf.Max(0f, speed);
+        }
+
         who.transform.SetPositionAndRotation(transform.position + transform.right * 3f,
                                              Quaternion.Euler(0f, transform.eulerAngles.y, 0f));
         who.gameObject.SetActive(true);
@@ -357,10 +465,10 @@ public class FlyingVehicle : MonoBehaviour
         string where = Mode == FlightMode.Free ? "none" : currentLayer.ToString();
         GUI.Label(new Rect(20, 20, 500, 25), $"Mode: {Mode}   Layer: {where}   Speed: {shownSpeed:0}");
         if (Mode == FlightMode.Lane && path != null)
-            GUI.Label(new Rect(20, 45, 500, 25),
-                $"Upper open: {IsAvailable(LaneLayer.Upper)}   Lower open: {IsAvailable(LaneLayer.Lower)}   No-switch: {path.IsNoSwitch(distance)}");
+            GUI.Label(new Rect(20, 45, 700, 25),
+                $"Magnet: {magnetHold * 100f:0}%   Upper open: {IsAvailable(LaneLayer.Upper)}   Lower open: {IsAvailable(LaneLayer.Lower)}   No-switch: {path.IsNoSwitch(distance)}");
         if (Time.time < flashUntil) GUI.Label(new Rect(20, 70, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
-            "Space: cycle layer   Ctrl: release/snap lane   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit");
+            "Space: cycle layer   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit");
     }
 }

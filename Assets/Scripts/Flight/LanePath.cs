@@ -116,6 +116,58 @@ public class LanePath : MonoBehaviour
         return false;
     }
 
+    // Smooth tangent: direction between a point slightly behind and one slightly ahead.
+    // Avoids the per-segment kinks of the sampled polyline.
+    public Vector3 SmoothForward(float distance, float window = 5f)
+    {
+        Sample(distance - window, out var a, out _);
+        Sample(distance + window, out var b, out var f);
+        Vector3 d = b - a;
+        return d.sqrMagnitude > 1e-6f ? d.normalized : f;
+    }
+
+    // Distance along the path of the point nearest to pos (measured in XZ), searched around a hint.
+    // Result is kept continuous with the hint so it never jumps across the loop seam.
+    public float Project(Vector3 pos, float hint, float window = 40f)
+    {
+        int segCount = points.Count - 1;
+        if (segCount < 1) return hint;
+
+        Vector2 p2 = new Vector2(pos.x, pos.z);
+        float bestSq = float.MaxValue, best = hint, covered = 0f;
+        int i = IndexAt(hint - window);
+        for (int guard = 0; guard < segCount && covered < 2f * window; guard++)
+        {
+            int j = i + 1;
+            Vector2 a = new Vector2(points[i].x, points[i].z), b = new Vector2(points[j].x, points[j].z);
+            Vector2 ab = b - a;
+            float len2 = ab.sqrMagnitude;
+            float t = len2 > 1e-6f ? Mathf.Clamp01(Vector2.Dot(p2 - a, ab) / len2) : 0f;
+            float sq = (a + ab * t - p2).sqrMagnitude;
+            float segLen = cumulative[j] - cumulative[i];
+            if (sq < bestSq) { bestSq = sq; best = cumulative[i] + segLen * t; }
+            covered += segLen;
+            i = j;
+            if (i >= segCount) { if (closedLoop) i = 0; else break; }
+        }
+
+        if (closedLoop && Length > 0f)
+            best = hint + (Mathf.Repeat(best - hint + Length * 0.5f, Length) - Length * 0.5f);
+        return best;
+    }
+
+    int IndexAt(float distance)
+    {
+        distance = WrapDistance(distance);
+        int lo = 0, hi = cumulative.Count - 1;
+        while (hi - lo > 1)
+        {
+            int mid = (lo + hi) / 2;
+            if (cumulative[mid] <= distance) lo = mid; else hi = mid;
+        }
+        return Mathf.Min(lo, cumulative.Count - 2);
+    }
+
     public Vector3 ToWorld(Vector3 basePos, Vector3 forward, Vector2 offset)
     {
         Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
