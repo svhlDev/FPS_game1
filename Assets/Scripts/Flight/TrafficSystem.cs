@@ -24,7 +24,11 @@ public class TrafficSystem : MonoBehaviour
 
     public static CarState[] States = new CarState[256];
     public static int Count;
-    public static float CellSize = 80f;     // set each frame to the largest yieldLookRange
+    public static float CellSize = 80f;
+    // Physics LOD: cars farther than their physicsLodRadius from this point skip collision.
+    public static Vector3 LodCenter;
+    public static bool HasLodCenter;
+    public static bool IsBeyond(Vector3 p, float radius) => HasLodCenter && (p - LodCenter).sqrMagnitude > radius * radius;     // set each frame to the largest yieldLookRange
 
     static TrafficSystem instance;
     static int builtFrame = -1;
@@ -63,6 +67,10 @@ public class TrafficSystem : MonoBehaviour
     {
         if (builtFrame == Time.frameCount) return;
         builtFrame = Time.frameCount;
+
+        var cam = Camera.main;
+        HasLodCenter = cam != null;
+        if (HasLodCenter) LodCenter = cam.transform.position;
 
         var all = FlyingVehicle.Active;
         Count = all.Count;

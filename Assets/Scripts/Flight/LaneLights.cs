@@ -27,6 +27,17 @@ public class LaneLights : MonoBehaviour
             Spawn(root, p, path.IsNoSwitch(d) ? red : mid);
         }
 
+        foreach (int level in path.laneLevels)
+        {
+            if (level == 0) continue;
+            for (float d = 0f; d < path.Length; d += spacing)
+            {
+                path.LaneWeight(level, d, out var off);
+                path.Sample(d, out var p, out var f);
+                Spawn(root, path.ToWorld(p, f, off), path.IsNoSwitch(d) ? red : level > 0 ? up : low);
+            }
+        }
+
         foreach (var seg in path.sideLanes)
         {
             for (float d = seg.startDistance; d <= seg.endDistance; d += spacing)

@@ -156,8 +156,8 @@ public static class FlightGrayboxBuilder
             for (int i = 0; i < CarsPerLane; i++)
             {
                 float start = (i + (float)rng.NextDouble() * 0.6f) / CarsPerLane * L;
-                var layer = (LaneLayer)rng.Next(3);
-                if (layer != LaneLayer.Middle && path.LaneWeight(layer, start, out _) < 0.9f) layer = LaneLayer.Middle;
+                int level = path.LevelOf((LaneLayer)rng.Next(3));
+                if (level != 0 && path.LaneWeight(level, start, out _) < 0.9f) level = 0;
                 float speed = 33f + (float)rng.NextDouble() * 4f; // around the 35 limit
 
                 var v = CreateVehicle($"Traffic_{carIndex++:000}", Pick(trafficMats, rng));
@@ -165,11 +165,11 @@ public static class FlightGrayboxBuilder
                 v.transform.SetParent(trafficRoot, false);
                 v.path = path;
                 v.startDistance = start;
-                v.startLayer = layer;
+                v.startLevel = level;
                 v.aiCruiseSpeed = speed;
 
                 path.Sample(start, out var p, out var f);
-                float w = path.LaneWeight(layer, start, out var off);
+                float w = path.LaneWeight(level, start, out var off);
                 v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w) + Vector3.up * CarRootAboveUnderside,
                                                    Quaternion.LookRotation(f));
             }
@@ -283,7 +283,7 @@ public static class FlightGrayboxBuilder
 
     static float DistanceAt(LanePath path, Vector3 p)
     {
-        path.FindNearest(p, LaneLayer.Middle, out float d, out _);
+        path.FindNearest(p, 0, out float d, out _);
         return d;
     }
 
@@ -319,6 +319,25 @@ public static class FlightGrayboxBuilder
         visor.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.ShadowsOnly;
         SetMat(visor, GetMaterial("Visor", new Color(0.1f, 0.12f, 0.15f)));
 
+        // Boot thrusters: small emissive blocks under the feet, shown only while thrusting.
+        var thrusterMat = GetMaterial("Thruster", new Color(0.3f, 0.9f, 1f));
+        thrusterMat.EnableKeyword("_EMISSION");
+        thrusterMat.SetColor("_EmissionColor", new Color(0.3f, 0.9f, 1f) * 4f);
+        var thrusters = new Renderer[2];
+        for (int i = 0; i < 2; i++)
+        {
+            var t = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            t.name = i == 0 ? "ThrusterL" : "ThrusterR";
+            Object.DestroyImmediate(t.GetComponent<Collider>());
+            t.transform.SetParent(player.transform, false);
+            t.transform.localPosition = new Vector3(i == 0 ? -0.18f : 0.18f, 0.04f, 0f);
+            t.transform.localScale = new Vector3(0.16f, 0.06f, 0.26f);
+            thrusters[i] = t.GetComponent<Renderer>();
+            thrusters[i].shadowCastingMode = ShadowCastingMode.Off;
+            thrusters[i].enabled = false;
+            SetMat(t, thrusterMat);
+        }
+
         var head = new GameObject("Head").transform;
         head.SetParent(player.transform, false);
         head.localPosition = new Vector3(0f, 1.6f, 0f);
@@ -330,6 +349,7 @@ public static class FlightGrayboxBuilder
         fpc.playerCamera = cam;
         fpc.cameraRoot = head;
         fpc.bodyRenderers = new[] { body.GetComponent<Renderer>(), visor.GetComponent<Renderer>() };
+        fpc.thrusterRenderers = thrusters;
         fpc.blobShadowMaterial = GetBlobShadowMaterial();
 
         int layer = EnsureLayer("Player");
@@ -338,6 +358,7 @@ public static class FlightGrayboxBuilder
             player.layer = layer;
             body.layer = layer;
             visor.layer = layer;
+            foreach (var t in thrusters) t.gameObject.layer = layer;
             head.gameObject.layer = layer;
         }
         return fpc;

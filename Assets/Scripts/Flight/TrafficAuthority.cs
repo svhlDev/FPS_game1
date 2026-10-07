@@ -32,9 +32,27 @@ public class TrafficAuthority : MonoBehaviour
     void Awake() => Instance = this;
 
     // Defaults apply when there's no authority (edit mode, builders).
-    public static float Spacing => Instance != null ? Instance.layerSpacing : DefaultSpacing;
-    public static float Hover => Instance != null ? Instance.hoverHeight : DefaultHover;
-    public static int MaxLayer => Instance != null ? Instance.maxLayer : DefaultMaxLayer;
+    public static float Spacing => Current != null ? Current.layerSpacing : DefaultSpacing;
+    public static float Hover => Current != null ? Current.hoverHeight : DefaultHover;
+    public static int MaxLayer => Current != null ? Current.maxLayer : DefaultMaxLayer;
+
+    // Instance, or (before its Awake has run, or in edit mode) the scene's authority found by search.
+    // Lanes rebuild in OnEnable, which can run before this object's Awake on scene load.
+    static TrafficAuthority Current
+    {
+        get
+        {
+            if (Instance != null) return Instance;
+            if (lookup == null && Time.frameCount != lookupFrame)
+            {
+                lookupFrame = Time.frameCount; // at most one search per frame when there is none
+                lookup = FindAnyObjectByType<TrafficAuthority>();
+            }
+            return lookup;
+        }
+    }
+    static TrafficAuthority lookup;
+    static int lookupFrame = -1;
 
     public static float FloorHeight(int n) => n * Spacing;
     // Height of a riding car's underside in layer n.

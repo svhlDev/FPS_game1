@@ -26,7 +26,8 @@ public class FlyingVehicle : MonoBehaviour
     [Tooltip("No path: start parked on the surface below (e.g. a deck). Otherwise it hovers in Free mode.")]
     public bool startParkedOnSurface;
     public float startDistance = 0f;
-    public LaneLayer startLayer = LaneLayer.Middle;
+    [Tooltip("Lane level (layer offset from the flyway's base) traffic starts in and returns to.")]
+    public int startLevel;
     [Tooltip("Traffic speed limit. Around 35 cars hold every bend on the magnet alone.")]
     public float aiCruiseSpeed = 20f;
     public float middleLaneMaxSpeed = 70f;
@@ -97,6 +98,8 @@ public class FlyingVehicle : MonoBehaviour
     public float yieldClearance = 7f;
     [Tooltip("Seconds ahead to look for conflicts.")]
     public float yieldHorizon = 3f;
+    [Tooltip("Unoccupied cars farther than this from the camera skip collision and just follow their lane.")]
+    public float physicsLodRadius = 300f;
 
     [Header("Camera")]
     public Transform cockpitAnchor;
@@ -124,10 +127,10 @@ public class FlyingVehicle : MonoBehaviour
     // Lane this car is registered on for the traffic AI (only while in Lane mode).
     public LanePath RegisteredPath => registeredPath;
     public float LaneDistance => distance;
-    // Which lane of the flyway (Lane mode).
-    public LaneLayer CurrentLayer => currentLayer;
+    // Which lane of the flyway (Lane mode): layer offset from its base layer.
+    public int LaneLevel => laneLevel;
     // Grid layer the car is in: its lane's layer on a flyway, otherwise the held layer.
-    public int GridLayer => mode == FlightMode.Lane && path != null ? path.GridLayerOf(currentLayer) : gridLayer;
+    public int GridLayer => mode == FlightMode.Lane && path != null ? path.GridLayerOf(laneLevel) : gridLayer;
     float Underside => transform.position.y + colCenter.y - colHalf.y;
     float RootAboveUnderside => colHalf.y - colCenter.y;
     // Slot in TrafficSystem.States for the current frame.
@@ -136,7 +139,7 @@ public class FlyingVehicle : MonoBehaviour
     // HUD readouts (drawn by VehicleHUD).
     public float HudSpeed => Mode == FlightMode.Lane ? speed : velocity.magnitude;
     public float MagnetHold => magnetHold;
-    public bool IsLayerOpen(LaneLayer layer) => IsAvailable(layer);
+    public bool CanStepLane(int dir) => mode == FlightMode.Lane && path != null && path.NextLevel(laneLevel, dir, distance, out _);
     public bool InNoSwitchZone => path != null && path.IsNoSwitch(distance);
     public string FlashMessage => Time.time < flashUntil ? flash : null;
 
@@ -159,7 +162,7 @@ public class FlyingVehicle : MonoBehaviour
     LanePath registeredPath;
     bool started;
 
-    LaneLayer currentLayer;
+    int laneLevel;
     int gridLayer;
     float distance, speed;
     Vector2 currentOffset, offsetVel;   // offset of the magnetic line from the base path
@@ -231,9 +234,9 @@ public class FlyingVehicle : MonoBehaviour
         }
         else
         {
-            distance = startDistance; currentLayer = startLayer; speed = aiCruiseSpeed;
-            float w0 = path.LaneWeight(startLayer, startDistance, out var o0);
-            currentOffset = startLayer == LaneLayer.Middle ? Vector2.zero : o0 * w0;
+            distance = startDistance; laneLevel = startLevel; speed = aiCruiseSpeed;
+            float w0 = path.LaneWeight(startLevel, startDistance, out var o0);
+            currentOffset = startLevel == 0 ? Vector2.zero : o0 * w0;
             velocity = path.SmoothForward(startDistance) * speed;
         }
         SyncLaneRegistration();
@@ -300,10 +303,8 @@ public class FlyingVehicle : MonoBehaviour
 
     void StepLane(int dir)
     {
-        int target = (int)currentLayer + dir;
-        if (target < 0 || target > 2) return;
-        if (target != (int)LaneLayer.Middle && !IsAvailable((LaneLayer)target)) return;
-        currentLayer = (LaneLayer)target;
+        if (!path.NextLevel(laneLevel, dir, distance, out int next)) return;
+        laneLevel = next;
         if (path.IsNoSwitch(distance))
         {
             Flash("Illegal lane switch!");
@@ -336,7 +337,7 @@ public class FlyingVehicle : MonoBehaviour
         }
     }
 
-    bool IsAvailable(LaneLayer layer) => path != null && path.LaneWeight(layer, distance, out _) > 0.9f;
+    bool IsAvailable(int level) => path != null && path.LaneWeight(level, distance, out _) > 0.9f;
 
     void LockToNearestLayer()
     {
@@ -380,25 +381,25 @@ public class FlyingVehicle : MonoBehaviour
 
     bool TryAttachToLane()
     {
-        LanePath best = null; LaneLayer bestLane = LaneLayer.Middle;
+        LanePath best = null; int bestLevel = 0;
         float bestD = 0f, bestSq = captureRadius * captureRadius;
         foreach (var lp in allLanes)
         {
             if (lp == null) continue;
-            for (int lane = 0; lane < 3; lane++)
+            foreach (int level in lp.Levels)
             {
-                if (lp.GridLayerOf((LaneLayer)lane) != gridLayer) continue;
-                if (lp.FindNearest(transform.position, (LaneLayer)lane, out float d, out float sq) && sq < bestSq)
-                { best = lp; bestLane = (LaneLayer)lane; bestD = d; bestSq = sq; }
+                if (lp.GridLayerOf(level) != gridLayer) continue;
+                if (lp.FindNearest(transform.position, level, out float d, out float sq) && sq < bestSq)
+                { best = lp; bestLevel = level; bestD = d; bestSq = sq; }
             }
         }
         if (best == null) return false;
 
         path = best;
-        currentLayer = bestLane;
+        laneLevel = bestLevel;
         distance = best.Project(transform.position, bestD);
-        float w = best.LaneWeight(currentLayer, distance, out var laneOff);
-        currentOffset = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
+        float w = best.LaneWeight(laneLevel, distance, out var laneOff);
+        currentOffset = laneLevel == 0 ? Vector2.zero : laneOff * w;
         offsetVel = Vector2.zero;
         Mode = FlightMode.Lane;
         Flash("Magnet on");
@@ -427,9 +428,9 @@ public class FlyingVehicle : MonoBehaviour
     // Updates the magnetic line's own layer offset (glides between layers, merges when a lane ends).
     Vector3 UpdateLineOffset(out Vector3 laneFwd)
     {
-        float w = path.LaneWeight(currentLayer, distance, out Vector2 laneOffset);
-        if (currentLayer != LaneLayer.Middle && w <= 0.01f) currentLayer = LaneLayer.Middle; // lane converged
-        Vector2 target = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOffset * w;
+        float w = path.LaneWeight(laneLevel, distance, out Vector2 laneOffset);
+        if (laneLevel != 0 && w <= 0.01f) laneLevel = 0; // lane converged
+        Vector2 target = laneLevel == 0 ? Vector2.zero : laneOffset * w;
         currentOffset = Vector2.SmoothDamp(currentOffset, target, ref offsetVel, laneChangeSmoothTime);
 
         path.Sample(distance, out Vector3 basePos, out _);
@@ -448,10 +449,9 @@ public class FlyingVehicle : MonoBehaviour
         Vector2 input = MoveInput(kb);
         UpdateAim(mouse);
 
-        // Traffic drifts back to its preferred side lane whenever it legally can.
-        if (IsAI && currentLayer == LaneLayer.Middle && startLayer != LaneLayer.Middle &&
-            IsAvailable(startLayer) && !path.IsNoSwitch(distance))
-            currentLayer = startLayer;
+        // Traffic drifts back to its own lane level whenever it legally can.
+        if (IsAI && laneLevel != startLevel && IsAvailable(startLevel) && !path.IsNoSwitch(distance))
+            laneLevel = startLevel;
 
         distance = path.Project(transform.position, distance);
         Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
@@ -494,7 +494,7 @@ public class FlyingVehicle : MonoBehaviour
 
         if (IsOccupied)
         {
-            float max = currentLayer == LaneLayer.Middle ? middleLaneMaxSpeed : sideLaneMaxSpeed;
+            float max = laneLevel == 0 ? middleLaneMaxSpeed : sideLaneMaxSpeed;
             if (input.y > 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, acceleration * dt);
             else if (input.y < 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, braking * dt);
             if (fwdSpeed > max) fwdSpeed = Mathf.MoveTowards(fwdSpeed, max, braking * dt);
@@ -536,9 +536,9 @@ public class FlyingVehicle : MonoBehaviour
     {
         float dt = Time.deltaTime;
         distance = path.Project(transform.position, distance, 120f);
-        float w = path.LaneWeight(currentLayer, distance, out var laneOff);
-        if (currentLayer != LaneLayer.Middle && w <= 0.01f) currentLayer = LaneLayer.Middle;
-        currentOffset = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
+        float w = path.LaneWeight(laneLevel, distance, out var laneOff);
+        if (laneLevel != 0 && w <= 0.01f) laneLevel = 0;
+        currentOffset = laneLevel == 0 ? Vector2.zero : laneOff * w;
         offsetVel = Vector2.zero;
 
         path.Sample(distance, out var nearBase, out _);
@@ -632,6 +632,8 @@ public class FlyingVehicle : MonoBehaviour
     Vector3 MoveAndCollide(Vector3 from, Vector3 delta, Quaternion rot)
     {
         if (bodyCol == null) return from + delta;
+        // Physics LOD: far-away traffic just follows its lane, no sweeps or depenetration.
+        if (!IsOccupied && TrafficSystem.IsBeyond(from, physicsLodRadius)) return from + delta;
         Vector3 half = colHalf, center = colCenter;
         float dist = delta.magnitude;
         Vector3 moved = delta;

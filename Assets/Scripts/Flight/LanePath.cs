@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+// Legacy lane names. Upper/Lower side-lane segments map onto levels +/- laneLayerOffset.
 public enum LaneLayer { Lower = 0, Middle = 1, Upper = 2 }
 
 [Serializable]
@@ -24,16 +25,21 @@ public class NoSwitchZone
 }
 
 // Flyway. Middle lane = smooth curve through this object's child transforms (waypoints), flattened
-// to RideHeight(baseLayer). Upper/Lower lanes peel off it at +/- laneLayerOffset layers and merge back.
-// All heights are car UNDERSIDE heights.
+// to RideHeight(baseLayer). Lanes are LEVELS: whole-layer offsets from baseLayer, stacked straight
+// above/below the middle line. Two kinds:
+//   laneLevels : full-loop lanes, e.g. {-2,-1,0,1,2} = five stacked lanes.
+//   sideLanes  : legacy Upper/Lower segments at +/- laneLayerOffset that peel off and merge back.
+// Level 0 (the middle line) always exists. All heights are car UNDERSIDE heights.
 // No-switch zones: lane changes here are physically possible but illegal.
 [ExecuteAlways]
 public class LanePath : MonoBehaviour
 {
     public bool closedLoop = true;
-    [Tooltip("Grid layer of the middle lane.")]
+    [Tooltip("Grid layer of the middle lane (level 0).")]
     public int baseLayer = 8;
-    [Tooltip("Upper/Lower lanes sit this many layers above/below the middle lane.")]
+    [Tooltip("Full-loop lanes as layer offsets from baseLayer, e.g. -2..2. 0 is always present.")]
+    public int[] laneLevels = new int[0];
+    [Tooltip("Legacy Upper/Lower side lanes sit this many layers above/below the middle lane.")]
     public int laneLayerOffset = 4;
     [Range(4, 64)] public int samplesPerSegment = 16;
     public List<SideLaneSegment> sideLanes = new List<SideLaneSegment>();
@@ -41,6 +47,7 @@ public class LanePath : MonoBehaviour
 
     readonly List<Vector3> points = new List<Vector3>();
     readonly List<float> cumulative = new List<float>();
+    readonly List<int> levels = new List<int>();
     public float Length { get; private set; }
 
     // Cars currently attached to this lane (Lane mode). Maintained by FlyingVehicle via TrafficSystem.
@@ -100,36 +107,75 @@ public class LanePath : MonoBehaviour
         forward = forward.sqrMagnitude > 1e-6f ? forward.normalized : transform.forward;
     }
 
-    // 0 = lane doesn't exist here, 1 = fully split off. Middle is always 1.
-    public float LaneWeight(LaneLayer layer, float distance, out Vector2 offset)
+    // ---------- levels ----------
+
+    public int LevelOf(SideLaneSegment seg) => seg.layer == LaneLayer.Upper ? laneLayerOffset : -laneLayerOffset;
+    public int LevelOf(LaneLayer lane) => ((int)lane - 1) * laneLayerOffset;
+    public int GridLayerOf(int level) => baseLayer + level;
+
+    bool HasFullLevel(int level)
     {
-        offset = Vector2.zero;
-        if (layer == LaneLayer.Middle) return 1f;
+        foreach (int l in laneLevels) if (l == level) return true;
+        return false;
+    }
+
+    // Every level this flyway has somewhere (0, full-loop levels, legacy side lanes). Not allocation-free
+    // to build, so it's refreshed on demand into a cached list.
+    public List<int> Levels
+    {
+        get
+        {
+            levels.Clear();
+            levels.Add(0);
+            foreach (int l in laneLevels) if (!levels.Contains(l)) levels.Add(l);
+            foreach (var seg in sideLanes) { int l = LevelOf(seg); if (!levels.Contains(l)) levels.Add(l); }
+            return levels;
+        }
+    }
+
+    // 0 = lane doesn't exist here, 1 = fully split off. Level 0 and full-loop levels are always 1.
+    // offset = (sideways m, up/down m) from the middle line.
+    public float LaneWeight(int level, float distance, out Vector2 offset)
+    {
+        offset = new Vector2(0f, level * TrafficAuthority.Spacing);
+        if (level == 0) { offset = Vector2.zero; return 1f; }
+        if (HasFullLevel(level)) return 1f;
         distance = WrapDistance(distance);
 
         float best = 0f;
         foreach (var seg in sideLanes)
         {
-            if (seg.layer != layer) continue;
+            if (LevelOf(seg) != level) continue;
             float w = SegmentWeight(seg, distance);
             if (w > best) { best = w; offset = LaneOffset(seg); }
         }
         return best;
     }
 
-    // Offset of a side lane from the middle line: sideways in metres, up/down by whole layers.
-    public Vector2 LaneOffset(SideLaneSegment seg) =>
-        new Vector2(seg.sideOffset, (seg.layer == LaneLayer.Upper ? 1 : -1) * laneLayerOffset * TrafficAuthority.Spacing);
+    // Next level from `current` in direction dir (+1 up / -1 down) that exists at this distance.
+    public bool NextLevel(int current, int dir, float distance, out int next)
+    {
+        next = current;
+        bool found = false;
+        foreach (int l in Levels)
+        {
+            if ((l - current) * dir <= 0) continue;
+            if (LaneWeight(l, distance, out _) <= 0.9f) continue;
+            if (!found || Mathf.Abs(l - current) < Mathf.Abs(next - current)) { next = l; found = true; }
+        }
+        return found;
+    }
 
-    public int GridLayerOf(LaneLayer lane) => baseLayer + ((int)lane - 1) * laneLayerOffset;
+    // Offset of a legacy side lane from the middle line: sideways in metres, up/down by whole layers.
+    public Vector2 LaneOffset(SideLaneSegment seg) => new Vector2(seg.sideOffset, LevelOf(seg) * TrafficAuthority.Spacing);
 
     public int LowestLayer
     {
         get
         {
-            foreach (var seg in sideLanes)
-                if (seg.layer == LaneLayer.Lower) return GridLayerOf(LaneLayer.Lower);
-            return baseLayer;
+            int min = 0;
+            foreach (int l in Levels) min = Mathf.Min(min, l);
+            return baseLayer + min;
         }
     }
 
@@ -199,21 +245,17 @@ public class LanePath : MonoBehaviour
         return basePos + right * offset.x + Vector3.up * offset.y;
     }
 
-    // Nearest point on this path's lane in the given layer (side lanes only where fully split).
-    public bool FindNearest(Vector3 pos, LaneLayer layer, out float distance, out float sqrDist)
+    // Nearest point on this path's lane at the given level (side lanes only where fully split).
+    public bool FindNearest(Vector3 pos, int level, out float distance, out float sqrDist)
     {
         distance = 0f; sqrDist = float.MaxValue;
         bool found = false;
         for (int i = 0; i < points.Count - 1; i++)
         {
             float d = cumulative[i];
-            Vector2 off = Vector2.zero;
-            if (layer != LaneLayer.Middle)
-            {
-                float w = LaneWeight(layer, d, out off);
-                if (w < 0.9f) continue;
-                off *= w;
-            }
+            float w = LaneWeight(level, d, out Vector2 off);
+            if (w < 0.9f) continue;
+            off *= w;
             Vector3 fwd = points[i + 1] - points[i];
             if (fwd.sqrMagnitude < 1e-6f) continue;
             float sq = (ToWorld(points[i], fwd.normalized, off) - pos).sqrMagnitude;
@@ -245,6 +287,13 @@ public class LanePath : MonoBehaviour
         {
             Gizmos.color = IsNoSwitch(cumulative[i]) ? Color.red : Color.cyan;
             Gizmos.DrawLine(points[i - 1], points[i]);
+        }
+        foreach (int l in laneLevels)
+        {
+            if (l == 0) continue;
+            Gizmos.color = l > 0 ? Color.yellow : Color.magenta;
+            Vector3 up = Vector3.up * (l * TrafficAuthority.Spacing);
+            for (int i = 1; i < points.Count; i++) Gizmos.DrawLine(points[i - 1] + up, points[i] + up);
         }
         foreach (var seg in sideLanes)
         {

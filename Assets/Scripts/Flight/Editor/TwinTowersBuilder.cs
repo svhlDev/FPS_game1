@@ -170,11 +170,11 @@ public static class TwinTowersBuilder
                     v.transform.SetParent(trafficRoot, false);
                     v.path = path;
                     v.startDistance = start;
-                    v.startLayer = (LaneLayer)layer;
+                    v.startLevel = path.LevelOf((LaneLayer)layer);
                     v.aiCruiseSpeed = Mathf.Lerp(SpeedMin, SpeedMax, (float)rng.NextDouble());
 
                     path.Sample(start, out var p, out var f);
-                    float w = path.LaneWeight(v.startLayer, start, out var off);
+                    float w = path.LaneWeight(v.startLevel, start, out var off);
                     v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w) + Vector3.up * CarRootAboveUnderside,
                                                        Quaternion.LookRotation(f));
                 }

@@ -5,7 +5,9 @@ using UnityEngine.InputSystem;
 // slide (longer if your speed doesn't match the car's, or the car is accelerating hard). Once
 // locked, the car carries you and you walk on its roof normally. Leaving a car keeps its velocity.
 // While falling, the boots nudge you toward the safe front of a roof you're about to land on.
-// Cars with a rear rack (VehicleGrabPoint) can be caught from the air: you hang off the back.
+// Cars with a rear rack (VehicleGrabPoint) can be caught from the air (swept test, timing is
+// everything): you hang off the back and mash Space to climb up.
+// Boot thrusters: one extra jump in the air, and holding Space while falling glides.
 // Scroll zooms from first person out to a third-person shoulder boom (same feel as the car);
 // the body always faces the camera's yaw (strafe style). A blob shadow marks where you'll land.
 // Runs after the vehicles so it carries with this frame's car motion.
@@ -28,6 +30,22 @@ public class FirstPersonController : MonoBehaviour
     public float airControl = 0.3f;
     [Tooltip("On-foot input acceleration (m/s^2). Only used to scale air control.")]
     public float inputAcceleration = 40f;
+
+    [Header("Boot thrusters")]
+    [Tooltip("Extra jumps while airborne. Reset on landing on anything.")]
+    public int airJumps = 1;
+    [Tooltip("Max fall speed while Space is held (m/s).")]
+    public float glideFallSpeed = 3f;
+    [Tooltip("Air control while gliding (replaces airControl).")]
+    public float glideAirControl = 0.5f;
+    public float fuelMax = 100f;
+    public float fuel = 100f;
+    [Tooltip("0 = infinite glide.")]
+    public float glideFuelPerSecond = 0f;
+    [Tooltip("0 = free double jumps.")]
+    public float doubleJumpFuelCost = 0f;
+    [Tooltip("Blocks under the feet that glow while thrusting.")]
+    public Renderer[] thrusterRenderers;
 
     [Header("Magnet boots")]
     [Tooltip("How fast slide relative to the car dies out (1/s). 4 = locked on in about half a second.")]
@@ -64,6 +82,18 @@ public class FirstPersonController : MonoBehaviour
     public float hangBehind = 0.4f;
     [Tooltip("After letting go, can't catch again for this long.")]
     public float regrabDelay = 0.5f;
+    [Tooltip("Space presses to climb from a full hang.")]
+    public int climbPresses = 6;
+    [Tooltip("Climb progress lost per second (fraction of the full climb).")]
+    public float climbDecay = 0.3f;
+    [Tooltip("Relative speed at the catch that counts as fully violent (m/s).")]
+    public float violentCatchSpeed = 25f;
+    [Tooltip("Camera shake at a fully violent catch (m).")]
+    public float catchShake = 0.3f;
+    [Tooltip("Hang offset kick at a fully violent catch (m).")]
+    public float catchSwing = 0.8f;
+    [Tooltip("Seconds for the catch swing to settle.")]
+    public float catchSwingSettle = 0.5f;
 
     [Header("Falling")]
     [Tooltip("Respawn when this far below the lowest flyway lane in the scene.")]
@@ -114,6 +144,16 @@ public class FirstPersonController : MonoBehaviour
     Vector3 hangLocal;                // grab point in the car's yaw-only frame
     float regrabAt;
     Vector3 sway, swayVel;
+    Vector3 swing, swingVel;          // catch kick, car-local
+    float climbProgress;
+    Vector3 lastHand;                 // hand point last frame, for the swept catch
+    bool lastHandValid;
+    float camShake;
+
+    int airJumpsLeft;
+    bool gliding;
+    float thrusterGlowUntil;
+    bool thrustersOn = true;
 
     Vector3 spawnPos;
     Quaternion spawnRot;
@@ -157,9 +197,14 @@ public class FirstPersonController : MonoBehaviour
         grounded = false;
         assistActive = false;
         hang = null;
+        gliding = false;
+        lastHandValid = false;
+        airJumpsLeft = airJumps;
         if (cc != null) cc.enabled = true;
         LeavePlatform();
     }
+
+    float JumpVelocity => Mathf.Sqrt(jumpHeight * -2f * gravity);
 
     // Driving: the car owns the camera, and the blob goes away with us.
     void OnDisable()
@@ -203,17 +248,33 @@ public class FirstPersonController : MonoBehaviour
         if (grounded)
         {
             assistActive = false;
+            gliding = false;
+            airJumpsLeft = airJumps; // landing on anything, roofs included
             horizontal = platform != null ? move + slipVel : move;
             if (verticalVelocity < 0f) verticalVelocity = -2f;
-            if (kb.spaceKey.wasPressedThisFrame) verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+            if (kb.spaceKey.wasPressedThisFrame) verticalVelocity = JumpVelocity;
         }
         else
         {
-            AirControl(move, dt);
+            // A press in the air spends the double jump; keep holding and the glide takes over from the apex.
+            if (kb.spaceKey.wasPressedThisFrame && airJumpsLeft > 0 && fuel >= doubleJumpFuelCost)
+            {
+                airJumpsLeft--;
+                fuel -= doubleJumpFuelCost;
+                verticalVelocity = Mathf.Max(verticalVelocity, JumpVelocity);
+                thrusterGlowUntil = Time.time + 0.25f;
+            }
+            gliding = kb.spaceKey.isPressed && verticalVelocity < 0f && (glideFuelPerSecond <= 0f || fuel > 0f);
+            AirControl(move, dt, gliding ? glideAirControl : airControl);
             assistActive = verticalVelocity < 0f && LandingAssist(dt);
             horizontal = airVel;
         }
         verticalVelocity += gravity * dt;
+        if (gliding)
+        {
+            verticalVelocity = Mathf.Max(verticalVelocity, -glideFallSpeed);
+            fuel = Mathf.Max(0f, fuel - glideFuelPerSecond * dt);
+        }
 
         groundCollider = null;
         var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt);
@@ -238,7 +299,8 @@ public class FirstPersonController : MonoBehaviour
             LeavePlatform();
         }
 
-        if (!grounded && TryGrab()) return;
+        if (grounded) lastHandValid = false;
+        else if (TryGrab()) return;
 
         if (platform != null)
             platformLocal = Quaternion.Inverse(platform.PlatformRotation) * (transform.position - platform.PlatformPosition);
@@ -282,11 +344,25 @@ public class FirstPersonController : MonoBehaviour
                 local *= allowed / dist;
                 dist = allowed;
             }
+            if (camShake > 0f)
+            {
+                local += Random.insideUnitSphere * camShake * catchShake;
+                camShake = Mathf.MoveTowards(camShake, 0f, 2f * Time.deltaTime);
+            }
             cam.localPosition = local;
             cam.localRotation = Quaternion.identity;
             SetBodyVisible(dist > showBodyDistance);
         }
         UpdateBlob();
+        SetThrusters(hang == null && (gliding || Time.time < thrusterGlowUntil));
+    }
+
+    void SetThrusters(bool on)
+    {
+        if (on == thrustersOn || thrusterRenderers == null) return;
+        thrustersOn = on;
+        foreach (var r in thrusterRenderers)
+            if (r != null) r.enabled = on;
     }
 
     float CameraClearance(Vector3 origin, Vector3 dir, float dist)
@@ -394,6 +470,8 @@ public class FirstPersonController : MonoBehaviour
         airVel = Vector3.zero;
         grounded = true;
         verticalVelocity = -2f;
+        airJumpsLeft = airJumps;
+        gliding = false;
     }
 
     void SetPlatform(FlyingVehicle car)
@@ -412,13 +490,13 @@ public class FirstPersonController : MonoBehaviour
     }
 
     // Can't add speed beyond your input speed in the input direction, but can steer and brake.
-    void AirControl(Vector3 move, float dt)
+    void AirControl(Vector3 move, float dt, float control)
     {
         float wishSpeed = move.magnitude;
         if (wishSpeed < 1e-3f) return;
         Vector3 dir = move / wishSpeed;
         float add = wishSpeed - Vector3.Dot(airVel, dir);
-        if (add > 0f) airVel += dir * Mathf.Min(add, airControl * inputAcceleration * dt);
+        if (add > 0f) airVel += dir * Mathf.Min(add, control * inputAcceleration * dt);
     }
 
     // ---------- landing assist ----------
@@ -442,8 +520,10 @@ public class FirstPersonController : MonoBehaviour
 
             // Time until feet reach the roof: dy + vRel*t + g*t^2/2 = 0 (g < 0).
             float vRel = verticalVelocity - car.Velocity.y;
-            float t = (-vRel - Mathf.Sqrt(vRel * vRel - 2f * gravity * dy)) / gravity;
-            if (t <= 1e-3f) continue;
+            float t = gliding
+                ? (vRel < -0.01f ? dy / -vRel : float.MaxValue)                // constant glide sink
+                : (-vRel - Mathf.Sqrt(vRel * vRel - 2f * gravity * dy)) / gravity;
+            if (t <= 1e-3f || t > 10f) continue;
 
             Quaternion rot = car.PlatformRotation;
             Vector3 relVel = airVel - Flat(car.Velocity);
@@ -469,35 +549,68 @@ public class FirstPersonController : MonoBehaviour
 
     // ---------- rear grab / hanging ----------
 
+    // Swept catch: the hand point's path since last frame, measured relative to each grab point (so in
+    // the car's moving frame), against a sphere of grabRadius. A 25 m/s free fall moves ~0.4 m a frame,
+    // so a point test would miss. No assist and no speed limit: timing is the skill.
     bool TryGrab()
     {
-        if (verticalVelocity >= 0f || Time.time < regrabAt) return false;
         Vector3 hands = transform.position + Vector3.up * hangDrop;
+        Vector3 prevHands = lastHandValid ? lastHand : hands;
+        bool swept = lastHandValid;
+        lastHand = hands;
+        lastHandValid = true;
+        if (verticalVelocity >= 0f || Time.time < regrabAt) return false;
+
+        float r2 = grabRadius * grabRadius;
         VehicleGrabPoint best = null;
-        float bestSq = grabRadius * grabRadius;
+        float bestD2 = float.MaxValue;
         foreach (var g in VehicleGrabPoint.All)
         {
             if (g.Vehicle == null || g.Vehicle.IsOccupied) continue;
-            float sq = (g.transform.position - hands).sqrMagnitude;
-            if (sq < bestSq) { bestSq = sq; best = g; }
+            Vector3 p1 = hands - g.transform.position;
+            Vector3 p0 = swept ? prevHands - g.PreviousPosition : p1;
+            Vector3 seg = p1 - p0;
+            float reach = grabRadius + seg.magnitude;
+            if (p1.sqrMagnitude > reach * reach) continue;
+
+            float ss = seg.sqrMagnitude;
+            float s = ss > 1e-8f ? Mathf.Clamp01(-Vector3.Dot(p0, seg) / ss) : 0f;
+            float d2 = (p0 + seg * s).sqrMagnitude;
+            if (d2 <= r2 && d2 < bestD2) { bestD2 = d2; best = g; }
         }
         if (best == null) return false;
+        StartHang(best);
+        return true;
+    }
+
+    void StartHang(VehicleGrabPoint g)
+    {
+        var car = g.Vehicle;
+        Quaternion rot = car.PlatformRotation;
+
+        // How hard the catch is: relative speed between you and the car.
+        Vector3 rel = new Vector3(airVel.x, verticalVelocity, airVel.z) - car.Velocity;
+        float relSpeed = rel.magnitude;
+        float violence = Mathf.Clamp01(relSpeed / violentCatchSpeed);
+        camShake = Mathf.Max(camShake, violence);
+        swing = relSpeed > 0.01f ? -(Quaternion.Inverse(rot) * rel / relSpeed) * catchSwing * violence : Vector3.zero;
+        swingVel = Vector3.zero;
 
         LeavePlatform();
-        hang = best;
-        var car = best.Vehicle;
-        Quaternion rot = car.PlatformRotation;
-        hangLocal = Quaternion.Inverse(rot) * (best.transform.position - car.PlatformPosition);
+        hang = g;
+        hangLocal = Quaternion.Inverse(rot) * (g.transform.position - car.PlatformPosition);
         platformYaw = rot.eulerAngles.y;
         lastCarLocalVel = Quaternion.Inverse(rot) * Flat(car.Velocity);
         sway = swayVel = Vector3.zero;
+        climbProgress = 0f;
         airVel = Vector3.zero;
         verticalVelocity = 0f;
         grounded = false;
+        gliding = false;
         assistActive = false;
+        lastHandValid = false;
         cc.enabled = false; // held by the rack, not by collision
         UpdateHangPosition(car, rot);
-        return true;
     }
 
     void UpdateHanging(Keyboard kb, float dt)
@@ -510,19 +623,23 @@ public class FirstPersonController : MonoBehaviour
         transform.Rotate(0f, Mathf.DeltaAngle(platformYaw, yaw), 0f);
         platformYaw = yaw;
 
-        // Body swings opposite to the car's acceleration.
+        // Body swings opposite to the car's acceleration; the catch kick settles out.
         Vector3 carVel = Flat(car.Velocity);
         Vector3 swayTarget = Vector3.ClampMagnitude(-CarLocalAccel(rot, carVel, dt) * swayPerAccel, swayAmount);
         sway = Vector3.SmoothDamp(sway, swayTarget, ref swayVel, 0.25f);
+        swing = Vector3.SmoothDamp(swing, Vector3.zero, ref swingVel, catchSwingSettle * 0.3f);
         UpdateHangPosition(car, rot);
 
-        if (kb.spaceKey.wasPressedThisFrame) { ClimbUp(car); return; }
+        // Climb: mash Space; progress drains if you stop.
+        climbProgress = Mathf.Max(0f, climbProgress - climbDecay * dt);
+        if (kb.spaceKey.wasPressedThisFrame) climbProgress += 1f / Mathf.Max(1, climbPresses);
+        if (climbProgress >= 0.999f) { ClimbUp(car); return; }
         if (kb.leftCtrlKey.wasPressedThisFrame || kb.rightCtrlKey.wasPressedThisFrame) LetGo(carVel);
     }
 
     void UpdateHangPosition(FlyingVehicle car, Quaternion rot)
     {
-        Vector3 local = hangLocal + new Vector3(0f, -hangDrop, -hangBehind) + sway;
+        Vector3 local = hangLocal + new Vector3(0f, -hangDrop, -hangBehind) + sway + swing;
         transform.position = car.PlatformPosition + rot * local;
     }
 
@@ -541,6 +658,7 @@ public class FirstPersonController : MonoBehaviour
     void LetGo(Vector3 carVel)
     {
         hang = null;
+        lastHandValid = false;
         cc.enabled = true;
         airVel = carVel;
         verticalVelocity = 0f;
@@ -553,6 +671,9 @@ public class FirstPersonController : MonoBehaviour
     void Respawn()
     {
         hang = null;
+        lastHandValid = false;
+        gliding = false;
+        airJumpsLeft = airJumps;
         cc.enabled = false;
         transform.SetPositionAndRotation(spawnPos, spawnRot);
         cc.enabled = true;
@@ -603,7 +724,19 @@ public class FirstPersonController : MonoBehaviour
         if (assistActive) GUI.Label(new Rect(cx - 40, cy + 20, 200, 25), "[ BOOTS LOCK ]");
 
         if (hang != null)
-            GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "HANGING   Space climb | Ctrl let go");
+        {
+            GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "HANGING   mash Space to climb | Ctrl let go");
+            if (climbProgress > 0f)
+            {
+                var bar = new Rect(cx - 100, Screen.height - 70, 200, 10);
+                var prev = GUI.color;
+                GUI.color = new Color(0f, 0f, 0f, 0.6f);
+                GUI.DrawTexture(bar, Texture2D.whiteTexture);
+                GUI.color = new Color(0.3f, 0.9f, 1f);
+                GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * Mathf.Clamp01(climbProgress), bar.height), Texture2D.whiteTexture);
+                GUI.color = prev;
+            }
+        }
         else if (platform != null && grounded)
             GUI.Label(new Rect(20, Screen.height - 30, 600, 25), "E take car | Space jump");
     }

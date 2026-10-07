@@ -11,7 +11,8 @@ public class VehicleHUD : MonoBehaviour
 
     static readonly string[] Controls =
     {
-        "WASD move | Shift sprint | Space jump | E hijack / exit door | hold E exit to roof",
+        "WASD move | Shift sprint | Space jump, again in the air: boost | hold Space: glide | E hijack",
+        "Hanging off a rack: mash Space to climb | Ctrl let go | in car: E exit door, hold E exit to roof",
         "Car: Space layer up | Shift+Space layer down | Ctrl magnet on/off | Ctrl+Space free flight",
         "Scroll camera zoom | Esc release / quit",
         "F1 toggle this help",
@@ -94,13 +95,13 @@ public class VehicleHUD : MonoBehaviour
 
         var mode = car.Mode;
         string where = mode == FlightMode.Free ? "none"
-                     : mode == FlightMode.Lane ? $"{car.GridLayer} ({car.CurrentLayer} lane)"
+                     : mode == FlightMode.Lane ? $"{car.GridLayer} (lane level {car.LaneLevel:+0;-0;0})"
                      : car.GridLayer.ToString();
         GUI.Label(new Rect(20, y, 500, 25), $"Mode: {mode}   Layer: {where}   Speed: {car.HudSpeed:0}");
         if (mode == FlightMode.Lane && car.path != null)
             GUI.Label(new Rect(20, y + 25, 700, 25),
-                $"Magnet: {car.MagnetHold * 100f:0}%   Upper open: {car.IsLayerOpen(LaneLayer.Upper)}   " +
-                $"Lower open: {car.IsLayerOpen(LaneLayer.Lower)}   No-switch: {car.InNoSwitchZone}");
+                $"Magnet: {car.MagnetHold * 100f:0}%   Lane above: {car.CanStepLane(1)}   " +
+                $"Lane below: {car.CanStepLane(-1)}   No-switch: {car.InNoSwitchZone}");
         string flash = car.FlashMessage;
         if (flash != null) GUI.Label(new Rect(20, y + 50, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
