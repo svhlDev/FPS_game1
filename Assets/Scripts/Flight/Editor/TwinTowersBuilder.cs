@@ -14,8 +14,11 @@ public static class TwinTowersBuilder
 {
     const string ScenePath = "Assets/Scenes/TwinTowers.unity";
 
-    // Altitudes
-    static readonly float[] LayerAltitudes = { 100f, 120f, 140f }; // Lower, Middle, Upper
+    // Altitude grid (layer n floor = 5n m, cars ride with their underside 0.5 m above it)
+    const int RingBaseLayer = 24;           // rings ride at layers 20 / 24 / 28
+    const int RingLayerOffset = 4;
+    const int DeckLayer = 29;               // deck tops at 145 m: traffic in layer 28 passes 5 m below
+    const int PoliceLayer = 26;
 
     // Towers
     const float TowerRadius = 30f;
@@ -45,7 +48,6 @@ public static class TwinTowersBuilder
 
     // Decks
     const float DeckRingGap = 6f;           // deck stops this short of the innermost ring's centreline
-    const float DeckAboveRoof = 1f;         // deck top above an upper-layer car roof
     const float DeckWidth = 24f;
     const float DeckThickness = 1.5f;
     const int ParkedCarsOnStart = 2;
@@ -54,13 +56,11 @@ public static class TwinTowersBuilder
     const int BackgroundTowers = 40;
     const float BackgroundMinDist = 450f, BackgroundMaxDist = 1200f;
     const int PoliceCount = 4;
-    const float PoliceAboveMiddle = 12f;
 
-    static float MiddleAltitude => LayerAltitudes[1];
-    static float UpperAltitude => LayerAltitudes[2];
+
     // Decks sit at the top layer, so a jump that misses an upper car can still land on the
     // middle or lower layer below. Spawn (and so fall respawn) moves with the start deck.
-    static float DeckTop => UpperAltitude + CarHalfHeight + DeckAboveRoof;
+    static float DeckTop => TrafficAuthority.FloorHeight(DeckLayer);
 
     [MenuItem("Tools/Build Twin Towers")]
     public static void Build()
@@ -117,8 +117,7 @@ public static class TwinTowersBuilder
         ground.transform.localScale = new Vector3(300f, 1f, 300f); // 3 km square
         SetMat(ground, groundMat);
 
-        var ta = new GameObject("TrafficAuthority").AddComponent<TrafficAuthority>();
-        ta.layerAltitudes = (float[])LayerAltitudes.Clone();
+        new GameObject("TrafficAuthority").AddComponent<TrafficAuthority>(); // default grid: 5 m layers
 
         // Towers
         var towersRoot = new GameObject("Towers").transform;
@@ -131,7 +130,7 @@ public static class TwinTowersBuilder
             float ang = (float)rng.NextDouble() * Mathf.PI * 2f;
             float dist = Mathf.Lerp(BackgroundMinDist, BackgroundMaxDist, (float)rng.NextDouble());
             float w = 40f + (float)rng.NextDouble() * 50f;
-            float h = 100f + (float)rng.NextDouble() * 300f;
+            float h = SnapToGrid(100f + (float)rng.NextDouble() * 300f);
             Box(towersRoot, $"Background_{i:00}", mid + new Vector3(Mathf.Cos(ang), 0f, Mathf.Sin(ang)) * dist,
                 new Vector3(w, h, w), Pick(towerMats, rng));
         }
@@ -176,7 +175,8 @@ public static class TwinTowersBuilder
 
                     path.Sample(start, out var p, out var f);
                     float w = path.LaneWeight(v.startLayer, start, out var off);
-                    v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w), Quaternion.LookRotation(f));
+                    v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w) + Vector3.up * CarRootAboveUnderside,
+                                                       Quaternion.LookRotation(f));
                 }
             }
         }
@@ -190,6 +190,7 @@ public static class TwinTowersBuilder
         {
             float z = (i - (ParkedCarsOnStart - 1) * 0.5f) * 12f;
             var parked = CreateVehicle($"ParkedCar_{i}", parkedMats[i % parkedMats.Length]);
+            parked.startParkedOnSurface = true;
             parked.transform.SetParent(startRoot, true);
             parked.transform.SetPositionAndRotation(
                 new Vector3(centerA.x - (deckOuter - 10f), DeckTop + CarHalfHeight, centerA.z + z),
@@ -225,7 +226,7 @@ public static class TwinTowersBuilder
         };
         for (int i = 0; i < Mathf.Min(PoliceCount, posts.Length); i++)
         {
-            var cop = Slab(policeRoot, $"Police_{i}", posts[i] + Vector3.up * (MiddleAltitude + PoliceAboveMiddle),
+            var cop = Slab(policeRoot, $"Police_{i}", posts[i] + Vector3.up * (TrafficAuthority.RideHeight(PoliceLayer) + CarRootAboveUnderside),
                            new Vector3(CarWidth, CarHalfHeight * 2f, CarLength), policeMat);
             AddKinematicBody(cop.gameObject);
             cop.gameObject.AddComponent<PoliceUnit>();
@@ -270,7 +271,7 @@ public static class TwinTowersBuilder
                  new Vector3(midX - dir * 4f, DeckTop - DeckThickness - 2.5f, c.z + s * (DeckWidth * 0.5f - 3f)),
                  new Vector3(len - 8f, 5f, 2f), mat);
         }
-        Slab(root, "Doorway", new Vector3(c.x + dir * (TowerRadius - 0.3f), DeckTop + 4f, c.z), new Vector3(1f, 8f, 8f), propMat);
+        Slab(root, "Doorway", new Vector3(c.x + dir * (TowerRadius - 0.3f), DeckTop + 5f, c.z), new Vector3(1f, 10f, 8f), propMat);
         return root;
     }
 
@@ -281,7 +282,7 @@ public static class TwinTowersBuilder
     static List<Vector3> RacetrackClockwise(Vector3 c, float radius)
     {
         var pts = new List<Vector3>();
-        float run = ParallelRunLength, h = run * 0.5f, y = MiddleAltitude;
+        float run = ParallelRunLength, h = run * 0.5f, y = TrafficAuthority.RideHeight(RingBaseLayer);
         int nStraight = run > 0.01f ? Mathf.Max(1, Mathf.CeilToInt(run / WaypointSpacing)) : 0;
         int nArc = Mathf.Max(4, Mathf.CeilToInt(Mathf.PI * radius / WaypointSpacing));
 
@@ -317,25 +318,26 @@ public static class TwinTowersBuilder
 
         var path = go.AddComponent<LanePath>();
         path.closedLoop = true;
+        path.baseLayer = RingBaseLayer;
+        path.laneLayerOffset = RingLayerOffset;
         path.Rebuild();
 
         // Start/end pushed past the seam by the blend length so the weight is 1 all the way round.
         float L = path.Length;
-        AddFullLoopSide(path, LaneLayer.Upper, LayerAltitudes[2] - MiddleAltitude, L);
-        AddFullLoopSide(path, LaneLayer.Lower, LayerAltitudes[0] - MiddleAltitude, L);
+        AddFullLoopSide(path, LaneLayer.Upper, L);
+        AddFullLoopSide(path, LaneLayer.Lower, L);
 
         go.AddComponent<LaneLights>();
         return path;
     }
 
-    static void AddFullLoopSide(LanePath path, LaneLayer layer, float dy, float length)
+    static void AddFullLoopSide(LanePath path, LaneLayer layer, float length)
     {
         path.sideLanes.Add(new SideLaneSegment
         {
             layer = layer,
             startDistance = -SideLaneBlend,
             endDistance = length + SideLaneBlend,
-            offset = new Vector2(0f, dy),
             blendLength = SideLaneBlend,
         });
     }

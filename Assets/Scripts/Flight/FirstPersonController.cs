@@ -66,7 +66,7 @@ public class FirstPersonController : MonoBehaviour
     public float regrabDelay = 0.5f;
 
     [Header("Falling")]
-    [Tooltip("Respawn when this far below the lowest traffic layer.")]
+    [Tooltip("Respawn when this far below the lowest flyway lane in the scene.")]
     public float killDepthBelowLowestLayer = 40f;
     [Tooltip("Touching this collider respawns you (the ground far below the traffic). Leave empty to allow walking on it.")]
     public Collider fallRespawnGround;
@@ -141,7 +141,10 @@ public class FirstPersonController : MonoBehaviour
         spawnPos = transform.position;
         spawnRot = transform.rotation;
         SpawnTime = Time.time;
-        killHeight = TrafficAuthority.LayerAltitude(LaneLayer.Lower) - killDepthBelowLowestLayer;
+        float lowest = float.PositiveInfinity;
+        foreach (var lane in FindObjectsByType<LanePath>())
+            lowest = Mathf.Min(lowest, TrafficAuthority.RideHeight(lane.LowestLayer));
+        killHeight = float.IsPositiveInfinity(lowest) ? float.NegativeInfinity : lowest - killDepthBelowLowestLayer;
         VehicleHUD.Ensure();
     }
 

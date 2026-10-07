@@ -2,17 +2,18 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// Three flight modes:
-//   Lane  : attached to a MAGNETIC lane. You fly freely; the lane pulls you toward it and
+// Altitudes are a grid of 5 m layers (see TrafficAuthority). Three flight modes:
+//   Lane  : attached to a MAGNETIC flyway lane. You fly freely; the lane pulls you toward it and
 //           turns you along it. Pull is strongest at the line and fades with distance.
 //           Steer far enough away and you break free.
-//   Layer : free horizontal flight, altitude locked to the current layer.
+//   Layer : free horizontal flight holding a grid layer's ride height. Over a rooftop or the
+//           ground that's simply that layer; unoccupied over a surface, the car settles and parks.
 //   Free  : full 3D, unregistered. Police get interested.
 // Mouse always aims the camera. The car turns toward the aim only while W/S is held (Halo style).
-// Space        : cycle layers (ping-pong)
-// Ctrl (tap)   : Lane <-> Layer (magnet off / magnet on to nearest lane in range)
-// Ctrl + Space : Free <-> Layer
-// E tap / hold : exit through the door / onto the roof
+// Space / Shift+Space : one level up / down (off-lane: one layer; on a flyway: the next lane that exists here)
+// Ctrl (tap)          : Lane <-> Layer (magnet off / magnet on to a lane at this layer)
+// Ctrl + Space        : Free <-> Layer (locks to the nearest layer)
+// E tap / hold        : exit through the door / onto the roof
 public enum FlightMode { Lane, Layer, Free }
 
 // Moves before the player so a rider standing on the roof is carried with this frame's motion.
@@ -20,8 +21,10 @@ public enum FlightMode { Lane, Layer, Free }
 public class FlyingVehicle : MonoBehaviour
 {
     [Header("Lane")]
-    [Tooltip("Leave empty for a parked car that sits still until hijacked.")]
+    [Tooltip("Leave empty for a car that isn't traffic (parked, or hovering where placed).")]
     public LanePath path;
+    [Tooltip("No path: start parked on the surface below (e.g. a deck). Otherwise it hovers in Free mode.")]
+    public bool startParkedOnSurface;
     public float startDistance = 0f;
     public LaneLayer startLayer = LaneLayer.Middle;
     [Tooltip("Traffic speed limit. Around 35 cars hold every bend on the magnet alone.")]
@@ -60,6 +63,16 @@ public class FlyingVehicle : MonoBehaviour
     [Tooltip("Deg/sec the car turns toward where you're looking, only while W or S is held. Lower = heavier.")]
     public float headingTurnRate = 90f;
     public float pitchTurnRate = 60f;
+
+    [Header("Parking")]
+    [Tooltip("Unoccupied in Layer mode with a valid surface this close below the underside: sink and park.")]
+    public float parkRange = 1f;
+    [Tooltip("Seconds for an unoccupied car to settle onto the surface.")]
+    public float sinkTime = 0.6f;
+    [Tooltip("Seconds to lift back to ride height when someone gets in.")]
+    public float liftTime = 0.4f;
+    [Tooltip("Height smoothing while sinking / lifting.")]
+    public float parkSmoothTime = 0.15f;
 
     [Header("Collisions")]
     [Tooltip("0 = dead stop on impact, 1 = full rebound.")]
@@ -111,7 +124,12 @@ public class FlyingVehicle : MonoBehaviour
     // Lane this car is registered on for the traffic AI (only while in Lane mode).
     public LanePath RegisteredPath => registeredPath;
     public float LaneDistance => distance;
+    // Which lane of the flyway (Lane mode).
     public LaneLayer CurrentLayer => currentLayer;
+    // Grid layer the car is in: its lane's layer on a flyway, otherwise the held layer.
+    public int GridLayer => mode == FlightMode.Lane && path != null ? path.GridLayerOf(currentLayer) : gridLayer;
+    float Underside => transform.position.y + colCenter.y - colHalf.y;
+    float RootAboveUnderside => colHalf.y - colCenter.y;
     // Slot in TrafficSystem.States for the current frame.
     public int TrafficIndex { get; set; } = -1;
 
@@ -126,13 +144,23 @@ public class FlyingVehicle : MonoBehaviour
     bool IsAI => !IsOccupied && path != null;
     static readonly List<FlyingVehicle> All = new List<FlyingVehicle>();
     // Changing mode keeps the lane's car list in sync (registered only while in Lane mode).
-    public FlightMode Mode { get => mode; private set { mode = value; SyncLaneRegistration(); } }
+    // Entering Layer mode picks up the nearest grid layer.
+    public FlightMode Mode
+    {
+        get => mode;
+        private set
+        {
+            if (value == FlightMode.Layer && mode != FlightMode.Layer) gridLayer = TrafficAuthority.NearestLayer(Underside);
+            mode = value;
+            SyncLaneRegistration();
+        }
+    }
     FlightMode mode = FlightMode.Lane;
     LanePath registeredPath;
     bool started;
 
     LaneLayer currentLayer;
-    int cycleDir = 1;
+    int gridLayer;
     float distance, speed;
     Vector2 currentOffset, offsetVel;   // offset of the magnetic line from the base path
     Vector3 velocity;
@@ -140,6 +168,8 @@ public class FlyingVehicle : MonoBehaviour
     float aimYaw, aimPitch;
     float magnetHold;                   // 0..1, for the HUD
     bool parked, ctrlComboUsed;
+    float hoverBlend;                   // 0 = resting on the surface, 1 = full hover height
+    float surfaceY;                     // last known surface height under the car
     FirstPersonController driver;
     Camera cam;
     int enterFrame = -1;
@@ -188,7 +218,17 @@ public class FlyingVehicle : MonoBehaviour
             colHalf = Vector3.Scale(bodyCol.size, bodyCol.transform.lossyScale) * 0.5f;
             colCenter = transform.InverseTransformPoint(bodyCol.transform.TransformPoint(bodyCol.center));
         }
-        if (path == null) { Mode = FlightMode.Layer; parked = true; currentLayer = TrafficAuthority.NearestLayer(transform.position.y); }
+        if (path == null)
+        {
+            if (startParkedOnSurface && ProbeSurface(transform.position, 0.05f, parkRange, out surfaceY))
+            {
+                Mode = FlightMode.Layer;
+                gridLayer = TrafficAuthority.NearestLayer(surfaceY + TrafficAuthority.Hover);
+                parked = true;
+                hoverBlend = 0f;
+            }
+            else Mode = FlightMode.Free;
+        }
         else
         {
             distance = startDistance; currentLayer = startLayer; speed = aiCruiseSpeed;
@@ -209,7 +249,8 @@ public class FlyingVehicle : MonoBehaviour
         {
             case FlightMode.Lane: UpdateLaneMagnetic(kb, mouse); break;
             case FlightMode.Layer:
-                if (IsAI) UpdateRecover(); else UpdateLayer(kb, mouse);
+                // Traffic knocked off its lane flies back, unless it's settling onto a surface.
+                if (IsAI && !parked && !SurfaceBelow()) UpdateRecover(); else UpdateLayer(kb, mouse);
                 break;
             case FlightMode.Free:
                 if (IsAI) UpdateRecover(); else UpdateFree(kb, mouse);
@@ -224,8 +265,9 @@ public class FlyingVehicle : MonoBehaviour
         bool ctrl = kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed;
         if (kb.spaceKey.wasPressedThisFrame)
         {
+            bool shift = kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed;
             if (ctrl) { ctrlComboUsed = true; ToggleFree(); }
-            else OnSpace();
+            else StepLevel(shift ? -1 : 1);
         }
         if (kb.leftCtrlKey.wasReleasedThisFrame || kb.rightCtrlKey.wasReleasedThisFrame)
         {
@@ -241,14 +283,31 @@ public class FlyingVehicle : MonoBehaviour
         }
     }
 
-    void OnSpace()
+    // Space / Shift+Space. Off-lane: exactly one layer. On a flyway: the next lane level that exists
+    // at this point (nothing happens if there isn't one). Free flight: no levels.
+    void StepLevel(int dir)
     {
-        if (Mode == FlightMode.Lane) CycleLaneLayer();
+        if (Mode == FlightMode.Lane) StepLane(dir);
         else if (Mode == FlightMode.Layer)
         {
-            currentLayer = (LaneLayer)NextLayer((int)currentLayer);
-            Flash($"Layer: {currentLayer} (off-lane change)");
+            int next = Mathf.Clamp(gridLayer + dir, 0, TrafficAuthority.MaxLayer);
+            if (next == gridLayer) return;
+            gridLayer = next;
+            Flash($"Layer {gridLayer} (off-lane change)");
             TrafficAuthority.Instance?.ReportViolation(this, "Off-lane layer change");
+        }
+    }
+
+    void StepLane(int dir)
+    {
+        int target = (int)currentLayer + dir;
+        if (target < 0 || target > 2) return;
+        if (target != (int)LaneLayer.Middle && !IsAvailable((LaneLayer)target)) return;
+        currentLayer = (LaneLayer)target;
+        if (path.IsNoSwitch(distance))
+        {
+            Flash("Illegal lane switch!");
+            TrafficAuthority.Instance?.ReportViolation(this, "Illegal lane switch");
         }
     }
 
@@ -269,7 +328,7 @@ public class FlyingVehicle : MonoBehaviour
                 Flash("Magnet off");
                 break;
             case FlightMode.Layer:
-                if (!TryAttachToLane()) Flash("No lane in range");
+                if (!TryAttachToLane()) Flash("No lane at this layer in range");
                 break;
             case FlightMode.Free:
                 Flash("Lock to a layer first (Ctrl+Space)");
@@ -277,56 +336,66 @@ public class FlyingVehicle : MonoBehaviour
         }
     }
 
-    int NextLayer(int cur)
-    {
-        int target = cur + cycleDir;
-        if (target < 0 || target > 2) { cycleDir = -cycleDir; target = cur + cycleDir; }
-        return target;
-    }
-
-    void CycleLaneLayer()
-    {
-        int cur = (int)currentLayer;
-        int savedDir = cycleDir;
-        int target = NextLayer(cur);
-
-        if (target != 1 && !IsAvailable((LaneLayer)target))
-        {
-            int other = 2 - target;
-            if (!IsAvailable((LaneLayer)other)) { cycleDir = savedDir; return; }
-            target = other;
-            cycleDir = other > cur ? 1 : -1;
-        }
-        currentLayer = (LaneLayer)target;
-        if (path.IsNoSwitch(distance))
-        {
-            Flash("Illegal lane switch!");
-            TrafficAuthority.Instance?.ReportViolation(this, "Illegal lane switch");
-        }
-    }
-
     bool IsAvailable(LaneLayer layer) => path != null && path.LaneWeight(layer, distance, out _) > 0.9f;
 
     void LockToNearestLayer()
     {
-        currentLayer = TrafficAuthority.NearestLayer(transform.position.y);
-        Mode = FlightMode.Layer;
+        Mode = FlightMode.Layer; // picks the nearest layer
+        gridLayer = TrafficAuthority.NearestLayer(Underside);
         pitch = 0f; altVel = 0f;
-        Flash($"Locked to {currentLayer} layer");
+        Flash($"Locked to layer {gridLayer}");
     }
+
+    // ---------- parking ----------
+
+    bool SurfaceBelow() => !IsOccupied && ProbeSurface(transform.position, 0.05f, parkRange, out surfaceY);
+
+    // Four downward rays from the body's (slightly inset) corners, starting `above` over the
+    // underside and reaching `below` under it. Valid hits: static world, normal.y > 0.9.
+    // Returns the average height of the corners that hit.
+    bool ProbeSurface(Vector3 rootPos, float above, float below, out float y)
+    {
+        Quaternion rot = PlatformRotation;
+        float underside = rootPos.y + colCenter.y - colHalf.y;
+        float hx = Mathf.Max(0f, colHalf.x - 0.1f), hz = Mathf.Max(0f, colHalf.z - 0.1f);
+        int hits = 0; float sum = 0f;
+        for (int i = 0; i < 4; i++)
+        {
+            float sx = (i & 1) == 0 ? -1f : 1f, sz = (i & 2) == 0 ? -1f : 1f;
+            Vector3 origin = rootPos + rot * new Vector3(colCenter.x + sx * hx, 0f, colCenter.z + sz * hz);
+            origin.y = underside + above;
+            if (Physics.Raycast(origin, Vector3.down, out var h, above + below, collisionMask, QueryTriggerInteraction.Ignore)
+                && IsValidSurface(h))
+            {
+                hits++;
+                sum += h.point.y;
+            }
+        }
+        y = hits > 0 ? sum / hits : 0f;
+        return hits > 0;
+    }
+
+    static bool IsValidSurface(RaycastHit h) =>
+        h.normal.y > 0.9f && h.collider.attachedRigidbody == null && h.collider.GetComponentInParent<FlyingVehicle>() == null;
 
     bool TryAttachToLane()
     {
-        LanePath best = null; float bestD = 0f, bestSq = captureRadius * captureRadius;
+        LanePath best = null; LaneLayer bestLane = LaneLayer.Middle;
+        float bestD = 0f, bestSq = captureRadius * captureRadius;
         foreach (var lp in allLanes)
         {
             if (lp == null) continue;
-            if (lp.FindNearest(transform.position, currentLayer, out float d, out float sq) && sq < bestSq)
-            { best = lp; bestD = d; bestSq = sq; }
+            for (int lane = 0; lane < 3; lane++)
+            {
+                if (lp.GridLayerOf((LaneLayer)lane) != gridLayer) continue;
+                if (lp.FindNearest(transform.position, (LaneLayer)lane, out float d, out float sq) && sq < bestSq)
+                { best = lp; bestLane = (LaneLayer)lane; bestD = d; bestSq = sq; }
+            }
         }
         if (best == null) return false;
 
         path = best;
+        currentLayer = bestLane;
         distance = best.Project(transform.position, bestD);
         float w = best.LaneWeight(currentLayer, distance, out var laneOff);
         currentOffset = currentLayer == LaneLayer.Middle ? Vector2.zero : laneOff * w;
@@ -450,7 +519,7 @@ public class FlyingVehicle : MonoBehaviour
         hv -= vPerp * Mathf.Clamp01(magnetDamping * w * dt);
 
         Vector3 pos = transform.position + hv * dt;
-        pos.y = Mathf.SmoothDamp(pos.y, linePoint.y, ref altVel, laneChangeSmoothTime);
+        pos.y = Mathf.SmoothDamp(pos.y, linePoint.y + RootAboveUnderside, ref altVel, laneChangeSmoothTime);
         velocity = new Vector3(hv.x, altVel, hv.z);
 
         float bank = Mathf.Clamp(-Vector3.Dot(hv, carRight) * 0.6f, -20f, 20f);
@@ -474,9 +543,10 @@ public class FlyingVehicle : MonoBehaviour
 
         path.Sample(distance, out var nearBase, out _);
         Vector3 nearFwd = Flat(path.SmoothForward(distance));
-        Vector3 nearest = path.ToWorld(nearBase, nearFwd, currentOffset);
+        Vector3 up = Vector3.up * RootAboveUnderside; // lane heights are underside heights
+        Vector3 nearest = path.ToWorld(nearBase, nearFwd, currentOffset) + up;
         path.Sample(distance + recoverLead, out var aimBase, out _);
-        Vector3 aimPoint = path.ToWorld(aimBase, path.SmoothForward(distance + recoverLead), currentOffset);
+        Vector3 aimPoint = path.ToWorld(aimBase, path.SmoothForward(distance + recoverLead), currentOffset) + up;
 
         Vector3 to = aimPoint - transform.position;
         Vector3 desired = to.sqrMagnitude > 1e-4f ? to.normalized * recoverSpeed : Vector3.zero;
@@ -562,6 +632,7 @@ public class FlyingVehicle : MonoBehaviour
     Vector3 MoveAndCollide(Vector3 from, Vector3 delta, Quaternion rot)
     {
         if (bodyCol == null) return from + delta;
+        Vector3 half = colHalf, center = colCenter;
         float dist = delta.magnitude;
         Vector3 moved = delta;
         const float skin = 0.05f;
@@ -569,7 +640,7 @@ public class FlyingVehicle : MonoBehaviour
         if (dist > 1e-5f)
         {
             Vector3 dir = delta / dist;
-            int n = Physics.BoxCastNonAlloc(from + rot * colCenter, colHalf, dir, hitBuf, rot, dist + skin,
+            int n = Physics.BoxCastNonAlloc(from + rot * center, half, dir, hitBuf, rot, dist + skin,
                                             collisionMask, QueryTriggerInteraction.Ignore);
             float best = float.MaxValue; int bestIdx = -1;
             for (int i = 0; i < n; i++)
@@ -587,7 +658,7 @@ public class FlyingVehicle : MonoBehaviour
         Vector3 pos = from + moved;
         Vector3 bodyPos = pos + rot * bodyCol.transform.localPosition;
         Quaternion bodyRot = rot * bodyCol.transform.localRotation;
-        int count = Physics.OverlapBoxNonAlloc(pos + rot * colCenter, colHalf, overlapBuf, rot,
+        int count = Physics.OverlapBoxNonAlloc(pos + rot * center, half, overlapBuf, rot,
                                                collisionMask, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < count; i++)
         {
@@ -637,6 +708,9 @@ public class FlyingVehicle : MonoBehaviour
         if (impact > 15f) Flash("CRASH");
     }
 
+    // Holds RideHeight(gridLayer). Rooftops and the ground snap to layer floors, so driving onto or
+    // off them needs nothing special. Unoccupied over a surface within parkRange: sink onto it and
+    // park; getting in lifts back to ride height.
     void UpdateLayer(Keyboard kb, Mouse mouse)
     {
         if (parked && !IsOccupied) return;
@@ -653,8 +727,13 @@ public class FlyingVehicle : MonoBehaviour
         float rate = wish.sqrMagnitude > hv.sqrMagnitude ? acceleration : braking;
         hv = Vector3.MoveTowards(hv, wish, rate * dt);
 
+        bool parking = SurfaceBelow();
+        hoverBlend = Mathf.MoveTowards(hoverBlend, parking ? 0f : 1f, dt / (parking ? sinkTime : liftTime));
+        float ride = TrafficAuthority.RideHeight(gridLayer);
+        float targetY = (hoverBlend >= 1f ? ride : Mathf.Lerp(surfaceY, ride, hoverBlend)) + RootAboveUnderside;
+
         Vector3 pos = transform.position + hv * dt;
-        pos.y = Mathf.SmoothDamp(pos.y, TrafficAuthority.LayerAltitude(currentLayer), ref altVel, altitudeSmoothTime);
+        pos.y = Mathf.SmoothDamp(pos.y, targetY, ref altVel, hoverBlend < 1f ? parkSmoothTime : altitudeSmoothTime);
         velocity = new Vector3(hv.x, altVel, hv.z);
 
         float bank = Mathf.Clamp(-Vector3.Dot(hv, heading * Vector3.right) * 0.6f, -20f, 20f);
@@ -662,6 +741,14 @@ public class FlyingVehicle : MonoBehaviour
         Quaternion rot = heading * Quaternion.Euler(p, 0f, bank);
         pos = MoveAndCollide(transform.position, pos - transform.position, rot);
         transform.SetPositionAndRotation(pos, rot);
+
+        // Settled: rest exactly on the surface and stop updating until someone gets in.
+        if (parking && hoverBlend <= 0f && Mathf.Abs(pos.y - targetY) < 0.02f && hv.sqrMagnitude < 0.01f)
+        {
+            transform.SetPositionAndRotation(new Vector3(pos.x, targetY, pos.z), heading);
+            velocity = Vector3.zero; altVel = 0f;
+            parked = true;
+        }
     }
 
     void UpdateFree(Keyboard kb, Mouse mouse)

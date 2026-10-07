@@ -35,7 +35,7 @@ public class LaneLights : MonoBehaviour
                 if (w < 0.05f) continue;
                 path.Sample(d, out var p, out var f);
                 bool noSwitch = path.IsNoSwitch(d);
-                Spawn(root, path.ToWorld(p, f, seg.offset * w),
+                Spawn(root, path.ToWorld(p, f, path.LaneOffset(seg) * w),
                       noSwitch ? red : seg.layer == LaneLayer.Upper ? up : low);
             }
         }

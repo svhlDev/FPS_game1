@@ -10,8 +10,8 @@ public class SideLaneSegment
     public LaneLayer layer = LaneLayer.Upper;
     public float startDistance = 50f;
     public float endDistance = 250f;
-    [Tooltip("Offset from the middle lane. X = sideways, Y = up/down. Match Y to the TrafficAuthority layer altitudes.")]
-    public Vector2 offset = new Vector2(0f, 20f);
+    [Tooltip("Sideways offset from the middle line (m). Height comes from the path's laneLayerOffset.")]
+    public float sideOffset;
     [Tooltip("Distance over which the lane splits off and converges back.")]
     public float blendLength = 40f;
 }
@@ -23,13 +23,18 @@ public class NoSwitchZone
     public float endDistance = 160f;
 }
 
-// Middle lane = smooth curve through this object's child transforms (waypoints).
-// Upper/Lower lanes peel off the middle lane and merge back into it.
+// Flyway. Middle lane = smooth curve through this object's child transforms (waypoints), flattened
+// to RideHeight(baseLayer). Upper/Lower lanes peel off it at +/- laneLayerOffset layers and merge back.
+// All heights are car UNDERSIDE heights.
 // No-switch zones: lane changes here are physically possible but illegal.
 [ExecuteAlways]
 public class LanePath : MonoBehaviour
 {
     public bool closedLoop = true;
+    [Tooltip("Grid layer of the middle lane.")]
+    public int baseLayer = 8;
+    [Tooltip("Upper/Lower lanes sit this many layers above/below the middle lane.")]
+    public int laneLayerOffset = 4;
     [Range(4, 64)] public int samplesPerSegment = 16;
     public List<SideLaneSegment> sideLanes = new List<SideLaneSegment>();
     public List<NoSwitchZone> noSwitchZones = new List<NoSwitchZone>();
@@ -52,7 +57,8 @@ public class LanePath : MonoBehaviour
         if (n < 2) return;
 
         var wp = new Vector3[n];
-        for (int i = 0; i < n; i++) wp[i] = transform.GetChild(i).position;
+        float rideY = TrafficAuthority.RideHeight(baseLayer);
+        for (int i = 0; i < n; i++) { wp[i] = transform.GetChild(i).position; wp[i].y = rideY; }
 
         int segs = closedLoop ? n : n - 1;
         for (int s = 0; s < segs; s++)
@@ -106,9 +112,25 @@ public class LanePath : MonoBehaviour
         {
             if (seg.layer != layer) continue;
             float w = SegmentWeight(seg, distance);
-            if (w > best) { best = w; offset = seg.offset; }
+            if (w > best) { best = w; offset = LaneOffset(seg); }
         }
         return best;
+    }
+
+    // Offset of a side lane from the middle line: sideways in metres, up/down by whole layers.
+    public Vector2 LaneOffset(SideLaneSegment seg) =>
+        new Vector2(seg.sideOffset, (seg.layer == LaneLayer.Upper ? 1 : -1) * laneLayerOffset * TrafficAuthority.Spacing);
+
+    public int GridLayerOf(LaneLayer lane) => baseLayer + ((int)lane - 1) * laneLayerOffset;
+
+    public int LowestLayer
+    {
+        get
+        {
+            foreach (var seg in sideLanes)
+                if (seg.layer == LaneLayer.Lower) return GridLayerOf(LaneLayer.Lower);
+            return baseLayer;
+        }
     }
 
     public bool IsNoSwitch(float distance)
@@ -231,7 +253,7 @@ public class LanePath : MonoBehaviour
             for (float d = seg.startDistance; d <= seg.endDistance; d += 4f)
             {
                 Sample(d, out var p, out var f);
-                Vector3 wpos = ToWorld(p, f, seg.offset * SegmentWeight(seg, d));
+                Vector3 wpos = ToWorld(p, f, LaneOffset(seg) * SegmentWeight(seg, d));
                 if (hasPrev) Gizmos.DrawLine(prev, wpos);
                 prev = wpos; hasPrev = true;
             }

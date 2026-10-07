@@ -31,7 +31,7 @@ public class TrafficSystem : MonoBehaviour
     static readonly List<LanePath> lanesWithCars = new List<LanePath>();
 
     // Lane sorting buffers
-    static float[] sortKeys = new float[64];
+    static double[] sortKeys = new double[64];
     static int[] sortIdx = new int[64];
 
     // Grid: car indices sorted by cell key, and each cell's run in that array.
@@ -84,7 +84,7 @@ public class TrafficSystem : MonoBehaviour
                 fwd = t.forward,
                 occupied = car.IsOccupied,
                 path = path,
-                layer = (int)car.CurrentLayer,
+                layer = car.GridLayer,
                 dist = path != null ? path.WrapDistance(car.LaneDistance) : 0f,
                 leader = -1,
             };
@@ -100,14 +100,14 @@ public class TrafficSystem : MonoBehaviour
     {
         var cars = lane.Cars;
         int n = cars.Count;
-        if (sortKeys.Length < n) { sortKeys = new float[Mathf.NextPowerOfTwo(n)]; sortIdx = new int[sortKeys.Length]; }
+        if (sortKeys.Length < n) { sortKeys = new double[Mathf.NextPowerOfTwo(n)]; sortIdx = new int[sortKeys.Length]; }
 
         int m = 0;
         for (int k = 0; k < n; k++)
         {
             int i = cars[k].TrafficIndex;
             if (i < 0 || i >= Count || States[i].car != cars[k]) continue;
-            sortKeys[m] = States[i].layer * 1e6f + States[i].dist;
+            sortKeys[m] = States[i].layer * 1e7 + States[i].dist; // double: grid layers go up to ~60
             sortIdx[m] = i;
             m++;
         }

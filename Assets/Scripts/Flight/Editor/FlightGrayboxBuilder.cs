@@ -17,7 +17,10 @@ public static class FlightGrayboxBuilder
     const int Blocks = 6;
     const float Pitch = 140f;            // distance between avenue centerlines
     const float Half = Blocks * Pitch * 0.5f;
-    const float LaneAltitude = 40f;      // Middle layer (TrafficAuthority default 20/40/60)
+    const int LaneBaseLayer = 8;         // flyway middle lanes ride at layer 8 (40.5 m); side lanes at 4 / 12
+    const int LaneLayerOffset = 4;
+    const int PoliceLayer = 10;
+    internal const float CarRootAboveUnderside = 0.75f; // car body is 1.5 m tall, centred on the root
     const float ParallelGap = 8f;        // spacing between parallel lanes
     const float CornerRadius = 30f;
     const float LoopOverhang = 60f;      // loops turn around just outside the city
@@ -167,7 +170,8 @@ public static class FlightGrayboxBuilder
 
                 path.Sample(start, out var p, out var f);
                 float w = path.LaneWeight(layer, start, out var off);
-                v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w), Quaternion.LookRotation(f));
+                v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w) + Vector3.up * CarRootAboveUnderside,
+                                                   Quaternion.LookRotation(f));
             }
         }
 
@@ -181,12 +185,12 @@ public static class FlightGrayboxBuilder
         Slab(platformRoot, "RailSouth", new Vector3(pc.x, PlatformTop + 0.6f, pc.z - 39.5f), new Vector3(60f, 1.2f, 1f), platformMat);
         Slab(platformRoot, "BeamA", new Vector3(pc.x + 5f, PlatformTop - 6f, pc.z + 25f), new Vector3(50f, 6f, 3f), platformMat);
         Slab(platformRoot, "BeamB", new Vector3(pc.x + 5f, PlatformTop - 6f, pc.z - 25f), new Vector3(50f, 6f, 3f), platformMat);
-        Slab(platformRoot, "Doorway", new Vector3(faceX - 0.5f, PlatformTop + 4f, tc.z), new Vector3(1f, 8f, 14f), propMat);
+        Slab(platformRoot, "Doorway", new Vector3(faceX - 0.5f, PlatformTop + 5f, tc.z), new Vector3(1f, 10f, 14f), propMat);
         for (int i = 0; i < 5; i++)
         {
             float cx = faceX - 8f - (float)rng.NextDouble() * 12f;
             float cz = tc.z - 30f + (float)rng.NextDouble() * 60f;
-            Slab(platformRoot, $"Crate_{i}", new Vector3(cx, PlatformTop + 1f, cz), Vector3.one * 2f, propMat);
+            Slab(platformRoot, $"Crate_{i}", new Vector3(cx, PlatformTop + 2.5f, cz), new Vector3(2f, 5f, 2f), propMat); // top on the grid
         }
 
         // Player at the doorway, facing out over the edge
@@ -197,6 +201,7 @@ public static class FlightGrayboxBuilder
         for (int i = 0; i < 3; i++)
         {
             var parked = CreateVehicle($"ParkedCar_{i}", parkedMats[i]);
+            parked.startParkedOnSurface = true;
             parked.transform.SetParent(platformRoot, true);
             parked.transform.SetPositionAndRotation(new Vector3(pc.x - 12f, PlatformTop + 0.75f, tc.z - 20f + i * 20f),
                                                    Quaternion.LookRotation(Vector3.left));
@@ -208,7 +213,7 @@ public static class FlightGrayboxBuilder
         for (int i = 0; i < posts.GetLength(0); i++)
         {
             var cop = Slab(policeRoot, $"Police_{i}",
-                new Vector3(Avenue(posts[i, 0]) + 15f, LaneAltitude + 8f, Avenue(posts[i, 1]) + 15f),
+                new Vector3(Avenue(posts[i, 0]) + 15f, TrafficAuthority.RideHeight(PoliceLayer) + CarRootAboveUnderside, Avenue(posts[i, 1]) + 15f),
                 new Vector3(3f, 1.5f, 5f), policeMat);
             AddKinematicBody(cop.gameObject);
             cop.gameObject.AddComponent<PoliceUnit>();
@@ -244,6 +249,8 @@ public static class FlightGrayboxBuilder
 
         var path = go.AddComponent<LanePath>();
         path.closedLoop = true;
+        path.baseLayer = LaneBaseLayer;
+        path.laneLayerOffset = LaneLayerOffset;
         path.Rebuild();
 
         // Distances where the two long sides start and end.
@@ -270,7 +277,6 @@ public static class FlightGrayboxBuilder
             layer = layer,
             startDistance = Mathf.Lerp(from, to, t0),
             endDistance = Mathf.Lerp(from, to, t1),
-            offset = new Vector2(0f, layer == LaneLayer.Upper ? 20f : -20f),
             blendLength = 40f,
         });
     }
@@ -281,7 +287,7 @@ public static class FlightGrayboxBuilder
         return d;
     }
 
-    static Vector3 To3(Vector2 v) => new Vector3(v.x, LaneAltitude, v.y);
+    static Vector3 To3(Vector2 v) => new Vector3(v.x, TrafficAuthority.RideHeight(LaneBaseLayer), v.y);
 
     // ---------- player ----------
 
@@ -412,8 +418,12 @@ public static class FlightGrayboxBuilder
     internal static float RandomHeight(System.Random rng)
     {
         double r = rng.NextDouble();
-        return 15f + 245f * (float)(r * r); // mostly mid-rise, a few very tall
+        float h = 15f + 245f * (float)(r * r); // mostly mid-rise, a few very tall
+        return SnapToGrid(h);
     }
+
+    // Round a height to a whole number of layers so roofs are layer floors.
+    internal static float SnapToGrid(float h) => Mathf.Max(1, Mathf.RoundToInt(h / TrafficAuthority.Spacing)) * TrafficAuthority.Spacing;
 
     internal static T Pick<T>(T[] arr, System.Random rng) => arr[rng.Next(arr.Length)];
 

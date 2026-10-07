@@ -1,13 +1,22 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// One per scene. Owns layer altitudes, watches the player's vehicle, dispatches police on violations.
+// One per scene. Owns the altitude grid, watches the player's vehicle, dispatches police on violations.
+// Altitude grid: layer n has its floor at n * layerSpacing (n = 0 is the ground) and a ride height
+// of floor + hoverHeight, where ride height is the car collider's UNDERSIDE. All geometry snaps to
+// floors, so hovering over a rooftop is simply being in that roof's layer.
 public class TrafficAuthority : MonoBehaviour
 {
     public static TrafficAuthority Instance { get; private set; }
 
-    [Tooltip("World altitude of Lower, Middle, Upper layers.")]
-    public float[] layerAltitudes = { 20f, 40f, 60f };
+    [Tooltip("Height of one layer (m).")]
+    public float layerSpacing = DefaultSpacing;
+    [Tooltip("Gap between a layer's floor and a car's underside riding in it (m).")]
+    public float hoverHeight = DefaultHover;
+    public int maxLayer = DefaultMaxLayer;
+
+    const float DefaultSpacing = 5f, DefaultHover = 0.5f;
+    const int DefaultMaxLayer = 60;
     [Tooltip("Seconds of free flight before it counts as a violation.")]
     public float freeFlightGraceSeconds = 8f;
     [Tooltip("Police must be this close to notice a violation.")]
@@ -22,19 +31,17 @@ public class TrafficAuthority : MonoBehaviour
 
     void Awake() => Instance = this;
 
-    public static float LayerAltitude(LaneLayer layer) =>
-        Instance != null ? Instance.layerAltitudes[(int)layer] : 20f + 20f * (int)layer;
+    // Defaults apply when there's no authority (edit mode, builders).
+    public static float Spacing => Instance != null ? Instance.layerSpacing : DefaultSpacing;
+    public static float Hover => Instance != null ? Instance.hoverHeight : DefaultHover;
+    public static int MaxLayer => Instance != null ? Instance.maxLayer : DefaultMaxLayer;
 
-    public static LaneLayer NearestLayer(float y)
-    {
-        LaneLayer best = LaneLayer.Middle; float bestDiff = float.MaxValue;
-        for (int i = 0; i < 3; i++)
-        {
-            float diff = Mathf.Abs(LayerAltitude((LaneLayer)i) - y);
-            if (diff < bestDiff) { bestDiff = diff; best = (LaneLayer)i; }
-        }
-        return best;
-    }
+    public static float FloorHeight(int n) => n * Spacing;
+    // Height of a riding car's underside in layer n.
+    public static float RideHeight(int n) => FloorHeight(n) + Hover;
+    // Layer whose ride height is closest to the given underside height.
+    public static int NearestLayer(float undersideY) =>
+        Mathf.Clamp(Mathf.RoundToInt((undersideY - Hover) / Spacing), 0, MaxLayer);
 
     public void Register(PoliceUnit u) { if (!units.Contains(u)) units.Add(u); }
     public void Unregister(PoliceUnit u) => units.Remove(u);

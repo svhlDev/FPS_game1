@@ -11,9 +11,9 @@ public class VehicleHUD : MonoBehaviour
 
     static readonly string[] Controls =
     {
-        "WASD move | Shift sprint | Space jump / cycle layer in car",
-        "E hijack / exit door | hold E exit to roof | Ctrl magnet on/off",
-        "Ctrl+Space free flight | Scroll camera zoom | Esc release / quit",
+        "WASD move | Shift sprint | Space jump | E hijack / exit door | hold E exit to roof",
+        "Car: Space layer up | Shift+Space layer down | Ctrl magnet on/off | Ctrl+Space free flight",
+        "Scroll camera zoom | Esc release / quit",
         "F1 toggle this help",
     };
 
@@ -79,9 +79,9 @@ public class VehicleHUD : MonoBehaviour
         if (OverlayVisible)
         {
             const float lineH = 20f;
-            GUI.Box(new Rect(10, 10, 470, Controls.Length * lineH + 12), GUIContent.none);
+            GUI.Box(new Rect(10, 10, 620, Controls.Length * lineH + 12), GUIContent.none);
             for (int i = 0; i < Controls.Length; i++)
-                GUI.Label(new Rect(20, 16 + i * lineH, 460, lineH), Controls[i]);
+                GUI.Label(new Rect(20, 16 + i * lineH, 610, lineH), Controls[i]);
             y = 10 + Controls.Length * lineH + 22;
         }
 
@@ -93,7 +93,9 @@ public class VehicleHUD : MonoBehaviour
         if (car == null) return;
 
         var mode = car.Mode;
-        string where = mode == FlightMode.Free ? "none" : car.CurrentLayer.ToString();
+        string where = mode == FlightMode.Free ? "none"
+                     : mode == FlightMode.Lane ? $"{car.GridLayer} ({car.CurrentLayer} lane)"
+                     : car.GridLayer.ToString();
         GUI.Label(new Rect(20, y, 500, 25), $"Mode: {mode}   Layer: {where}   Speed: {car.HudSpeed:0}");
         if (mode == FlightMode.Lane && car.path != null)
             GUI.Label(new Rect(20, y + 25, 700, 25),
@@ -102,6 +104,6 @@ public class VehicleHUD : MonoBehaviour
         string flash = car.FlashMessage;
         if (flash != null) GUI.Label(new Rect(20, y + 50, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
-            "Space: cycle layer   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof");
+            "Space: layer up   Shift+Space: layer down   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof");
     }
 }
