@@ -88,7 +88,8 @@ public class FlyingVehicle : MonoBehaviour
     [Header("Camera")]
     public Transform cockpitAnchor;
     public float maxCameraDistance = 14f;
-    public float zoomStep = 0.2f;
+    [Tooltip("Same zoom behaviour as the on-foot camera.")]
+    public CameraZoom zoom = new CameraZoom();
 
     [Header("Exit")]
     [Tooltip("Hold E this long to exit onto the roof instead of through the door.")]
@@ -132,7 +133,7 @@ public class FlyingVehicle : MonoBehaviour
 
     LaneLayer currentLayer;
     int cycleDir = 1;
-    float distance, speed, zoom;
+    float distance, speed;
     Vector2 currentOffset, offsetVel;   // offset of the magnetic line from the base path
     Vector3 velocity;
     float yaw, pitch, altVel;
@@ -692,14 +693,14 @@ public class FlyingVehicle : MonoBehaviour
         var mouse = Mouse.current;
         if (mouse != null)
         {
-            float scroll = mouse.scroll.ReadValue().y;
-            if (Mathf.Abs(scroll) > 0.01f) zoom = Mathf.Clamp01(zoom - Mathf.Sign(scroll) * zoomStep);
+            zoom.HandleScroll(mouse);
         }
 
         // Camera follows the aim, never the car's raw rotation, so it stays smooth in every mode.
         Transform anchor = cockpitAnchor != null ? cockpitAnchor : transform;
         Quaternion look = Quaternion.Euler(aimPitch, aimYaw, 0f);
-        Vector3 pos = anchor.position - look * Vector3.forward * (zoom * maxCameraDistance) + Vector3.up * (zoom * 2f);
+        float z = zoom.Tick(Time.deltaTime);
+        Vector3 pos = anchor.position - look * Vector3.forward * (z * maxCameraDistance) + Vector3.up * (z * 2f);
         if (shake > 0f)
         {
             pos += Random.insideUnitSphere * shake * impactShake;
@@ -720,7 +721,7 @@ public class FlyingVehicle : MonoBehaviour
         cam = who.playerCamera;
         cam.transform.SetParent(null);
         who.gameObject.SetActive(false);
-        zoom = 0f;
+        zoom.Snap(0f);
         yaw = transform.eulerAngles.y;
         aimYaw = yaw; aimPitch = 0f;
         Driven = this;

@@ -285,8 +285,9 @@ public static class FlightGrayboxBuilder
 
     // ---------- player ----------
 
-    // Capsule with CharacterController + FirstPersonController, Head at 1.6 m with the camera under it.
-    // On the Player layer so traffic ignores it.
+    // CharacterController + FirstPersonController, Head at 1.6 m with the camera under it.
+    // Visible body: 1.8 m capsule plus a visor block showing facing (hidden in first person).
+    // On the Player layer so traffic and the camera ignore it.
     internal static FirstPersonController CreatePlayer(Vector3 pos, Quaternion rot, Camera cam, Material mat)
     {
         var player = new GameObject("Player");
@@ -298,9 +299,19 @@ public static class FlightGrayboxBuilder
         body.name = "Body";
         Object.DestroyImmediate(body.GetComponent<Collider>());
         body.transform.SetParent(player.transform, false);
-        body.transform.localPosition = new Vector3(0f, 1f, 0f);
+        body.transform.localPosition = new Vector3(0f, 0.9f, 0f);
+        body.transform.localScale = new Vector3(1f, 0.9f, 1f); // 1.8 m tall
         body.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.ShadowsOnly;
         SetMat(body, mat);
+
+        var visor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        visor.name = "Visor";
+        Object.DestroyImmediate(visor.GetComponent<Collider>());
+        visor.transform.SetParent(player.transform, false);
+        visor.transform.localPosition = new Vector3(0f, 1.55f, 0.45f);
+        visor.transform.localScale = new Vector3(0.6f, 0.15f, 0.15f);
+        visor.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.ShadowsOnly;
+        SetMat(visor, GetMaterial("Visor", new Color(0.1f, 0.12f, 0.15f)));
 
         var head = new GameObject("Head").transform;
         head.SetParent(player.transform, false);
@@ -312,15 +323,68 @@ public static class FlightGrayboxBuilder
         var fpc = player.AddComponent<FirstPersonController>();
         fpc.playerCamera = cam;
         fpc.cameraRoot = head;
+        fpc.bodyRenderers = new[] { body.GetComponent<Renderer>(), visor.GetComponent<Renderer>() };
+        fpc.blobShadowMaterial = GetBlobShadowMaterial();
 
         int layer = EnsureLayer("Player");
         if (layer >= 0)
         {
             player.layer = layer;
             body.layer = layer;
+            visor.layer = layer;
             head.gameObject.layer = layer;
         }
         return fpc;
+    }
+
+    // Soft round dark blob, transparent URP Unlit. Saved as assets so the build includes the right variant.
+    internal static Material GetBlobShadowMaterial()
+    {
+        string texPath = MaterialFolder + "/BlobShadow_Tex.asset";
+        var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(texPath);
+        if (tex == null)
+        {
+            const int size = 64;
+            tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, name = "BlobShadow" };
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float r = new Vector2(x + 0.5f - size * 0.5f, y + 0.5f - size * 0.5f).magnitude / (size * 0.5f);
+                float a = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(1f - r));
+                tex.SetPixel(x, y, new Color(0f, 0f, 0f, a));
+            }
+            tex.Apply();
+            Directory.CreateDirectory(MaterialFolder);
+            AssetDatabase.CreateAsset(tex, texPath);
+        }
+
+        string matPath = MaterialFolder + "/BlobShadow.mat";
+        var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+        if (mat == null)
+        {
+            Shader sh = Shader.Find("Universal Render Pipeline/Unlit");
+            if (sh == null) sh = Shader.Find("Unlit/Transparent");
+            mat = new Material(sh);
+            AssetDatabase.CreateAsset(mat, matPath);
+        }
+        var tint = new Color(0f, 0f, 0f, 0.65f);
+        if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
+        if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", tint);
+        if (mat.HasProperty("_Color")) mat.SetColor("_Color", tint);
+        // URP transparent, alpha blended, no depth write.
+        mat.SetFloat("_Surface", 1f);
+        mat.SetFloat("_Blend", 0f);
+        mat.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+        mat.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+        mat.SetFloat("_SrcBlendAlpha", (float)BlendMode.One);
+        mat.SetFloat("_DstBlendAlpha", (float)BlendMode.OneMinusSrcAlpha);
+        mat.SetFloat("_ZWrite", 0f);
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        mat.SetOverrideTag("RenderType", "Transparent");
+        mat.renderQueue = (int)RenderQueue.Transparent;
+        EditorUtility.SetDirty(mat);
+        return mat;
     }
 
     // Returns the layer index, adding the layer to the first free user slot if it doesn't exist.

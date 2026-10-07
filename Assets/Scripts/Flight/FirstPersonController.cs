@@ -6,6 +6,8 @@ using UnityEngine.InputSystem;
 // locked, the car carries you and you walk on its roof normally. Leaving a car keeps its velocity.
 // While falling, the boots nudge you toward the safe front of a roof you're about to land on.
 // Cars with a rear rack (VehicleGrabPoint) can be caught from the air: you hang off the back.
+// Scroll zooms from first person out to a third-person shoulder boom (same feel as the car);
+// the body always faces the camera's yaw (strafe style). A blob shadow marks where you'll land.
 // Runs after the vehicles so it carries with this frame's car motion.
 [DefaultExecutionOrder(100)]
 [RequireComponent(typeof(CharacterController))]
@@ -69,6 +71,26 @@ public class FirstPersonController : MonoBehaviour
     [Tooltip("Touching this collider respawns you (the ground far below the traffic). Leave empty to allow walking on it.")]
     public Collider fallRespawnGround;
 
+    [Header("Camera")]
+    [Tooltip("Same zoom behaviour as the car camera; on-foot zoom is remembered separately.")]
+    public CameraZoom zoom = new CameraZoom();
+    [Tooltip("Third-person boom length at full zoom-out (m).")]
+    public float maxBoomDistance = 6f;
+    [Tooltip("Right-shoulder offset at full zoom-out (m); scales with zoom, so first person has none.")]
+    public float shoulderOffset = 0.5f;
+    [Tooltip("Radius of the camera's collision probe.")]
+    public float cameraRadius = 0.2f;
+    [Tooltip("Body is shown once the camera is at least this far from the head.")]
+    public float showBodyDistance = 0.5f;
+    [Tooltip("Body + visor. Hidden (shadow only) in first person. Defaults to all child renderers.")]
+    public Renderer[] bodyRenderers;
+
+    [Header("Blob shadow")]
+    [Tooltip("Soft dark blob under the player on whatever is below. Leave empty for none.")]
+    public Material blobShadowMaterial;
+    public float blobSize = 0.9f;
+    public float blobMaxDistance = 300f;
+
     public float SpawnTime { get; private set; }
     public bool IsHanging => hang != null;
 
@@ -98,11 +120,20 @@ public class FirstPersonController : MonoBehaviour
     float killHeight = float.NegativeInfinity;
     string flash; float flashUntil;
 
+    int playerLayerMask;
+    readonly RaycastHit[] camHits = new RaycastHit[16];
+    bool bodyShown = true;
+    Transform blob;
+
     void Awake()
     {
         cc = GetComponent<CharacterController>();
         cc.minMoveDistance = 0f; // small carry/slide moves must not be dropped
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
+        if (bodyRenderers == null || bodyRenderers.Length == 0) bodyRenderers = GetComponentsInChildren<Renderer>(true);
+        int playerLayer = LayerMask.NameToLayer("Player");
+        playerLayerMask = playerLayer >= 0 ? 1 << playerLayer : 0;
+        CreateBlob();
     }
 
     void Start()
@@ -125,6 +156,17 @@ public class FirstPersonController : MonoBehaviour
         hang = null;
         if (cc != null) cc.enabled = true;
         LeavePlatform();
+    }
+
+    // Driving: the car owns the camera, and the blob goes away with us.
+    void OnDisable()
+    {
+        if (blob != null) blob.gameObject.SetActive(false);
+    }
+
+    void OnDestroy()
+    {
+        if (blob != null) Destroy(blob.gameObject);
     }
 
     void Update()
@@ -215,6 +257,89 @@ public class FirstPersonController : MonoBehaviour
     void OnControllerColliderHit(ControllerColliderHit hit)
     {
         if (hit.normal.y > 0.5f) groundCollider = hit.collider;
+    }
+
+    // ---------- camera / body / blob shadow ----------
+
+    // Camera orbits the head (which carries the pitch) on a boom with a right-shoulder offset.
+    // Collision pulls it in, but only against static world: moving cars and the player are ignored.
+    void LateUpdate()
+    {
+        zoom.HandleScroll(Mouse.current);
+        float z = zoom.Tick(Time.deltaTime);
+
+        var cam = playerCamera.transform;
+        if (cam.parent == cameraRoot)
+        {
+            Vector3 local = new Vector3(shoulderOffset * z, 0f, -maxBoomDistance * z);
+            float dist = local.magnitude;
+            if (dist > 1e-3f)
+            {
+                float allowed = CameraClearance(cameraRoot.position, cameraRoot.rotation * (local / dist), dist);
+                local *= allowed / dist;
+                dist = allowed;
+            }
+            cam.localPosition = local;
+            cam.localRotation = Quaternion.identity;
+            SetBodyVisible(dist > showBodyDistance);
+        }
+        UpdateBlob();
+    }
+
+    float CameraClearance(Vector3 origin, Vector3 dir, float dist)
+    {
+        int mask = Physics.DefaultRaycastLayers & ~playerLayerMask;
+        int n = Physics.SphereCastNonAlloc(origin, cameraRadius, dir, camHits, dist, mask, QueryTriggerInteraction.Ignore);
+        float allowed = dist;
+        for (int i = 0; i < n; i++)
+        {
+            var h = camHits[i];
+            if (h.distance <= 0f || IsMoving(h.collider)) continue;
+            allowed = Mathf.Min(allowed, h.distance);
+        }
+        return allowed;
+    }
+
+    // Cars and police have kinematic bodies; the component checks cover scenes built before that.
+    static bool IsMoving(Collider c) =>
+        c.attachedRigidbody != null || c.GetComponentInParent<FlyingVehicle>() != null || c.GetComponentInParent<PoliceUnit>() != null;
+
+    void SetBodyVisible(bool show)
+    {
+        if (show == bodyShown) return;
+        bodyShown = show;
+        var mode = show ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+        foreach (var r in bodyRenderers)
+            if (r != null) r.shadowCastingMode = mode;
+    }
+
+    void CreateBlob()
+    {
+        if (blobShadowMaterial == null) return;
+        var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+        go.name = "PlayerBlobShadow";
+        Destroy(go.GetComponent<Collider>());
+        go.layer = 2; // Ignore Raycast
+        var r = go.GetComponent<MeshRenderer>();
+        r.sharedMaterial = blobShadowMaterial;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        r.receiveShadows = false;
+        blob = go.transform;
+        blob.localScale = Vector3.one * blobSize;
+        go.SetActive(false);
+    }
+
+    // Straight down from the player onto whatever is below (roofs included), flat on the surface.
+    void UpdateBlob()
+    {
+        if (blob == null) return;
+        int mask = Physics.DefaultRaycastLayers & ~playerLayerMask;
+        bool hit = Physics.Raycast(transform.position + Vector3.up * 0.5f, Vector3.down, out var h,
+                                   blobMaxDistance, mask, QueryTriggerInteraction.Ignore);
+        blob.gameObject.SetActive(hit);
+        if (!hit) return;
+        // Quad's visible face points along -Z, so aim -Z along the surface normal.
+        blob.SetPositionAndRotation(h.point + h.normal * 0.03f, Quaternion.LookRotation(-h.normal));
     }
 
     // ---------- moving platforms ----------
@@ -440,10 +565,15 @@ public class FirstPersonController : MonoBehaviour
 
     // ---------- interaction ----------
 
+    // Aim from the camera (so it works in third person), but range is measured from the head.
     void TryHijack()
     {
-        var ray = new Ray(playerCamera.transform.position, playerCamera.transform.forward);
-        if (!Physics.Raycast(ray, out var hit, interactRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return;
+        var cam = playerCamera.transform;
+        float back = Vector3.Distance(cam.position, cameraRoot.position);
+        var ray = new Ray(cam.position, cam.forward);
+        int mask = Physics.DefaultRaycastLayers & ~playerLayerMask;
+        if (!Physics.Raycast(ray, out var hit, interactRange + back, mask, QueryTriggerInteraction.Ignore)) return;
+        if (Vector3.Distance(hit.point, cameraRoot.position) > interactRange) return;
         var vehicle = hit.collider.GetComponentInParent<FlyingVehicle>();
         if (vehicle != null && !vehicle.IsOccupied) vehicle.Enter(this);
     }
