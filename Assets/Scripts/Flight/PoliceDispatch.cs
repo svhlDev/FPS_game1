@@ -9,9 +9,17 @@ using UnityEngine;
 //             civilian car while wanted, breaking free from an arrest. Each raises the level (max 3).
 //   Units   : up to 1 / 3 / 5 cars per level; missing ones are recruited from patrols or spawned on
 //             a lane 300 to 500 m away, out of view.
-//   Contact : pursuing cars ram and hug the player's car. empContactTime s of accumulated contact = EMP.
-//   Disabled: up to two units dock at the car's sides and tow it down to the street; the others box
-//             it in. On the street the nearest unit parks alongside and two officers come to arrest.
+//   Contact : pursuing cars ram the player's car. The meter fills while the last touch was under
+//             contactGrace s ago (a brief gap doesn't save you) and drains once it's longer.
+//             empContactTime s of it = EMP.
+//   Disabled: the car is always towed down to the street, with or without the player in it. Units
+//             dock at its sides (two with the player inside, one if it's empty) and tow it; the towing
+//             unit never deploys officers. The others box it in. On the street an occupied car gets two
+//             officers from a non-towing unit and an arrest; an empty one is impounded (locked until
+//             the pursuit ends).
+//   On foot : the player left a disabled car: one officer on a scooter from the nearest non-towing
+//             unit chases them; the other units watch the tow group. Taking another car sends the
+//             officer back to its unit and the chase goes on against the new car.
 //   Arrest  : arrestTime s at the door, then an escort with one break-free sequence. Fail = Busted.
 //   Level 3 : units shoot at the player's car.
 //   Losing  : decayTime s with no unit seeing the player lowers the level one step; at 0 they patrol.
@@ -39,7 +47,9 @@ public class PoliceDispatch : MonoBehaviour
 
     [Header("Contact / EMP")]
     public float contactFill = 1f;
-    public float contactDrain = 0.5f;
+    public float contactDrain = 1f;
+    [Tooltip("The meter keeps filling while the last touch was less than this long ago.")]
+    public float contactGrace = 2f;
     public float empContactTime = 5f;
 
     [Header("Box-in, tow and arrest")]
@@ -55,13 +65,24 @@ public class PoliceDispatch : MonoBehaviour
 
     public int WantedLevel { get; private set; }
     public float Contact { get; private set; }
+    // Seconds of grace left before the contact meter starts draining.
+    public float ContactGraceLeft => Mathf.Max(0f, contactGrace - (Time.time - lastTouchTime));
+
+    // Placeholder officer on a fold-out scooter, belonging to a unit.
+    class Officer
+    {
+        public Transform t;
+        public PoliceDriver home;
+    }
 
     static readonly List<PoliceDriver> units = new List<PoliceDriver>();
     readonly List<PoliceDriver> pursuing = new List<PoliceDriver>();
     readonly List<PoliceDriver> dockers = new List<PoliceDriver>();
-    readonly List<Transform> officers = new List<Transform>();
+    readonly List<Officer> officers = new List<Officer>();
+    readonly List<PoliceDriver> chasers = new List<PoliceDriver>();
     LanePath[] lanes;
-    int lastTouchFrame = -10;
+    float lastTouchTime = -100f;
+    FlyingVehicle towCar;   // disabled car being towed (or impounded), player in it or not
     float unseenTime, ignoreTime, lastResist = -100f, nextSpawn;
     bool towing;
     float arrestTimer;
@@ -114,7 +135,11 @@ public class PoliceDispatch : MonoBehaviour
     {
         var player = FlyingVehicle.Driven;
         var cop = mover == player ? other.GetComponent<PoliceDriver>() : mover.GetComponent<PoliceDriver>();
-        if (cop != null && cop.IsPursuing) lastTouchFrame = Time.frameCount;
+        if (cop != null && cop.IsPursuing)
+        {
+            lastTouchTime = Time.time;
+            cop.NotifyContact();
+        }
 
         if (WantedLevel == 0)
         {
@@ -129,17 +154,19 @@ public class PoliceDispatch : MonoBehaviour
     public void OnRestarted(FlyingVehicle car)
     {
         Contact = 0f;
-        ReleaseTow(car);
+        lastTouchTime = -100f;
+        ReleaseTow();
         ClearOfficers();
         arrestTimer = 0f;
     }
 
+    // Leaving a disabled car doesn't stop the tow: it goes down to the street empty.
     public void OnPlayerExited(FlyingVehicle car)
     {
         if (escorting) return;
-        ReleaseTow(car);
         arrestTimer = 0f;
         Contact = 0f;
+        if (car.Disabled) ClearOfficers(); // any arresting officers give way to one scooter chaser
     }
 
     // ---------- wanted level ----------
@@ -181,10 +208,7 @@ public class PoliceDispatch : MonoBehaviour
         WantedLevel = 0;
         foreach (var u in pursuing) if (u != null) u.Patrol();
         pursuing.Clear();
-        var car = FlyingVehicle.Driven;
-        if (car != null) car.Towed = false;
-        dockers.Clear();
-        towing = false;
+        ReleaseTow();
         ClearOfficers();
         Contact = 0f;
         arrestTimer = 0f;
@@ -199,17 +223,20 @@ public class PoliceDispatch : MonoBehaviour
         float dt = Time.deltaTime;
         pursuing.RemoveAll(u => u == null || !u.isActiveAndEnabled);
         dockers.RemoveAll(u => u == null || !pursuing.Contains(u));
+        officers.RemoveAll(o => o.t == null);
 
         var car = FlyingVehicle.Driven;
         var fpc = FirstPersonController.Instance;
-        bool touching = lastTouchFrame >= Time.frameCount - 1;
+        if (towCar == null ? dockers.Count > 0 : !towCar.Disabled) ReleaseTow(); // restarted, or gone
 
         UpdateSparks(car);
         if (WantedLevel == 0) { Contact = 0f; return; }
+        if (car != null && car.Disabled) towCar = car;
 
         Vector3 playerPos = car != null ? car.transform.position : fpc != null ? fpc.transform.position + Vector3.up : Vector3.zero;
 
-        StaffUnits(playerPos);
+        // An empty car being towed ties up its towing unit: staff one more.
+        StaffUnits(playerPos, towCar != null && towCar != car ? 1 : 0);
         if (pursuing.Count == 0) { EndPursuit(); return; }
 
         // Seen? Otherwise the level decays.
@@ -230,48 +257,74 @@ public class PoliceDispatch : MonoBehaviour
 
         if (escorting) { UpdateEscort(fpc); return; }
 
+        // The tow carries on wherever the player is.
+        if (towCar != null) UpdateTow(towCar, towCar == car);
+        chasers.Clear();
+        foreach (var u in pursuing) if (!dockers.Contains(u)) chasers.Add(u);
+
         if (car != null && !car.Disabled)
         {
+            // In a (new) car: scooter officers go back to their units.
+            ReturnOfficers(dt);
+
             // Not stopping.
             ignoreTime = car.Velocity.magnitude > stopSpeed ? ignoreTime + dt : 0f;
             if (ignoreTime >= ignoreStopTime) { ignoreTime = 0f; Resist("Failed to stop"); }
 
-            // Contact meter.
-            Contact = Mathf.Max(0f, Contact + (touching ? contactFill : -contactDrain) * dt);
+            // Contact meter: fills while the last touch is within the grace time, drains after.
+            bool inGrace = Time.time - lastTouchTime < contactGrace;
+            Contact = Mathf.Max(0f, Contact + (inGrace ? contactFill : -contactDrain) * dt);
             if (Contact >= empContactTime)
             {
                 Contact = 0f;
+                lastTouchTime = -100f;
                 car.Disable(false);
+                towCar = car;
                 Show("EMP!");
-            }
-            else
-            {
-                foreach (var u in pursuing) u.Chase(car);
-                if (WantedLevel >= 3) foreach (var u in pursuing) u.UpdateShooting(car);
                 return;
             }
+            foreach (var u in chasers) u.Chase(car);
+            if (WantedLevel >= 3) foreach (var u in chasers) u.UpdateShooting(car);
+            return;
         }
 
-        if (car != null && car.Disabled) UpdateDisabledCar(car, dt);
-        else
+        Contact = 0f;
+        if (car != null) { UpdateBoxAndArrest(car, dt); return; }
+
+        // On foot.
+        Vector3 p = fpc != null ? fpc.transform.position : playerPos;
+        if (towCar != null)
         {
-            // On foot (placeholder): units and officers hover toward the player.
-            Contact = 0f;
-            Vector3 p = fpc != null ? fpc.transform.position : playerPos;
-            foreach (var u in pursuing) u.HoverNear(p);
-            MoveOfficersTo(p, 3f, dt);
+            // One officer on a scooter from the nearest non-towing unit; the rest watch the tow group.
+            if (officers.Count == 0 && chasers.Count > 0) SpawnOfficers(Nearest(chasers, p), 1);
+            foreach (var u in chasers) u.HoverNear(towCar.transform.position);
         }
+        else foreach (var u in chasers) u.HoverNear(p);
+        MoveOfficersTo(p, 1.5f, dt);
+    }
+
+    static PoliceDriver Nearest(List<PoliceDriver> list, Vector3 p)
+    {
+        PoliceDriver best = null; float bestSq = float.MaxValue;
+        foreach (var u in list)
+        {
+            float sq = (u.transform.position - p).sqrMagnitude;
+            if (sq < bestSq) { bestSq = sq; best = u; }
+        }
+        return best;
     }
 
     // Keep the unit count at the level's cap: release extras, recruit patrols, spawn the rest.
-    void StaffUnits(Vector3 playerPos)
+    void StaffUnits(Vector3 playerPos, int extra)
     {
-        int cap = unitCap[Mathf.Clamp(WantedLevel, 0, unitCap.Length - 1)];
+        int cap = unitCap[Mathf.Clamp(WantedLevel, 0, unitCap.Length - 1)] + extra;
         while (pursuing.Count > cap)
         {
-            int far = 0;
-            for (int i = 1; i < pursuing.Count; i++)
-                if ((pursuing[i].transform.position - playerPos).sqrMagnitude > (pursuing[far].transform.position - playerPos).sqrMagnitude) far = i;
+            int far = -1;
+            for (int i = 0; i < pursuing.Count; i++)
+                if (!dockers.Contains(pursuing[i]) && (far < 0 ||
+                    (pursuing[i].transform.position - playerPos).sqrMagnitude > (pursuing[far].transform.position - playerPos).sqrMagnitude)) far = i;
+            if (far < 0) break;
             pursuing[far].Patrol();
             pursuing.RemoveAt(far);
         }
@@ -330,11 +383,14 @@ public class PoliceDispatch : MonoBehaviour
 
     // ---------- disabled car: tow, box-in, arrest ----------
 
-    void UpdateDisabledCar(FlyingVehicle car, float dt)
+    // Dock and tow the disabled car down to the street: two units with the player inside, one if it's
+    // empty (the second undocks). Docked units sit nose-in against its sides. Down on the street they
+    // park alongside; an empty car is impounded.
+    void UpdateTow(FlyingVehicle car, bool occupied)
     {
-        Contact = 0f;
-        // Up to maxTowUnits nearest units dock at the sides; once they're all there the tow starts.
-        while (dockers.Count < Mathf.Min(maxTowUnits, pursuing.Count))
+        int want = Mathf.Min(occupied ? maxTowUnits : 1, pursuing.Count);
+        while (dockers.Count > want) dockers.RemoveAt(dockers.Count - 1);
+        while (dockers.Count < want)
         {
             PoliceDriver best = null; float bestSq = float.MaxValue;
             foreach (var u in pursuing)
@@ -347,34 +403,45 @@ public class PoliceDispatch : MonoBehaviour
         }
 
         bool down = car.OnSurface;
-        bool allDocked = true;
+        bool allDocked = dockers.Count > 0;
         for (int i = 0; i < dockers.Count; i++)
         {
             var u = dockers[i];
             float side = i == 0 ? 1f : -1f;
-            float x = down ? parkAlongside : car.BodyHalfExtents.x + u.Car.BodyHalfExtents.x + 0.1f;
-            u.HoldSlot(car, new Vector3(side * x, 0f, 0f));
+            float x = down ? parkAlongside : car.BodyHalfExtents.x + u.Car.BodyHalfExtents.z + 0.1f;
+            u.HoldSlot(car, new Vector3(side * x, 0f, 0f), car.towSpeed + 2f);
             allDocked &= u.AtSlot;
         }
-        if (allDocked && dockers.Count > 0) towing = true;
+        if (allDocked) towing = true;
         car.Towed = towing && !down;
-
-        // Everyone else boxes it in: front, back, above.
-        int slot = 0;
-        foreach (var u in pursuing)
+        if (down && !occupied && !car.Impounded)
         {
-            if (dockers.Contains(u)) continue;
+            car.Impounded = true;
+            Show("Car impounded");
+        }
+    }
+
+    // Player inside the disabled car: the non-towing units box it in (front, back, above); on the
+    // street two officers from one of them come to the door.
+    void UpdateBoxAndArrest(FlyingVehicle car, float dt)
+    {
+        int slot = 0;
+        foreach (var u in chasers)
+        {
             Vector3 off = slot == 0 ? new Vector3(0f, 0f, boxDistance)
                         : slot == 1 ? new Vector3(0f, 0f, -boxDistance)
                         : new Vector3(0f, 6f, slot == 2 ? 0f : boxDistance * (slot - 2));
-            u.HoldSlot(car, off);
+            u.HoldSlot(car, off, car.towSpeed + 2f);
             slot++;
         }
 
-        if (!down || !car.IsOccupied) return;
-
-        // On the street: two officers from the parked unit come to the door.
-        if (officers.Count == 0 && dockers.Count > 0) SpawnOfficers(dockers[0]);
+        if (!car.OnSurface) return;
+        if (officers.Count == 0)
+        {
+            // The towing unit keeps its crew; only with nobody else does it send its own.
+            var from = chasers.Count > 0 ? Nearest(chasers, car.transform.position) : dockers.Count > 0 ? dockers[0] : null;
+            if (from != null) SpawnOfficers(from, 2);
+        }
         Vector3 door = car.transform.position + car.PlatformRotation * Vector3.right * (car.BodyHalfExtents.x + 1.2f);
         bool arrived = MoveOfficersTo(door, 0.8f, dt);
         if (!arrived) return;
@@ -382,19 +449,24 @@ public class PoliceDispatch : MonoBehaviour
         if (arrestTimer >= arrestTime) BeginEscort(car);
     }
 
-    void ReleaseTow(FlyingVehicle car)
+    void ReleaseTow()
     {
-        if (car != null) car.Towed = false;
+        if (towCar != null)
+        {
+            towCar.Towed = false;
+            towCar.Impounded = false;
+        }
+        towCar = null;
         dockers.Clear();
         towing = false;
     }
 
     // ---------- officers (placeholder: capsule on a hover board) ----------
 
-    void SpawnOfficers(PoliceDriver from)
+    void SpawnOfficers(PoliceDriver from, int count)
     {
         var bodyRend = from.GetComponentInChildren<MeshRenderer>(true);
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < count; i++)
         {
             var root = new GameObject("Officer").transform;
             root.position = from.transform.position + from.Car.PlatformRotation * new Vector3(i == 0 ? -1.5f : 1.5f, 0.5f, 0f);
@@ -403,13 +475,27 @@ public class PoliceDispatch : MonoBehaviour
             body.transform.SetParent(root, false);
             body.transform.localPosition = new Vector3(0f, 1.1f, 0f);
             body.transform.localScale = new Vector3(0.5f, 0.85f, 0.5f);
-            var board = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var board = GameObject.CreatePrimitive(PrimitiveType.Cube); // the fold-out scooter
             Destroy(board.GetComponent<Collider>());
             board.transform.SetParent(root, false);
             board.transform.localPosition = new Vector3(0f, 0.15f, 0f);
             board.transform.localScale = new Vector3(0.7f, 0.08f, 1.3f);
             if (bodyRend != null) body.GetComponent<Renderer>().sharedMaterial = bodyRend.sharedMaterial;
-            officers.Add(root);
+            officers.Add(new Officer { t = root, home = from });
+        }
+    }
+
+    // Back to their units; gone once aboard.
+    void ReturnOfficers(float dt)
+    {
+        for (int i = officers.Count - 1; i >= 0; i--)
+        {
+            var o = officers[i];
+            if (o.home == null) { Destroy(o.t.gameObject); officers.RemoveAt(i); continue; }
+            Vector3 to = o.home.transform.position - o.t.position;
+            float dist = to.magnitude;
+            if (dist < 2f) { Destroy(o.t.gameObject); officers.RemoveAt(i); continue; }
+            o.t.position += to / dist * Mathf.Min(dist, officerSpeed * 1.5f * dt);
         }
     }
 
@@ -419,7 +505,7 @@ public class PoliceDispatch : MonoBehaviour
         bool arrived = false;
         for (int i = 0; i < officers.Count; i++)
         {
-            var o = officers[i];
+            var o = officers[i].t;
             Vector3 t = target + Vector3.right * (i == 0 ? 0f : 1.2f);
             Vector3 to = t - o.position;
             float dist = to.magnitude;
@@ -433,7 +519,7 @@ public class PoliceDispatch : MonoBehaviour
 
     void ClearOfficers()
     {
-        foreach (var o in officers) if (o != null) Destroy(o.gameObject);
+        foreach (var o in officers) if (o.t != null) Destroy(o.t.gameObject);
         officers.Clear();
     }
 
@@ -470,7 +556,6 @@ public class PoliceDispatch : MonoBehaviour
         escorting = false;
         var fpc = FirstPersonController.Instance;
         if (fpc != null) fpc.Frozen = false;
-        ReleaseTow(null);
         WantedLevel = 3;
         unseenTime = 0f;
         Show("BROKE FREE  -  WANTED 3");
@@ -482,7 +567,11 @@ public class PoliceDispatch : MonoBehaviour
         escorting = false;
         RestartQTE.Cancel();
         // The stolen car is gone.
-        if (arrestedCar != null && !arrestedCar.IsOccupied) Destroy(arrestedCar.gameObject);
+        if (arrestedCar != null && !arrestedCar.IsOccupied)
+        {
+            if (arrestedCar == towCar) ReleaseTow();
+            Destroy(arrestedCar.gameObject);
+        }
         arrestedCar = null;
         var ta = TrafficAuthority.Instance;
         if (ta != null) ta.Fine(bustedFine);
@@ -556,7 +645,24 @@ public class PoliceDispatch : MonoBehaviour
         }
 
         float y = 90;
-        if (Contact > 0f) { Bar(new Rect(right - 200, y, 200, 8), Contact / empContactTime, new Color(0.3f, 0.6f, 1f), "EMP contact"); y += 40; }
+        if (Contact > 0f)
+        {
+            var r = new Rect(right - 200, y, 200, 8);
+            Bar(r, Contact / empContactTime, new Color(0.3f, 0.6f, 1f), "EMP contact");
+            // Grace left: an outline that fades as the 2 s run out.
+            float g = ContactGraceLeft / Mathf.Max(contactGrace, 0.01f);
+            if (g > 0f)
+            {
+                var prev = GUI.color;
+                GUI.color = new Color(0.6f, 0.85f, 1f, g);
+                GUI.DrawTexture(new Rect(r.x - 2, r.y - 2, r.width + 4, 2), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(r.x - 2, r.yMax, r.width + 4, 2), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(r.x - 2, r.y, 2, r.height), Texture2D.whiteTexture);
+                GUI.DrawTexture(new Rect(r.xMax, r.y, 2, r.height), Texture2D.whiteTexture);
+                GUI.color = prev;
+            }
+            y += 40;
+        }
         if (car != null && (WantedLevel >= 3 || car.Integrity < car.maxIntegrity))
         {
             Bar(new Rect(right - 200, y, 200, 8), car.Integrity / car.maxIntegrity, new Color(0.9f, 0.3f, 0.2f), "Integrity");

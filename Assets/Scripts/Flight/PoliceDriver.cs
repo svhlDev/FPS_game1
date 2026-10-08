@@ -1,20 +1,45 @@
 using UnityEngine;
 
 // Drives a police FlyingVehicle. Patrol: it is ordinary lane traffic (FlyingVehicle's own AI).
-// Everything else uses the car's autopilot (same physics and collision sweep as any car):
-//   Chase     : fly to an intercept point at pursuitSpeed; inside ramRange push straight into the target.
-//   HoldSlot  : keep a slot around the target (docked at its side to tow it, or boxing it in).
-//   HoverNear : placeholder foot pursuit, hover near the player.
+// Pursuit uses the car's autopilot with a deliberately clumsy handling model (DriveModel): more top
+// speed than the player, but slow off the line, weak brakes, slow steering and little grip, so a
+// police car wins on a long straight and loses on a sharp dodge or a brake check. The AI here only
+// picks a heading, throttle/brake and a height; it never sets the car's velocity.
+//   Chase     : Approach (fly to a quarter point beside/behind the target, on the side it isn't turning
+//               toward) -> Ram (full throttle at a point 4 m THROUGH the target) -> Recover (brake and
+//               turn round after a hit or a miss) -> Approach again.
+//   HoldSlot  : keep a slot around the target (docked to tow it, or boxing it in), arriving from outside.
+//   HoverNear : watch a point (the player on foot, the tow group).
 // At wanted level 3 PoliceDispatch also calls UpdateShooting. Runs before the cars move.
+// TODO (later): wanted 1-2 officers carry non-lethal stun guns (stun the player on foot, disable a car
+// faster); wanted 3 switches to lethal weapons (the shooting below).
 [DefaultExecutionOrder(-15)]
 [RequireComponent(typeof(FlyingVehicle))]
 public class PoliceDriver : MonoBehaviour
 {
-    public float pursuitSpeed = 60f;
+    [Header("Handling (player: ~25 m/s^2, 90 deg/s, grip 2.5)")]
+    public float policeAccel = 9f;
+    public float policeTopSpeed = 75f;
+    public float policeBrake = 6f;
+    public float policeTurnRate = 55f;
+    [Tooltip("Sideways velocity decay (1/s). Low: slides wide in turns.")]
+    public float policeLateralGrip = 1.5f;
+    [Tooltip("Max climb / descent while chasing (layer changes).")]
+    public float policeVerticalSpeed = 6f;
+
+    [Header("Chase")]
     [Tooltip("Cap on how far ahead (s) the intercept point leads the target.")]
     public float maxLeadTime = 1.5f;
-    [Tooltip("Inside this distance, aim straight at the target to push into contact.")]
+    [Tooltip("Inside this distance it commits to a ram.")]
     public float ramRange = 12f;
+    [Tooltip("The ram aims this far beyond the target along the approach.")]
+    public float ramThrough = 4f;
+    [Tooltip("Quarter point (beside and behind the target) it lines up from, in metres.")]
+    public Vector2 approachOffset = new Vector2(8f, -8f);
+    [Tooltip("Recover time after a miss (overshoot without contact).")]
+    public float missRecoverTime = 2f;
+    [Tooltip("Recover time after a hit.")]
+    public float hitRecoverTime = 0.7f;
 
     [Header("Shooting (wanted level 3)")]
     public float shootRange = 120f;
@@ -34,12 +59,26 @@ public class PoliceDriver : MonoBehaviour
     public bool IsPursuing { get; private set; }
     public bool AtSlot { get; private set; }
 
+    enum ChaseState { Approach, Ram, Recover }
+    ChaseState state;
+    float recoverUntil;
+    int side = 1;               // approach side in the target's frame: +1 right, -1 left
+    float lastTargetYaw; bool haveTargetYaw;
+    bool contacted;
+    Vector3 ramDir;
+
     float sightTime, nextBurst, nextShot;
     int shotsLeft;
     LineRenderer tracer;
     float tracerUntil;
     Transform spark;
     float sparkUntil;
+
+    FlyingVehicle.DriveModel Model => new FlyingVehicle.DriveModel
+    {
+        accel = policeAccel, topSpeed = policeTopSpeed, brake = policeBrake,
+        turnRate = policeTurnRate, lateralGrip = policeLateralGrip, verticalSpeed = policeVerticalSpeed,
+    };
 
     void Awake() => Car = GetComponent<FlyingVehicle>();
     void OnEnable() => PoliceDispatch.Register(this);
@@ -49,6 +88,8 @@ public class PoliceDriver : MonoBehaviour
     {
         IsPursuing = true;
         Car.ReportContacts = true;
+        state = ChaseState.Approach;
+        haveTargetYaw = false;
     }
 
     public void Patrol()
@@ -60,43 +101,139 @@ public class PoliceDriver : MonoBehaviour
         Car.ClearAutopilot(); // the lane AI flies it back to its lane
     }
 
+    // Touched the player's car this frame (from PoliceDispatch).
+    public void NotifyContact() => contacted = true;
+
+    // ---------- low-level steering ----------
+
+    static float YawOf(Vector3 v) => Mathf.Atan2(v.x, v.z) * Mathf.Rad2Deg;
+
+    Vector3 Heading => Quaternion.Euler(0f, Car.Yaw, 0f) * Vector3.forward;
+
+    // Arrive at a point moving at pointVel: the approach speed is what the weak brakes can still stop
+    // from. Throttle/brake hold the speed along the heading; the heading follows the wanted velocity
+    // (or faces `face` once there).
+    void SteerTo(Vector3 point, Vector3 pointVel, float maxSpeed, float verticalSpeed, Vector3? face = null)
+    {
+        Vector3 to = point - transform.position;
+        to.y = 0f;
+        float d = to.magnitude;
+        float approach = Mathf.Min(maxSpeed, Mathf.Sqrt(2f * policeBrake * 0.6f * d));
+        Vector3 pv = new Vector3(pointVel.x, 0f, pointVel.z);
+        Vector3 desired = pv + (d > 0.05f ? to / d * approach : Vector3.zero);
+
+        float yaw = Car.Yaw;
+        if (desired.sqrMagnitude > 3f * 3f) yaw = YawOf(desired);
+        else if (face.HasValue)
+        {
+            Vector3 f = face.Value - transform.position;
+            f.y = 0f;
+            if (f.sqrMagnitude > 0.25f) yaw = YawOf(f);
+        }
+        Vector3 fwd = Heading;
+        float throttle = (Vector3.Dot(desired, fwd) - Vector3.Dot(Car.Velocity, fwd)) / 2f;
+        Car.Drive(yaw, throttle, point.y + pointVel.y * 0.3f, verticalSpeed, Model);
+    }
+
+    // ---------- chase ----------
+
     public void Chase(FlyingVehicle target)
     {
         AtSlot = false;
+        float dt = Mathf.Max(Time.deltaTime, 1e-4f);
         Vector3 me = transform.position, tp = target.transform.position, tv = target.Velocity;
+        Quaternion tr = target.PlatformRotation;
+
+        // Approach on the side the target isn't turning toward.
+        float tyaw = target.Yaw;
+        if (haveTargetYaw)
+        {
+            float turn = Mathf.DeltaAngle(lastTargetYaw, tyaw) / dt;
+            if (Mathf.Abs(turn) > 10f) side = turn > 0f ? -1 : 1; // turning right: come in from the left
+        }
+        lastTargetYaw = tyaw; haveTargetYaw = true;
+
         Vector3 rel = tp - me;
         float dist = rel.magnitude;
-        if (dist < ramRange)
-        {
-            Car.SetAutopilot(tp, tv, pursuitSpeed); // push into the target, matching its velocity
-            return;
-        }
         float closing = Mathf.Max(5f, Vector3.Dot(Car.Velocity - tv, rel / Mathf.Max(dist, 0.01f)));
         float lead = Mathf.Min(maxLeadTime, dist / closing);
-        Car.SetAutopilot(tp + tv * lead, Vector3.zero, pursuitSpeed);
+        Vector3 flat = new Vector3(rel.x, 0f, rel.z);
+
+        switch (state)
+        {
+            case ChaseState.Approach:
+            {
+                Vector3 quarter = tp + tv * lead + tr * new Vector3(side * approachOffset.x, 0f, approachOffset.y);
+                SteerTo(quarter, tv, policeTopSpeed, policeVerticalSpeed);
+                if (dist < ramRange)
+                {
+                    state = ChaseState.Ram;
+                    contacted = false;
+                    ramDir = flat.sqrMagnitude > 0.01f ? flat.normalized : Heading;
+                }
+                break;
+            }
+            case ChaseState.Ram:
+            {
+                // Full throttle at a point through the target: no velocity matching, so it can miss.
+                Vector3 aim = tp + tv * lead + ramDir * ramThrough;
+                Car.Drive(YawOf(aim - me), 1f, aim.y, policeVerticalSpeed, Model);
+                bool passed = Vector3.Dot(flat, Heading) < 0f;
+                if (contacted) { state = ChaseState.Recover; recoverUntil = Time.time + hitRecoverTime; }
+                else if (passed || dist > ramRange * 2.5f) { state = ChaseState.Recover; recoverUntil = Time.time + missRecoverTime; }
+                break;
+            }
+            default:
+            {
+                // Brake and swing round toward the target before trying again.
+                bool facing = Vector3.Angle(Heading, flat) < 40f;
+                Car.Drive(YawOf(flat), facing ? 0.3f : -1f, tp.y, policeVerticalSpeed, Model);
+                if (Time.time >= recoverUntil) state = ChaseState.Approach;
+                break;
+            }
+        }
+        contacted = false;
     }
 
-    // Keep a slot in the target's yaw frame, moving with it. Approaches from outside the slot (aims a
-    // few metres further out until close), so it doesn't plough into the target on the way.
-    public void HoldSlot(FlyingVehicle target, Vector3 localOffset)
+    // ---------- slots ----------
+
+    // Keep a slot in the target's yaw frame, moving with it, facing the target. Arrives from outside
+    // (via a point 10 m further out) so it doesn't plough into the target on the way.
+    public void HoldSlot(FlyingVehicle target, Vector3 localOffset, float verticalSpeed)
     {
-        Vector3 slot = target.transform.position + target.PlatformRotation * localOffset;
-        Vector3 outward = slot - target.transform.position;
+        state = ChaseState.Approach;
+        Vector3 tp = target.transform.position;
+        Vector3 slot = tp + target.PlatformRotation * localOffset;
+        Vector3 me = transform.position;
+        Vector3 outward = slot - tp;
         outward.y = 0f;
         Vector3 aim = slot;
-        if ((transform.position - slot).sqrMagnitude > 4f * 4f && outward.sqrMagnitude > 0.01f) aim += outward.normalized * 3f;
-        Car.SetAutopilot(aim, target.Velocity, pursuitSpeed);
-        AtSlot = (transform.position - slot).sqrMagnitude < 1.5f * 1.5f;
+        Vector3 toSlot = slot - me;
+        toSlot.y = 0f;
+        if (outward.sqrMagnitude > 0.01f && toSlot.magnitude > 3f)
+        {
+            Vector3 o = outward.normalized;
+            Vector3 fromSlot = me - slot;
+            fromSlot.y = 0f;
+            float outside = Vector3.Dot(fromSlot, o);
+            float lateral = (fromSlot - o * outside).magnitude;
+            if (outside < 2f || lateral > outside) aim = slot + o * 10f;
+        }
+        SteerTo(aim, target.Velocity, policeTopSpeed, verticalSpeed, tp);
+        AtSlot = (me - slot).sqrMagnitude < 2f * 2f;
     }
 
     public void HoverNear(Vector3 point)
     {
         AtSlot = false;
+        state = ChaseState.Approach;
         Vector3 away = transform.position - point;
         away.y = 0f;
         away = away.sqrMagnitude > 0.01f ? away.normalized : Vector3.forward;
-        Car.SetAutopilot(point + away * 10f + Vector3.up * 5f, Vector3.zero, 25f);
+        SteerTo(point + away * 12f + Vector3.up * 5f, Vector3.zero, 25f, policeVerticalSpeed, point);
     }
+
+    // ---------- shooting ----------
 
     // Bursts of hitscan shots at the target's car while it is in sight; the spread tightens the
     // longer it stays in sight.

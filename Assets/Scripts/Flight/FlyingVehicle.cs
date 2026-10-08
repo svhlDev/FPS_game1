@@ -131,8 +131,6 @@ public class FlyingVehicle : MonoBehaviour
     [Tooltip("Integrity regained per second once regenDelay has passed without a hit.")]
     public float integrityRegen = 5f;
     public float regenDelay = 10f;
-    [Tooltip("Pursuit autopilot acceleration (m/s^2).")]
-    public float autopilotAcceleration = 45f;
 
     public bool IsOccupied => driver != null;
     public FirstPersonController Driver => driver;
@@ -145,6 +143,8 @@ public class FlyingVehicle : MonoBehaviour
     public bool Towed { get; set; }
     // A disabled car that has come to rest on a surface.
     public bool OnSurface { get; private set; }
+    // Towed down and parked by the police: locked until the pursuit ends.
+    public bool Impounded { get; set; }
     public float Integrity { get; private set; }
     public float LastHitTime { get; private set; } = -100f;
     // Report resting contact with other cars every frame (pursuing police).
@@ -235,7 +235,7 @@ public class FlyingVehicle : MonoBehaviour
     BoxCollider bodyCol;
     Vector3 colHalf, colCenter;
     float shake;
-    bool autopilot; Vector3 apTarget, apTargetVel; float apSpeed;
+    bool autopilot; float apYaw, apThrottle, apTargetY, apVertical; DriveModel apModel;
     float disableDecel;
     bool hijacked;
     readonly RaycastHit[] hitBuf = new RaycastHit[16];
@@ -911,9 +911,23 @@ public class FlyingVehicle : MonoBehaviour
 
     // ---------- autopilot (police pursuit) ----------
 
-    // Fly toward a point (moving at targetVel) at up to maxSpeed, with the normal collision sweep.
-    // Leaves the lane; ClearAutopilot hands the car back to the lane AI.
-    public void SetAutopilot(Vector3 target, Vector3 targetVel, float maxSpeed)
+    // Handling of an AI-driven car (police): forward speed and heading are separate, like a real car.
+    // Thrust and braking act along the heading only; the heading turns at a limited rate and sideways
+    // velocity bleeds off slowly, so it slides wide in turns and overshoots what it aims at.
+    [System.Serializable]
+    public struct DriveModel
+    {
+        public float accel;         // m/s^2 along the heading at full throttle
+        public float topSpeed;      // m/s
+        public float brake;         // m/s^2 at full brake
+        public float turnRate;      // deg/s
+        public float lateralGrip;   // 1/s decay of sideways velocity
+        public float verticalSpeed; // m/s max climb / descent (layer changes)
+    }
+
+    // The AI's only controls: a desired heading, throttle (> 0) or brake (< 0), and a target height.
+    // It never sets the velocity. Leaves the lane; ClearAutopilot hands the car back to the lane AI.
+    public void Drive(float desiredYaw, float throttle, float targetY, float maxVerticalSpeed, in DriveModel model)
     {
         if (!autopilot)
         {
@@ -921,8 +935,14 @@ public class FlyingVehicle : MonoBehaviour
             SetParked(false);
             Mode = FlightMode.Free;
         }
-        apTarget = target; apTargetVel = targetVel; apSpeed = maxSpeed;
+        apYaw = desiredYaw;
+        apThrottle = Mathf.Clamp(throttle, -1f, 1f);
+        apTargetY = targetY;
+        apVertical = maxVerticalSpeed;
+        apModel = model;
     }
+
+    public float Yaw => yaw;
 
     public void ClearAutopilot()
     {
@@ -934,17 +954,25 @@ public class FlyingVehicle : MonoBehaviour
     void UpdateAutopilot()
     {
         float dt = Time.deltaTime;
-        Vector3 to = apTarget - transform.position;
-        // Match the target's motion, plus close the gap (eases in over the last few metres).
-        Vector3 desired = Vector3.ClampMagnitude(apTargetVel + to * 2f, apSpeed);
-        velocity = Vector3.MoveTowards(velocity, desired, autopilotAcceleration * dt);
-
-        Vector3 face = new Vector3(velocity.x, 0f, velocity.z);
-        if (face.sqrMagnitude < 4f) face = new Vector3(to.x, 0f, to.z); // slow: face the target
-        if (face.sqrMagnitude > 0.25f)
-            yaw = Mathf.MoveTowardsAngle(yaw, Quaternion.LookRotation(face).eulerAngles.y, headingTurnRate * 1.5f * dt);
+        var m = apModel;
+        yaw = Mathf.MoveTowardsAngle(yaw, apYaw, m.turnRate * dt);
         Quaternion heading = Quaternion.Euler(0f, yaw, 0f);
-        float bank = Mathf.Clamp(-Vector3.Dot(velocity, heading * Vector3.right) * 0.6f, -20f, 20f);
+        Vector3 fwd = heading * Vector3.forward;
+
+        // Velocity doesn't turn with the heading: what no longer lies along it becomes slide.
+        Vector3 hv = new Vector3(velocity.x, 0f, velocity.z);
+        float fwdSpeed = Vector3.Dot(hv, fwd);
+        Vector3 side = hv - fwd * fwdSpeed;
+        if (apThrottle > 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, m.topSpeed, m.accel * apThrottle * dt);
+        else if (apThrottle < 0f) fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, m.brake * -apThrottle * dt);
+        else fwdSpeed = Mathf.MoveTowards(fwdSpeed, 0f, 1f * dt); // coasting
+        side *= Mathf.Exp(-m.lateralGrip * dt);
+
+        float vy = Mathf.Clamp((apTargetY - transform.position.y) * 2f, -apVertical, apVertical);
+        float vyNew = Mathf.MoveTowards(velocity.y, vy, 12f * dt);
+        velocity = fwd * fwdSpeed + side + Vector3.up * vyNew;
+
+        float bank = Mathf.Clamp(-Vector3.Dot(velocity, heading * Vector3.right) * 0.8f, -25f, 25f);
         Quaternion rot = heading * Quaternion.Euler(Mathf.Clamp(-velocity.y * 1.5f, -20f, 20f), 0f, bank);
 
         Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
@@ -1064,6 +1092,7 @@ public class FlyingVehicle : MonoBehaviour
     public void Enter(FirstPersonController who)
     {
         if (IsOccupied) return;
+        if (Impounded) { who.Flash("Impounded"); return; }
         driver = who;
         SetParked(false);
         enterFrame = Time.frameCount;
