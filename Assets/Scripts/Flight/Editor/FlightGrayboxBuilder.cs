@@ -505,8 +505,9 @@ public static class FlightGrayboxBuilder
         for (int i = 0; i < 2; i++)
         {
             float x = i == 0 ? -1.1f : 1.1f;
-            heads[i] = LightBox(root, "Headlight", new Vector3(x, 0.15f, 3.025f), new Vector3(0.35f, 0.2f, 0.05f), headOnMat);
-            tails[i] = LightBox(root, "Taillight", new Vector3(x, 0.15f, -3.025f), new Vector3(0.4f, 0.15f, 0.05f), tailOnMat);
+            // 0.4 m deep, half inside the body: sticks 0.2 m out of the face so its top reads from above.
+            heads[i] = LightBox(root, "Headlight", new Vector3(x, 0.15f, 3f), new Vector3(0.45f, 0.22f, 0.4f), headOnMat);
+            tails[i] = LightBox(root, "Taillight", new Vector3(x, 0.15f, -3f), new Vector3(0.45f, 0.22f, 0.4f), tailOnMat);
         }
         var lights = root.AddComponent<CarLights>();
         lights.headlights = heads;
@@ -570,7 +571,7 @@ public static class FlightGrayboxBuilder
         Object.DestroyImmediate(rack.GetComponent<Collider>());
         rack.localPosition = new Vector3(0f, 0.55f, -3.35f);
         rack.localRotation = Quaternion.identity;
-        rack.localScale = new Vector3(2.4f, 0.3f, 0.7f);
+        rack.localScale = new Vector3(1.6f, 0.3f, 0.7f); // narrower than the car so the tail lights show from above
 
         var grab = new GameObject("GrabPoint").transform;
         grab.SetParent(v.transform, false);

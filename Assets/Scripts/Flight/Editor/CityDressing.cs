@@ -84,7 +84,7 @@ public static partial class CityDressing
         kit.facade = ShaderMaterial("CityFacade", "FPS/CityFacade", m =>
         {
             m.SetVector("_BandHeights", new Vector4(kit.trafficMin, kit.trafficMax, 0f, 0f));
-            m.SetFloat("_LitFraction", 1f); // global scale; base lit fraction comes per facade style
+            m.SetFloat("_LitFraction", 1.3f); // global scale; base lit fraction comes per facade style
             m.SetFloat("_EmissionStrength", 1.6f);
             m.SetVector("_BandLit", new Vector4(0.5f, 1.2f, 0.7f, 0f));
         });

@@ -19,6 +19,27 @@ public static class BuildScript
     const string ProductName = "FPS_game1 Slice";
     const string CompanyName = "svhlDev";
 
+    // Regenerates every builder scene (City graybox, Twin Towers, Sky Avenue) from its seed.
+    //   Batch mode: Unity.exe -batchmode -quit -projectPath <repo> -executeMethod BuildScript.RebuildScenes -logFile Builds/rebuild.log
+    [MenuItem("Tools/Rebuild All Scenes")]
+    public static void RebuildScenes()
+    {
+        bool ok = true;
+        try
+        {
+            FlightGrayboxBuilder.Build();
+            TwinTowersBuilder.Build();
+            SkyAvenueBuilder.Build();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogException(e);
+            ok = false;
+        }
+        AssetDatabase.SaveAssets();
+        if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
+    }
+
     [MenuItem("Tools/Build Windows")]
     public static void BuildWindows()
     {
