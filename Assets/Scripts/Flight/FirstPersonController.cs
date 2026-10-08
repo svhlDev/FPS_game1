@@ -127,8 +127,17 @@ public class FirstPersonController : MonoBehaviour
     public bool IsHanging => hang != null;
     // The player (on foot or not). Set in Awake, so it exists while driving too.
     public static FirstPersonController Instance { get; private set; }
-    // No movement or interaction input (being escorted). Gravity still applies.
+    // No movement or interaction input (yanking a driver out). Gravity still applies.
     public bool Frozen { get; set; }
+    // Cuffed: no movement or interaction, can't hit; an officer drags you (Drag).
+    public bool Restrained { get; set; }
+    public bool Stunned => Time.time < stunUntil;
+    public float Health { get; private set; } = 100f;
+    public float maxHealth = 100f;
+    // The car whose roof you're standing on, if any.
+    public FlyingVehicle Platform => platform;
+    // Jumped (or got out) of one car and landed on another: (from, to).
+    public static event System.Action<FlyingVehicle, FlyingVehicle> CarJump;
     public Vector3 Velocity => (grounded ? Vector3.zero : airVel) + Vector3.up * verticalVelocity;
 
     CharacterController cc;
@@ -165,6 +174,11 @@ public class FirstPersonController : MonoBehaviour
     Vector3 spawnPos;
     Quaternion spawnRot;
     float staggerUntil = -1f;
+    float stunUntil = -1f, stunTime = 1f;
+    float lastHurt = -100f;
+    Vector3 pendingDrag;
+    FlyingVehicle lastLeftCar; float leftCarTime;
+    PlayerFists fists;
     string flash; float flashUntil;
 
     int playerLayerMask;
@@ -176,6 +190,7 @@ public class FirstPersonController : MonoBehaviour
     {
         Instance = this;
         cc = GetComponent<CharacterController>();
+        fists = GetComponent<PlayerFists>();
         cc.minMoveDistance = 0f; // small carry/slide moves must not be dropped
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
         if (bodyRenderers == null || bodyRenderers.Length == 0) bodyRenderers = GetComponentsInChildren<Renderer>(true);
@@ -242,7 +257,9 @@ public class FirstPersonController : MonoBehaviour
 
         Vector3 carVel = platform != null ? Carry(dt) : Vector3.zero;
 
-        bool noInput = Frozen || Time.time < staggerUntil;
+        bool noInput = Frozen || Restrained || Stunned || Time.time < staggerUntil;
+        if (fists != null) fists.CanHit = !Restrained && !Stunned;
+        if (Health < maxHealth && Time.time - lastHurt > 8f) Health = Mathf.Min(maxHealth, Health + 5f * dt);
         float x = noInput ? 0f : (kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f);
         float z = noInput ? 0f : (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f);
         float speed = kb.leftShiftKey.isPressed ? sprintSpeed : walkSpeed;
@@ -284,7 +301,8 @@ public class FirstPersonController : MonoBehaviour
 
         groundCollider = null;
         float fallSpeed = -verticalVelocity;
-        var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt);
+        var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt + pendingDrag);
+        pendingDrag = Vector3.zero;
         bool wasGrounded = grounded;
         grounded = (flags & CollisionFlags.Below) != 0;
         if (grounded && !wasGrounded && fallSpeed > staggerFallSpeed)
@@ -301,7 +319,7 @@ public class FirstPersonController : MonoBehaviour
                 if (car != null) Land(car, wasGrounded ? horizontal + carVel : airVel, move);
                 else LeavePlatform();
             }
-            if (car == null) airVel = Vector3.zero; // landing on anything but a car stops you dead
+            if (car == null) { airVel = Vector3.zero; lastLeftCar = null; } // landing on anything but a car stops you dead
         }
         else if (wasGrounded)
         {
@@ -322,7 +340,7 @@ public class FirstPersonController : MonoBehaviour
             {
                 var car = platform;
                 LeavePlatform();
-                car.Enter(this);
+                TryEnter(car);
             }
             else TryHijack();
         }
@@ -363,8 +381,11 @@ public class FirstPersonController : MonoBehaviour
             // Hard landing: the view dips and comes back up over the stagger.
             float stagger = Mathf.Clamp01((staggerUntil - Time.time) / Mathf.Max(staggerTime, 0.01f));
             local += Vector3.down * staggerDip * Mathf.Sin(stagger * Mathf.PI);
+            // Stunned: down on the ground, view tilted, for the length of the stun.
+            float down = Stunned ? Mathf.Clamp01(Mathf.Min((stunUntil - Time.time) * 4f, (Time.time - (stunUntil - stunTime)) * 4f)) : 0f;
+            local += Vector3.down * 1.1f * down;
             cam.localPosition = local;
-            cam.localRotation = Quaternion.identity;
+            cam.localRotation = Quaternion.Euler(0f, 0f, 70f * down);
             SetBodyVisible(dist > showBodyDistance);
         }
         UpdateBlob();
@@ -468,6 +489,8 @@ public class FirstPersonController : MonoBehaviour
 
     void Land(FlyingVehicle car, Vector3 worldVel, Vector3 move)
     {
+        if (lastLeftCar != null && lastLeftCar != car && Time.time - leftCarTime < 6f) CarJump?.Invoke(lastLeftCar, car);
+        lastLeftCar = null;
         SetPlatform(car);
         landTime = Time.time;
         // Whatever your own walking doesn't explain is slide.
@@ -499,6 +522,7 @@ public class FirstPersonController : MonoBehaviour
 
     void LeavePlatform()
     {
+        if (platform != null) NoteLeftCar(platform);
         platform = null;
         slipVel = Vector3.zero;
     }
@@ -686,6 +710,9 @@ public class FirstPersonController : MonoBehaviour
     public void Respawn(string message)
     {
         Frozen = false;
+        Restrained = false;
+        stunUntil = -1f;
+        Heal();
         staggerUntil = -1f;
         hang = null;
         lastHandValid = false;
@@ -716,8 +743,62 @@ public class FirstPersonController : MonoBehaviour
         if (!Physics.Raycast(ray, out var hit, interactRange + back, mask, QueryTriggerInteraction.Ignore)) return;
         if (Vector3.Distance(hit.point, cameraRoot.position) > interactRange) return;
         var vehicle = hit.collider.GetComponentInParent<FlyingVehicle>();
-        if (vehicle != null && !vehicle.IsOccupied) vehicle.Enter(this);
+        if (vehicle != null && !vehicle.IsOccupied) TryEnter(vehicle);
     }
+
+    // Getting into a car. Empty: straight to the wheel. With a driver, by side (car-local X):
+    //   left (driver side) : yank the driver out (0.6 s) and take the wheel. Fast, but loud.
+    //   right (passenger)  : sit in the passenger seat; the driver drives on (PlayerRide).
+    void TryEnter(FlyingVehicle car)
+    {
+        if (car.Impounded) { Flash("Impounded"); return; }
+        if (!car.hasDriver) { car.Enter(this); return; }
+        float side = (Quaternion.Inverse(car.PlatformRotation) * (transform.position - car.transform.position)).x;
+        if (side < 0f) StartCoroutine(Yank(car));
+        else PlayerRide.Begin(this, car, PlayerRide.Seat.Passenger, false, false);
+    }
+
+    System.Collections.IEnumerator Yank(FlyingVehicle car)
+    {
+        Frozen = true;
+        Flash("Yanking the driver out!");
+        yield return new WaitForSeconds(0.6f);
+        Frozen = false;
+        if (car == null || car.IsOccupied || !isActiveAndEnabled) yield break;
+        if (Vector3.Distance(car.transform.position, transform.position) > interactRange + 4f) { Flash("Too slow"); yield break; }
+        PoliceDispatch.Instance?.ReportTakeover(car, true);
+        car.EjectDriver(-1);
+        PoliceDispatch.Instance?.OnCarTakenOver(car);
+        LeavePlatform();
+        car.Enter(this);
+    }
+
+    // Left a car (roof or seat): landing on a different one soon after counts as a car jump.
+    public void NoteLeftCar(FlyingVehicle car)
+    {
+        lastLeftCar = car;
+        leftCarTime = Time.time;
+    }
+
+    // Stun gun hit: down for `seconds`, no input.
+    public void Stun(float seconds)
+    {
+        stunTime = seconds;
+        stunUntil = Time.time + seconds;
+        camShake = Mathf.Max(camShake, 0.4f);
+    }
+
+    public void Damage(float amount)
+    {
+        Health = Mathf.Max(0f, Health - amount);
+        lastHurt = Time.time;
+        camShake = Mathf.Max(camShake, 0.3f);
+    }
+
+    public void Heal() => Health = maxHealth;
+
+    // Moved by someone else this frame (an officer dragging you).
+    public void Drag(Vector3 delta) => pendingDrag += delta;
 
     public void AttachCamera(Camera cam)
     {
@@ -732,15 +813,17 @@ public class FirstPersonController : MonoBehaviour
 
     public void Flash(string msg) { flash = msg; flashUntil = Time.time + 2f; }
 
-    // Teleport (escort, placed beside the cop car): off any platform, falling from rest.
-    public void PlaceAt(Vector3 pos, Quaternion rot)
+    // Teleport (out of a car door, released at the station): off any platform, falling, keeping
+    // `velocity` (horizontal) as momentum.
+    public void PlaceAt(Vector3 pos, Quaternion rot, Vector3 velocity = default)
     {
         hang = null;
         cc.enabled = false;
-        transform.SetPositionAndRotation(pos, rot);
+        transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, rot.eulerAngles.y, 0f));
         cc.enabled = true;
         LeavePlatform();
-        airVel = Vector3.zero;
+        lastLeftCar = null;
+        airVel = Flat(velocity);
         verticalVelocity = 0f;
         grounded = false;
     }

@@ -298,6 +298,7 @@ public static class SkyAvenueBuilder
             float z = deckZ + (i - (ParkedCars - 1) * 0.5f) * 12f;
             var parked = CreateVehicle($"ParkedCar_{i}", parkedMats[i % parkedMats.Length]);
             parked.startParkedOnSurface = true;
+            parked.hasDriver = false;
             parked.transform.SetParent(deckRoot, true);
             parked.transform.SetPositionAndRotation(new Vector3(face + DeckReach - 5f, deckTop + CarHalfHeight, z),
                                                     Quaternion.LookRotation(Vector3.right));
@@ -314,6 +315,8 @@ public static class SkyAvenueBuilder
         foreach (var plot in plots)
             streetPlots.Add(new CityDressing.StreetPlot { side = plot.side, center = plot.center, footprint = plot.footprint });
         CityDressing.BuildStreet(cityRoot, halfW, halfL, streetPlots, decoRng, kit);
+        // Police station near the north end: door in an east-row facade, landing pad on the road in front.
+        CityDressing.BuildPoliceStation(cityRoot, halfW, halfL - 35f, streetPlots, kit);
         kit.keepOut.Add(new Bounds(new Vector3(deckMidX, deckTop, deckZ), new Vector3(deckLen + 6f, 30f, DeckWidth + 6f)));
         for (int r = 0; r < rows.Count; r++)
         {

@@ -200,6 +200,7 @@ public static class FlightGrayboxBuilder
         {
             var parked = CreateVehicle($"ParkedCar_{i}", parkedMats[i]);
             parked.startParkedOnSurface = true;
+            parked.hasDriver = false;
             parked.transform.SetParent(platformRoot, true);
             parked.transform.SetPositionAndRotation(new Vector3(pc.x - 12f, PlatformTop + 0.75f, tc.z - 20f + i * 20f),
                                                    Quaternion.LookRotation(Vector3.left));
@@ -346,6 +347,7 @@ public static class FlightGrayboxBuilder
         fpc.bodyRenderers = new[] { body.GetComponent<Renderer>(), visor.GetComponent<Renderer>() };
         fpc.thrusterRenderers = thrusters;
         fpc.blobShadowMaterial = GetBlobShadowMaterial();
+        player.AddComponent<PlayerFists>();
 
         int layer = EnsureLayer("Player");
         if (layer >= 0)
@@ -501,6 +503,8 @@ public static class FlightGrayboxBuilder
         var driver = v.gameObject.AddComponent<PoliceDriver>();
         driver.tracerMaterial = GetUnlitMaterial("PoliceTracer", new Color(1f, 0.85f, 0.5f), 6f);
         driver.sparkMaterial = GetUnlitMaterial("Sparks", new Color(1f, 0.6f, 0.2f), 6f);
+        v.hasDriver = true;
+        v.driverKind = FlyingVehicle.DriverKind.Officer;
 
         v.transform.SetParent(parent, false);
         v.path = path;

@@ -25,6 +25,14 @@ public enum FlightMode { Lane, Layer, Free }
 [DefaultExecutionOrder(-10)]
 public class FlyingVehicle : MonoBehaviour
 {
+    // Who's at the wheel when the player isn't. Data only: no GameObject until thrown out (NpcBody).
+    public enum DriverKind { Civilian, Officer }
+
+    [Header("Driver")]
+    [Tooltip("Traffic and police have a driver; parked cars are empty.")]
+    public bool hasDriver = true;
+    public DriverKind driverKind = DriverKind.Civilian;
+
     [Header("Lane")]
     [Tooltip("Leave empty for a car that isn't traffic (parked, or hovering where placed).")]
     public LanePath path;
@@ -1137,9 +1145,18 @@ public class FlyingVehicle : MonoBehaviour
         who.gameObject.SetActive(true);
         who.AttachCamera(cam);
         who.BlockInteractThisFrame();
+        who.NoteLeftCar(this);
         if (toRoof) who.MountPlatform(this);
         cam = null;
         PoliceDispatch.Instance?.OnPlayerExited(this);
+    }
+
+    // Throws the driver out of the door on `side` (-1 left / driver, +1 right) as an NpcBody.
+    public NpcBody EjectDriver(int side, bool unconscious = false)
+    {
+        if (!hasDriver) return null;
+        hasDriver = false;
+        return NpcBody.Eject(this, side, driverKind, unconscious);
     }
 
     public void ForceStop()

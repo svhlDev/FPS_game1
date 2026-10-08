@@ -5,14 +5,15 @@ using UnityEngine;
 // speed than the player, but slow off the line, weak brakes, slow steering and little grip, so a
 // police car wins on a long straight and loses on a sharp dodge or a brake check. The AI here only
 // picks a heading, throttle/brake and a height; it never sets the car's velocity.
-//   Chase     : Approach (fly to a quarter point beside/behind the target, on the side it isn't turning
-//               toward) -> Ram (full throttle at a point 4 m THROUGH the target) -> Recover (brake and
-//               turn round after a hit or a miss) -> Approach again.
+//   Chase     : Approach (fly to the slot PoliceDispatch gave it: beside/behind/above the target, on its
+//               assigned layer) -> Ram (full throttle at a point 4 m THROUGH the target; only units on the
+//               target's layer ram) -> Recover (brake and turn round after a hit or a miss) -> Approach.
+//   Separation: while chasing or hovering it steers away from other pursuing police within 10 m, so
+//               they spread round the player instead of stacking.
 //   HoldSlot  : keep a slot around the target (docked to tow it, or boxing it in), arriving from outside.
 //   HoverNear : watch a point (the player on foot, the tow group).
 // At wanted level 3 PoliceDispatch also calls UpdateShooting. Runs before the cars move.
-// TODO (later): wanted 1-2 officers carry non-lethal stun guns (stun the player on foot, disable a car
-// faster); wanted 3 switches to lethal weapons (the shooting below).
+// Car gunfire only happens at PoliceDispatch's Lethal force level.
 [DefaultExecutionOrder(-15)]
 [RequireComponent(typeof(FlyingVehicle))]
 public class PoliceDriver : MonoBehaviour
@@ -34,8 +35,9 @@ public class PoliceDriver : MonoBehaviour
     public float ramRange = 12f;
     [Tooltip("The ram aims this far beyond the target along the approach.")]
     public float ramThrough = 4f;
-    [Tooltip("Quarter point (beside and behind the target) it lines up from, in metres.")]
-    public Vector2 approachOffset = new Vector2(8f, -8f);
+    [Tooltip("Steer away from other pursuing police within this range.")]
+    public float separationRange = 10f;
+    public float separationWeight = 1.5f;
     [Tooltip("Recover time after a miss (overshoot without contact).")]
     public float missRecoverTime = 2f;
     [Tooltip("Recover time after a hit.")]
@@ -58,12 +60,15 @@ public class PoliceDriver : MonoBehaviour
     public FlyingVehicle Car { get; private set; }
     public bool IsPursuing { get; private set; }
     public bool AtSlot { get; private set; }
+    // Set by PoliceDispatch: approach slot in the target's yaw frame, layer offset, and whether this
+    // unit may ram (only those on the target's layer).
+    public Vector3 ApproachSlot { get; set; } = new Vector3(8f, 0f, -8f);
+    public int LayerOffset { get; set; }
+    public bool MayRam { get; set; } = true;
 
     enum ChaseState { Approach, Ram, Recover }
     ChaseState state;
     float recoverUntil;
-    int side = 1;               // approach side in the target's frame: +1 right, -1 left
-    float lastTargetYaw; bool haveTargetYaw;
     bool contacted;
     Vector3 ramDir;
 
@@ -89,7 +94,6 @@ public class PoliceDriver : MonoBehaviour
         IsPursuing = true;
         Car.ReportContacts = true;
         state = ChaseState.Approach;
-        haveTargetYaw = false;
     }
 
     public void Patrol()
@@ -110,10 +114,38 @@ public class PoliceDriver : MonoBehaviour
 
     Vector3 Heading => Quaternion.Euler(0f, Car.Yaw, 0f) * Vector3.forward;
 
+    // Away from other pursuing police within separationRange, weighted 1 - d/range (horizontal push).
+    Vector3 Separation()
+    {
+        Vector3 sum = Vector3.zero;
+        var d = PoliceDispatch.Instance;
+        if (d == null) return sum;
+        Vector3 me = transform.position;
+        foreach (var u in d.Pursuing)
+        {
+            if (u == null || u == this) continue;
+            Vector3 away = me - u.transform.position;
+            float dist = away.magnitude;
+            if (dist >= separationRange || dist < 0.01f) continue;
+            away.y = 0f;
+            if (away.sqrMagnitude < 1e-4f) away = transform.right;
+            sum += away.normalized * (1f - dist / separationRange);
+        }
+        return sum;
+    }
+
+    // Desired heading plus the separation push.
+    float Separate(float yaw, float weight)
+    {
+        if (weight <= 0f) return yaw;
+        Vector3 dir = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward + Separation() * weight;
+        return dir.sqrMagnitude > 1e-4f ? YawOf(dir) : yaw;
+    }
+
     // Arrive at a point moving at pointVel: the approach speed is what the weak brakes can still stop
     // from. Throttle/brake hold the speed along the heading; the heading follows the wanted velocity
     // (or faces `face` once there).
-    void SteerTo(Vector3 point, Vector3 pointVel, float maxSpeed, float verticalSpeed, Vector3? face = null)
+    void SteerTo(Vector3 point, Vector3 pointVel, float maxSpeed, float verticalSpeed, Vector3? face = null, float separate = 0f)
     {
         Vector3 to = point - transform.position;
         to.y = 0f;
@@ -132,26 +164,22 @@ public class PoliceDriver : MonoBehaviour
         }
         Vector3 fwd = Heading;
         float throttle = (Vector3.Dot(desired, fwd) - Vector3.Dot(Car.Velocity, fwd)) / 2f;
-        Car.Drive(yaw, throttle, point.y + pointVel.y * 0.3f, verticalSpeed, Model);
+        Car.Drive(Separate(yaw, separate), throttle, point.y + pointVel.y * 0.3f, verticalSpeed, Model);
     }
+
+    // Plain point-to-point flight (transport to the station).
+    public void FlyTo(Vector3 point, float maxSpeed, float verticalSpeed) => SteerTo(point, Vector3.zero, maxSpeed, verticalSpeed);
+
+    // Brake to a stop and hold this height (driver down, mirror check).
+    public void Halt() => Car.Drive(Car.Yaw, -1f, transform.position.y, policeVerticalSpeed, Model);
 
     // ---------- chase ----------
 
     public void Chase(FlyingVehicle target)
     {
         AtSlot = false;
-        float dt = Mathf.Max(Time.deltaTime, 1e-4f);
         Vector3 me = transform.position, tp = target.transform.position, tv = target.Velocity;
         Quaternion tr = target.PlatformRotation;
-
-        // Approach on the side the target isn't turning toward.
-        float tyaw = target.Yaw;
-        if (haveTargetYaw)
-        {
-            float turn = Mathf.DeltaAngle(lastTargetYaw, tyaw) / dt;
-            if (Mathf.Abs(turn) > 10f) side = turn > 0f ? -1 : 1; // turning right: come in from the left
-        }
-        lastTargetYaw = tyaw; haveTargetYaw = true;
 
         Vector3 rel = tp - me;
         float dist = rel.magnitude;
@@ -163,9 +191,9 @@ public class PoliceDriver : MonoBehaviour
         {
             case ChaseState.Approach:
             {
-                Vector3 quarter = tp + tv * lead + tr * new Vector3(side * approachOffset.x, 0f, approachOffset.y);
-                SteerTo(quarter, tv, policeTopSpeed, policeVerticalSpeed);
-                if (dist < ramRange)
+                Vector3 slot = tp + tv * lead + tr * ApproachSlot + Vector3.up * (LayerOffset * TrafficAuthority.Spacing);
+                SteerTo(slot, tv, policeTopSpeed, policeVerticalSpeed, null, separationWeight);
+                if (MayRam && dist < ramRange)
                 {
                     state = ChaseState.Ram;
                     contacted = false;
@@ -187,7 +215,8 @@ public class PoliceDriver : MonoBehaviour
             {
                 // Brake and swing round toward the target before trying again.
                 bool facing = Vector3.Angle(Heading, flat) < 40f;
-                Car.Drive(YawOf(flat), facing ? 0.3f : -1f, tp.y, policeVerticalSpeed, Model);
+                Car.Drive(Separate(YawOf(flat), separationWeight), facing ? 0.3f : -1f,
+                          tp.y + LayerOffset * TrafficAuthority.Spacing, policeVerticalSpeed, Model);
                 if (Time.time >= recoverUntil) state = ChaseState.Approach;
                 break;
             }
@@ -230,7 +259,7 @@ public class PoliceDriver : MonoBehaviour
         Vector3 away = transform.position - point;
         away.y = 0f;
         away = away.sqrMagnitude > 0.01f ? away.normalized : Vector3.forward;
-        SteerTo(point + away * 12f + Vector3.up * 5f, Vector3.zero, 25f, policeVerticalSpeed, point);
+        SteerTo(point + away * 12f + Vector3.up * 5f, Vector3.zero, 25f, policeVerticalSpeed, point, separationWeight);
     }
 
     // ---------- shooting ----------

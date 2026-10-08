@@ -189,6 +189,7 @@ public static class TwinTowersBuilder
             float z = (i - (ParkedCarsOnStart - 1) * 0.5f) * 12f;
             var parked = CreateVehicle($"ParkedCar_{i}", parkedMats[i % parkedMats.Length]);
             parked.startParkedOnSurface = true;
+            parked.hasDriver = false;
             parked.transform.SetParent(startRoot, true);
             parked.transform.SetPositionAndRotation(
                 new Vector3(centerA.x - (deckOuter - 10f), DeckTop + CarHalfHeight, centerA.z + z),
