@@ -234,6 +234,7 @@ public static partial class CityDressing
     {
         public Material deck, rail, taxiPad;
         public readonly List<Bounds> solids = new List<Bounds>(); // every tower mass and feature, for overlap checks
+        public readonly List<Bounds> masses = new List<Bounds>(); // tower masses only (what decks may attach to)
         public readonly List<Bounds> decks = new List<Bounds>();  // placed skywalk decks
         public readonly List<Vector3> taxiPads = new List<Vector3>();
     }
@@ -263,9 +264,11 @@ public static partial class CityDressing
         return any;
     }
 
-    // Ring walkway round a tower at a layer: one deck slab per side, `widths` per side (0 south, 1 north,
-    // 2 west, 3 east; 0 = none), falling back to 8 / 4 m where that doesn't fit (lanes, keep-outs, other
-    // buildings). Railings on the outer edges with a 2 m gap at a taxi pad. Returns sides built.
+    // Ring walkway round a tower at a layer: deck slabs along each side (0 south, 1 north, 2 west, 3 east)
+    // `widths[side]` wide (0 = none), falling back to 8 / 4 m where that doesn't fit (lanes, keep-outs,
+    // other buildings). Decks only run where a wall of this tower actually backs them at that height
+    // (notched / stepped towers get pieces, never a slab hanging off empty space). Railings on the
+    // outer edges with a 2 m gap at a taxi pad. Returns pieces built.
     public static int AddSkywalkRing(Tower t, Transform parent, int layer, float[] widths, Kit kit, SkywalkKit sk,
                                      List<WalkRect> walk, System.Random rng)
     {
@@ -279,47 +282,99 @@ public static partial class CityDressing
         {
             float width = widths[side];
             if (width < 2f) continue;
-            foreach (float w in new[] { width, 8f, 4f })
+            bool alongX = side < 2;
+            float a0 = alongX ? fp.xMin : fp.yMin, a1 = alongX ? fp.xMax : fp.yMax;
+            foreach (var run in BackedRuns(t, fp, side, y))
             {
-                if (w > width) continue;
-                Rect r;
-                switch (side)
+                // Corner extensions for the south / north pieces that reach the footprint's ends.
+                float r0 = run.x, r1 = run.y;
+                if (alongX && r0 <= a0 + 0.5f) r0 -= wW;
+                if (alongX && r1 >= a1 - 0.5f) r1 += wE;
+                foreach (float w in new[] { width, 8f, 4f })
                 {
-                    case 0: r = new Rect(fp.xMin - wW, fp.yMin - w, fp.width + wW + wE, w); break;   // south, with corners
-                    case 1: r = new Rect(fp.xMin - wW, fp.yMax, fp.width + wW + wE, w); break;       // north
-                    case 2: r = new Rect(fp.xMin - w, fp.yMin, w, fp.height); break;                 // west
-                    default: r = new Rect(fp.xMax, fp.yMin, w, fp.height); break;                    // east
+                    if (w > width) continue;
+                    Rect r;
+                    switch (side)
+                    {
+                        case 0: r = Rect.MinMaxRect(r0, fp.yMin - w, r1, fp.yMin); break;
+                        case 1: r = Rect.MinMaxRect(r0, fp.yMax, r1, fp.yMax + w); break;
+                        case 2: r = Rect.MinMaxRect(fp.xMin - w, r0, fp.xMin, r1); break;
+                        default: r = Rect.MinMaxRect(fp.xMax, r0, fp.xMax + w, r1); break;
+                    }
+                    if (!PlaceDeck(root, r, y, kit, sk, t, walk, true)) continue;
+                    Vector3 outN = side == 0 ? Vector3.back : side == 1 ? Vector3.forward : side == 2 ? Vector3.left : Vector3.right;
+                    float edgeLen = alongX ? r.width : r.height;
+                    Vector3 edgeMid = new Vector3(r.center.x, y, r.center.y) + outN * ((alongX ? r.height : r.width) * 0.5f - 0.15f);
+                    Vector3 along = alongX ? Vector3.right : Vector3.forward;
+                    float gap = 2f, half = edgeLen * 0.5f;
+                    float gapAt = Mathf.Lerp(-half * 0.5f, half * 0.5f, (float)rng.NextDouble());
+                    RailRun(root, edgeMid, along, -half, gapAt - gap * 0.5f, sk);
+                    RailRun(root, edgeMid, along, gapAt + gap * 0.5f, half, sk);
+                    if (w >= 8f && edgeLen >= 12f)
+                    {
+                        var pad = Slab(root, "TaxiPad", edgeMid - outN * 2.2f + along * gapAt + Vector3.up * 0.02f,
+                                       alongX ? new Vector3(8f, 0.02f, 4f) : new Vector3(4f, 0.02f, 8f), sk.taxiPad);
+                        Street(pad.gameObject, kit, false);
+                        sk.taxiPads.Add(pad.position);
+                    }
+                    built++;
+                    break;
                 }
-                if (!PlaceDeck(root, r, y, kit, sk, t, walk, true)) continue;
-                // Railing on the outer edge with a taxi-pad gap in the middle.
-                Vector3 outN = side == 0 ? Vector3.back : side == 1 ? Vector3.forward : side == 2 ? Vector3.left : Vector3.right;
-                bool alongX = side < 2;
-                float edgeLen = alongX ? r.width : r.height;
-                Vector3 edgeMid = new Vector3(r.center.x, y, r.center.y) + outN * ((alongX ? r.height : r.width) * 0.5f - 0.15f);
-                Vector3 along = alongX ? Vector3.right : Vector3.forward;
-                float gap = 2f, half = edgeLen * 0.5f;
-                float gapAt = Mathf.Lerp(-half * 0.5f, half * 0.5f, (float)rng.NextDouble());
-                RailRun(root, edgeMid, along, -half, gapAt - gap * 0.5f, sk);
-                RailRun(root, edgeMid, along, gapAt + gap * 0.5f, half, sk);
-                if (w >= 8f)
-                {
-                    var pad = Slab(root, "TaxiPad", edgeMid - outN * 2.2f + along * gapAt + Vector3.up * 0.02f,
-                                   alongX ? new Vector3(8f, 0.02f, 4f) : new Vector3(4f, 0.02f, 8f), sk.taxiPad);
-                    Street(pad.gameObject, kit, false);
-                    sk.taxiPads.Add(pad.position);
-                }
-                built++;
-                break;
             }
         }
         return built;
     }
 
+    // Stretches (along the side) where one of the tower's masses forms the wall right behind the
+    // footprint edge at height y. Runs shorter than 6 m are dropped.
+    static List<Vector2> BackedRuns(Tower t, Rect fp, int side, float y)
+    {
+        var runs = new List<Vector2>();
+        bool alongX = side < 2;
+        float a0 = alongX ? fp.xMin : fp.yMin, a1 = alongX ? fp.xMax : fp.yMax;
+        float start = float.NaN, last = a0;
+        for (float a = a0 + 1f; a <= a1 - 0.99f; a += 2f)
+        {
+            Vector3 p = side switch
+            {
+                0 => new Vector3(a, y + 2f, fp.yMin + 0.5f),
+                1 => new Vector3(a, y + 2f, fp.yMax - 0.5f),
+                2 => new Vector3(fp.xMin + 0.5f, y + 2f, a),
+                _ => new Vector3(fp.xMax - 0.5f, y + 2f, a),
+            };
+            bool backed = false;
+            foreach (var b in t.masses)
+                if (b.min.y <= y + 0.5f && b.Contains(p)) { backed = true; break; }
+            if (backed && float.IsNaN(start)) start = a - 1f;
+            if (!backed && !float.IsNaN(start)) { if (a - 1f - start >= 6f) runs.Add(new Vector2(start, a - 1f)); start = float.NaN; }
+            last = a;
+        }
+        if (!float.IsNaN(start) && a1 - start >= 6f) runs.Add(new Vector2(start, a1));
+        return runs;
+    }
+
+    // A wall of some tower right behind point p (at deck height y)?
+    static bool Backed(SkywalkKit sk, Vector3 p, float y)
+    {
+        foreach (var b in sk.masses)
+            if (b.min.y <= y + 0.5f && b.max.y >= y + 3f && b.Contains(p)) return true;
+        return false;
+    }
+
     // A walkable bridge deck between two towers (axis-aligned rect at height y), railings on the long
     // sides. False if it would hit a lane, a keep-out or a building.
     // Bridges may run over ring decks (their top sits 2 cm lower, so there's no z-fighting).
+    // Both ends must land on a tower wall across the bridge's width.
     public static bool AddSkywalkBridge(Transform parent, Rect r, float y, bool spanAlongX, Kit kit, SkywalkKit sk, List<WalkRect> walk)
     {
+        for (int end = 0; end < 2; end++)
+            for (int k = -1; k <= 1; k++)
+            {
+                float across = spanAlongX ? r.center.y + k * r.height * 0.35f : r.center.x + k * r.width * 0.35f;
+                float at = spanAlongX ? (end == 0 ? r.xMin - 0.5f : r.xMax + 0.5f) : (end == 0 ? r.yMin - 0.5f : r.yMax + 0.5f);
+                Vector3 p = spanAlongX ? new Vector3(at, y + 2f, across) : new Vector3(across, y + 2f, at);
+                if (!Backed(sk, p, y)) return false;
+            }
         y -= 0.02f;
         if (!PlaceDeck(parent, r, y, kit, sk, null, walk, false)) return false;
         Vector3 along = spanAlongX ? Vector3.right : Vector3.forward;

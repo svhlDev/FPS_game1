@@ -34,6 +34,7 @@ public class ScenarioTest : MonoBehaviour
 
     IEnumerator Start()
     {
+        Application.runInBackground = true; // keep going when the window loses focus
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 60;
         t0 = Time.time;
@@ -45,6 +46,7 @@ public class ScenarioTest : MonoBehaviour
             case "push": yield return Push(); break;
             case "district": yield return District(); break;
             case "shots": yield return Shots(); break;
+            case "peds": yield return Peds(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -192,11 +194,80 @@ public class ScenarioTest : MonoBehaviour
             if (Mathf.Repeat(t, 15f) < 0.01f)
                 Log($"t {t:0}: street entries {entries} (on red {redEntries}), waiting at lights now {stoppedAtRed}, off-lane cars {offLane}, longest still {longestStill:0} s");
         }
+        // Where the long-standing street cars and the off-lane cars are.
+        foreach (var kv in stillSince)
+            if (kv.Key != null && Time.time - kv.Value > 30f)
+                Log($"  still {Time.time - kv.Value:0} s: {kv.Key.name} at {kv.Key.transform.position:F0} heading {kv.Key.transform.forward:F1} mode {kv.Key.Mode}");
+        int listed = 0;
+        foreach (var v in FlyingVehicle.Active)
+            if (v.path != null && !v.IsOccupied && v.Mode != FlightMode.Lane && v.GetComponent<PoliceDriver>() == null && listed++ < 12)
+                Log($"  off lane: {v.name} ({v.path.name}) at {v.transform.position:F0} mode {v.Mode} speed {v.Velocity.magnitude:0}");
         Log($"street intersection entries {entries}, on red {redEntries}; most waiting at lights {stoppedAtRedMax}; " +
             $"longest a street car stood still {longestStill:0} s; most sky/street cars off their lanes {offLaneMax}");
         Log(entries > 0 && redEntries == 0 ? "PASS no street car entered an intersection on red" : $"FAIL red-light entries {redEntries} of {entries}");
         Log(stoppedAtRedMax > 0 ? "PASS cars queue at red lights" : "WARN no car seen waiting at a light");
         Log(longestStill < 60f ? "PASS no gridlock (nobody stood still a minute)" : "FAIL a street car stood still over a minute");
+    }
+
+    // ---------- pedestrians ----------
+
+    // On the sidewalk by the avenue / south cross street corner: crowd counts, near-tier movement, waits
+    // at crosswalks, nobody falling through the world, a flee reaction, frame time.
+    IEnumerator Peds()
+    {
+        var fpc = FirstPersonController.Instance;
+        var ps = PedestrianSystem.Instance;
+        var graph = FindAnyObjectByType<WalkGraph>();
+        if (fpc == null || ps == null || graph == null) { Log($"FAIL setup (player {fpc != null}, peds {ps != null}, graph {graph != null})"); yield break; }
+        Log($"walk graph {graph.Count} nodes");
+        fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.LookRotation(Vector3.back));
+        yield return new WaitForSeconds(5f);
+
+        int frames = 0; float time = 0f, worst = 0f;
+        int maxNear = 0, waitingSeen = 0, fallen = 0;
+        var moved = new Dictionary<PedestrianSystem.Ped, Vector3>();
+        for (float t = 0f; t < 30f; t += Time.deltaTime)
+        {
+            yield return null;
+            frames++; time += Time.unscaledDeltaTime; worst = Mathf.Max(worst, Time.unscaledDeltaTime);
+            maxNear = Mathf.Max(maxNear, ps.NearAgents.Count);
+            if (frames % 30 != 0) continue;
+            foreach (var p in ps.All)
+            {
+                if (p.state == PedestrianSystem.State.Waiting) waitingSeen++;
+                if (p.pos.y < -2f) fallen++;
+            }
+            if (frames == 30) foreach (var p in ps.NearAgents) moved[p] = p.pos;
+        }
+        int active = 0, near = ps.NearAgents.Count;
+        foreach (var p in ps.All) if (p.state != PedestrianSystem.State.Gone && p.goal >= 0) active++;
+        int movedCount = 0;
+        foreach (var kv in moved) if (kv.Key.state != PedestrianSystem.State.Gone && (kv.Key.pos - kv.Value).magnitude > 5f) movedCount++;
+        Log($"active {active} of {ps.All.Count}, near now {near} (max {maxNear}); near agents that walked > 5 m in 30 s: {movedCount} of {moved.Count}; " +
+            $"waiting-at-crosswalk samples {waitingSeen}; fallen samples {fallen}; frame avg {1000f * time / frames:0.0} ms, worst {1000f * worst:0} ms");
+
+        // Danger: everyone near a spot should run.
+        PedestrianSystem.Ped target = null;
+        foreach (var p in ps.NearAgents) { target = p; break; }
+        int fled = 0, around = 0;
+        if (target != null)
+        {
+            Vector3 at = target.pos;
+            PedestrianSystem.ReportDanger(at);
+            yield return null; yield return null;
+            foreach (var p in ps.NearAgents)
+            {
+                if ((p.pos - at).sqrMagnitude > 25f * 25f) continue;
+                around++;
+                if (p.state == PedestrianSystem.State.Fleeing) fled++;
+            }
+        }
+        Log($"danger: {fled} of {around} near pedestrians within 25 m fled");
+        Log(active > ps.budget * 0.8f ? "PASS crowd populated" : "FAIL crowd thin");
+        Log(maxNear > 10 && movedCount > moved.Count / 2 ? "PASS near pedestrians walk" : "FAIL near pedestrians not walking");
+        Log(waitingSeen > 0 ? "PASS pedestrians wait at crosswalks" : "WARN no crosswalk waits seen");
+        Log(fallen == 0 ? "PASS nobody fell through" : "FAIL pedestrians fell");
+        Log(around > 0 && fled == around ? "PASS pedestrians flee danger" : "FAIL flee reaction");
     }
 
     // ---------- screenshots ----------
@@ -214,6 +285,25 @@ public class ScenarioTest : MonoBehaviour
         spec ??= "-28,181.6,0,90,0;0,650,-560,0,45;0,1.7,-160,0,-5;-40,8,-126,90,8;60,121.7,0,90,0;20,62,-60,40,10;230,300,-230,-45,25";
         string dir = Path.GetDirectoryName(Application.dataPath);
         int n = 0;
+        // "ped": look at a pedestrian (near tier first, then far), 6 m away.
+        var ps = PedestrianSystem.Instance;
+        if (ps != null)
+        {
+            Log($"pedestrians {ps.All.Count}, near {ps.NearAgents.Count}");
+            foreach (var who in new[] { ps.NearAgents.Count > 0 ? ps.NearAgents[0] : null, Far(ps) })
+            {
+                if (who == null) continue;
+                // Straight down from 7 m above (never inside a building).
+                cam.transform.SetPositionAndRotation(who.pos + Vector3.up * 7f, Quaternion.Euler(89f, 0f, 0f));
+                yield return null;
+                cam.transform.SetPositionAndRotation(who.pos + Vector3.up * 7f, Quaternion.Euler(89f, 0f, 0f));
+                yield return null;
+                ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"shot_ped{(who.IsNear ? "near" : "far")}.png"));
+                yield return null; yield return null;
+                Log($"ped shot {(who.IsNear ? "near" : "far")} at {who.pos:F1} state {who.state}; far drawn {ps.FarDrawn}, draw callbacks {ps.DrawCalls}, " +
+                    $"material {(ps.bodyMaterial != null ? ps.bodyMaterial.name + " instancing " + ps.bodyMaterial.enableInstancing : "null")}");
+            }
+        }
         foreach (var view in spec.Split(';'))
         {
             var v = view.Split(',');
@@ -228,6 +318,12 @@ public class ScenarioTest : MonoBehaviour
             n++;
         }
         yield return new WaitForSeconds(1f);
+    }
+
+    static PedestrianSystem.Ped Far(PedestrianSystem ps)
+    {
+        foreach (var p in ps.All) if (!p.IsNear && p.state != PedestrianSystem.State.Gone && p.goal >= 0) return p;
+        return null;
     }
 
     // ---------- push ----------

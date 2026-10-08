@@ -58,6 +58,9 @@ public class PerfProbe : MonoBehaviour
             if (args[i] == "-perflabel" && i + 1 < args.Length) label = args[i + 1];
         }
         if (!on) return;
+        // -noocclusion: occlusion culling off (comparison runs). TrafficSystem / pedestrians read it too.
+        if (System.Array.Exists(args, a => a == "-noocclusion"))
+            foreach (var c in Camera.allCameras) c.useOcclusionCulling = false;
         var probe = new GameObject("PerfProbe").AddComponent<PerfProbe>();
         probe.label = label;
     }

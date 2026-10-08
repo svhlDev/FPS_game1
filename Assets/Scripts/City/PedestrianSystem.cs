@@ -62,14 +62,29 @@ public class PedestrianSystem : MonoBehaviour
     WalkGraph graph;
     int[] component;
     List<List<int>> componentGoals, componentEntrances;
+    readonly List<int> walkNodes = new List<int>();
     static readonly List<(Vector3 p, float r, float t)> dangers = new List<(Vector3, float, float)>();
     int playerLayer;
 
     // Gunfire, crashes, explosions: everyone near flees.
-    public static void ReportDanger(Vector3 p, float radius = 30f) => dangers.Add((p, radius, Time.time));
+    public static void ReportDanger(Vector3 p, float radius = 30f)
+    {
+        // One report per spot is enough (bursts and scraping crashes repeat every frame).
+        foreach (var d in dangers) if (Time.time - d.t < 0.3f && (d.p - p).sqrMagnitude < 25f) return;
+        dangers.Add((p, radius, Time.time));
+    }
 
     void Awake() => Instance = this;
-    void OnDestroy() { if (Instance == this) Instance = null; }
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+        cullGroup?.Dispose();
+    }
+
+    void LateUpdate() { if (cullGroup != null) cullReady = true; }
+    // Far tier is drawn per camera (like the traffic): positions are gathered in Update.
+    void OnEnable() => UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += DrawFar;
+    void OnDisable() => UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= DrawFar;
 
     void Start()
     {
@@ -83,6 +98,9 @@ public class PedestrianSystem : MonoBehaviour
         cube = tmp.GetComponent<MeshFilter>().sharedMesh;
         Destroy(tmp);
         BuildComponents();
+        // Walk nodes in parts of the graph with at least two goals (initial placement).
+        for (int i = 0; i < graph.Count; i++)
+            if (graph.kinds[i] == WalkGraph.Kind.Walk && componentGoals[component[i]].Count >= 2) walkNodes.Add(i);
 
         // Initial crowd: spread over the walk nodes of every part of the graph.
         var rng = new System.Random(7);
@@ -90,7 +108,7 @@ public class PedestrianSystem : MonoBehaviour
         {
             var p = new Ped();
             int start = RandomStart(rng, false);
-            if (start < 0) break;
+            if (start < 0) continue;
             Place(p, start, rng);
             peds.Add(p);
         }
@@ -138,13 +156,7 @@ public class PedestrianSystem : MonoBehaviour
             int c = rng.Next(componentGoals.Count);
             if (componentGoals[c].Count < 2) continue;
             if (!entranceOutOfView)
-            {
-                // Anywhere on the walkways of that part.
-                int node = rng.Next(graph.Count);
-                for (int k = 0; k < 40 && (component[node] != c || graph.kinds[node] != WalkGraph.Kind.Walk); k++) node = rng.Next(graph.Count);
-                if (component[node] == c && graph.kinds[node] == WalkGraph.Kind.Walk) return node;
-                continue;
-            }
+                return walkNodes.Count > 0 ? walkNodes[rng.Next(walkNodes.Count)] : -1; // anywhere with somewhere to go
             var ents = componentEntrances[c];
             if (ents.Count == 0) continue;
             int e = ents[rng.Next(ents.Count)];
@@ -312,6 +324,18 @@ public class PedestrianSystem : MonoBehaviour
         bool roofRider = fpc != null && fpc.isActiveAndEnabled && fpc.Platform != null;
         float near2 = nearRadius * nearRadius, far2 = farRadius * farRadius;
         bodyMatrices.Clear(); visorMatrices.Clear();
+        // Far tier visibility (frustum + baked occlusion) from last frame's camera culling.
+        var cam = Camera.main;
+        bool useGroup = TrafficSystem.OcclusionEnabled && cam != null && cam.useOcclusionCulling;
+        if (useGroup && (cullGroup == null || cullGroup.targetCamera != cam))
+        {
+            cullGroup?.Dispose();
+            spheres = new BoundingSphere[peds.Count];
+            cullGroup = new CullingGroup { targetCamera = cam };
+            cullGroup.SetBoundingSpheres(spheres);
+            cullGroup.SetBoundingSphereCount(peds.Count);
+            cullReady = false;
+        }
 
         for (int i = 0; i < peds.Count; i++)
         {
@@ -328,13 +352,18 @@ public class PedestrianSystem : MonoBehaviour
             else
             {
                 p.pos += want * dt;
+                if (useGroup)
+                {
+                    bool hidden = cullReady && !cullGroup.IsVisible(i);
+                    spheres[i] = new BoundingSphere(p.pos + Vector3.up, 1.5f);
+                    if (hidden) continue;
+                }
                 if (want.sqrMagnitude > 0.01f) p.yaw = Mathf.Atan2(want.x, want.z) * Mathf.Rad2Deg;
                 var rot = Quaternion.Euler(0f, p.yaw, 0f);
                 bodyMatrices.Add(Matrix4x4.TRS(p.pos + Vector3.up * 0.875f, rot, new Vector3(0.6f, 0.875f, 0.6f)));
                 visorMatrices.Add(Matrix4x4.TRS(p.pos + Vector3.up * 1.425f + rot * new Vector3(0f, 0f, 0.27f), rot, new Vector3(0.5f, 0.12f, 0.12f)));
             }
         }
-        DrawFar();
     }
 
     static long Cell(Vector3 p) => ((long)Mathf.FloorToInt(p.x / 2f) << 32) ^ (uint)Mathf.FloorToInt(p.z / 2f);
@@ -440,15 +469,23 @@ public class PedestrianSystem : MonoBehaviour
         if (p.pos.y < -5f) Despawn(p);
     }
 
-    void DrawFar()
+    public int FarDrawn => bodyMatrices.Count;
+    CullingGroup cullGroup;
+    BoundingSphere[] spheres;
+    bool cullReady;
+    public int DrawCalls { get; private set; }
+
+    void DrawFar(UnityEngine.Rendering.ScriptableRenderContext context, Camera cam)
     {
+        DrawCalls++;
         if (bodyMaterial == null || bodyMatrices.Count == 0) return;
-        var rp = new RenderParams(bodyMaterial) { shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
+        if (cam.cameraType == CameraType.Preview || cam.cameraType == CameraType.Reflection) return;
+        var rp = new RenderParams(bodyMaterial) { camera = cam, shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
                                                    worldBounds = new Bounds(Vector3.zero, Vector3.one * 100000f) };
         for (int s = 0; s < bodyMatrices.Count; s += 1023)
             Graphics.RenderMeshInstanced(rp, capsule, 0, bodyMatrices, Mathf.Min(1023, bodyMatrices.Count - s), s);
         if (visorMaterial == null) return;
-        var rv = new RenderParams(visorMaterial) { shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
+        var rv = new RenderParams(visorMaterial) { camera = cam, shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
                                                     worldBounds = rp.worldBounds };
         for (int s = 0; s < visorMatrices.Count; s += 1023)
             Graphics.RenderMeshInstanced(rv, cube, 0, visorMatrices, Mathf.Min(1023, visorMatrices.Count - s), s);

@@ -272,7 +272,8 @@ public static class DistrictBuilder
         var crossings = CityDressing.BuildDistrictStreets(cityRoot, streets, blocks, decoRng, kit, walk);
         var signalsRoot = new GameObject("TrafficSignals").transform;
         signalsRoot.SetParent(cityRoot, false);
-        foreach (var x in crossings) CityDressing.BuildSignal(signalsRoot, x, (float)decoRng.NextDouble() * 48f, kit);
+        var signals = new List<TrafficSignal>();
+        foreach (var x in crossings) signals.Add(CityDressing.BuildSignal(signalsRoot, x, (float)decoRng.NextDouble() * 48f, kit));
         if (stationCell != null)
         {
             float z = Mathf.Clamp(stationCell.rect.yMax - 20f, stationCell.rect.yMin + 6f, stationCell.rect.yMax - 6f);
@@ -319,7 +320,7 @@ public static class DistrictBuilder
             if (c.quarter == Quarter.Apartments && !c.hollow) CityDressing.AddBalconies(c.tower, decoRng, kit); // denser balconies
         foreach (var t in towers)
         {
-            foreach (var b in t.masses) sk.solids.Add(b);
+            foreach (var b in t.masses) { sk.solids.Add(b); sk.masses.Add(b); }
             foreach (var b in t.features) sk.solids.Add(b);
         }
 
@@ -364,6 +365,14 @@ public static class DistrictBuilder
         foreach (var b in blocks)
             if (QuarterOf(b) == Quarter.Market) CityDressing.AddMarketStalls(cityRoot, b, decoRng, kit);
 
+        // ---------- pedestrians ----------
+        var graph = DistrictWalkGraph.Build(cityRoot, walk, sk.masses, sk.taxiPads, signals);
+        var peds = new GameObject("Pedestrians").AddComponent<PedestrianSystem>();
+        peds.bodyMaterial = GetMaterial("PedestrianBody", new Color(0.32f, 0.3f, 0.34f));
+        peds.visorMaterial = GetUnlitMaterial("PedestrianVisor", new Color(0.4f, 0.8f, 1f), 1.6f);
+        int entrances = 0, pads = 0;
+        foreach (var k in graph.kinds) { if (k == WalkGraph.Kind.Entrance) entrances++; else if (k == WalkGraph.Kind.TaxiPad) pads++; }
+
         CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, 2400f, new[] { 15f, 35f }, kit);
         CityDressing.AddCloudDeck(cityRoot, Vector3.zero, 6000f, new[] { 330f, 360f }, Vector3.forward);
         CityDressing.AddHeightFog();
@@ -379,10 +388,21 @@ public static class DistrictBuilder
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
         EditorSceneManager.SaveScene(scene, ScenePath);
+
+        // Occlusion culling bake (tower masses, skywalks and bridges are occluders; decoration, streets
+        // and cars only occludees). Re-baked on every rebuild.
+        StaticOcclusionCulling.smallestOccluder = 5f;
+        StaticOcclusionCulling.smallestHole = 0.5f;
+        StaticOcclusionCulling.backfaceThreshold = 100f;
+        var bakeStart = System.DateTime.Now;
+        bool baked = StaticOcclusionCulling.Compute();
+        Debug.Log($"District occlusion bake {(baked ? "done" : "FAILED")} in {(System.DateTime.Now - bakeStart).TotalSeconds:0} s");
+        EditorSceneManager.SaveScene(scene, ScenePath);
         Selection.activeGameObject = fpc.gameObject;
         Debug.Log($"District built: {cells.Count} towers, {skyLanes.Count} sky loops, {streetLanes.Count} street loops, " +
                   $"{carIndex} sky cars + {streetCars} street cars + {PoliceCount} police, {crossings.Count} signals, " +
-                  $"{sk.decks.Count} skywalk decks ({bridges} street bridges), {walk.Count} walk areas.");
+                  $"{sk.decks.Count} skywalk decks ({bridges} street bridges), {walk.Count} walk areas, " +
+                  $"walk graph {graph.Count} nodes ({entrances} entrances, {pads} taxi pads).");
     }
 
     // ---------- layout helpers ----------
@@ -603,16 +623,16 @@ public static class DistrictBuilder
         if (st.northSouth)
             poly = new[]
             {
-                new Vector2(c + off, -e), new Vector2(c + off, e), new Vector2(c + 20f, e + 30f), new Vector2(c - 20f, e + 30f),
-                new Vector2(c - off, e), new Vector2(c - off, -e), new Vector2(c - 20f, -e - 30f), new Vector2(c + 20f, -e - 30f),
+                new Vector2(c + off, -e), new Vector2(c + off, e), new Vector2(c + 30f, e + 40f), new Vector2(c - 30f, e + 40f),
+                new Vector2(c - off, e), new Vector2(c - off, -e), new Vector2(c - 30f, -e - 40f), new Vector2(c + 30f, -e - 40f),
             };
         else
             poly = new[]
             {
-                new Vector2(-e, c - off), new Vector2(e, c - off), new Vector2(e + 30f, c - 20f), new Vector2(e + 30f, c + 20f),
-                new Vector2(e, c + off), new Vector2(-e, c + off), new Vector2(-e - 30f, c + 20f), new Vector2(-e - 30f, c - 20f),
+                new Vector2(-e, c - off), new Vector2(e, c - off), new Vector2(e + 40f, c - 30f), new Vector2(e + 40f, c + 30f),
+                new Vector2(e, c + off), new Vector2(-e, c + off), new Vector2(-e - 40f, c + 30f), new Vector2(-e - 40f, c - 30f),
             };
-        return Rounded(poly, 12f, y);
+        return Rounded(poly, 20f, y);
     }
 
     static void PlaceOnLane(FlyingVehicle v, Transform parent, LanePath path, float start, int level, float speed)

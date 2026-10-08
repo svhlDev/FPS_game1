@@ -360,6 +360,7 @@ public class OfficerAgent : MonoBehaviour
 
     void ShowTracer(Vector3 a, Vector3 b, Material mat, Color tint)
     {
+        PedestrianSystem.ReportDanger(a);
         if (mat == null) return;
         if (tracer == null)
         {

@@ -118,6 +118,10 @@ public class FlyingVehicle : MonoBehaviour
     public float yieldHorizon = 3f;
     [Tooltip("Unoccupied cars farther than this from the camera skip collision and just follow their lane.")]
     public float physicsLodRadius = 300f;
+    [Tooltip("Looks this far ahead for bends and slows so the magnet can hold the turn.")]
+    public float curveLookahead = 25f;
+    [Tooltip("Share of magnetStrength the AI will use as sideways acceleration in a bend.")]
+    public float curveGrip = 0.6f;
     [Tooltip("Looks this far down its lane for stops (red cones, disabled cars) to route round.")]
     public float avoidLookahead = 80f;
     [Tooltip("Margin round a stop cone that counts as blocked.")]
@@ -373,8 +377,9 @@ public class FlyingVehicle : MonoBehaviour
         {
             case FlightMode.Lane: UpdateLaneMagnetic(kb, mouse); break;
             case FlightMode.Layer:
-                // Traffic knocked off its lane flies back, unless it's settling onto a surface.
-                if (IsAI && !parked && !SurfaceBelow()) UpdateRecover(); else UpdateLayer(kb, mouse);
+                // Traffic knocked off its lane flies back. Only a driverless car settles onto a surface
+                // and parks (street traffic rides half a metre over the road, so it would park at once).
+                if (IsAI && !parked && (hasDriver || !SurfaceBelow())) UpdateRecover(); else UpdateLayer(kb, mouse);
                 break;
             case FlightMode.Free:
                 if (IsAI) UpdateRecover(); else UpdateFree(kb, mouse);
@@ -739,6 +744,19 @@ public class FlyingVehicle : MonoBehaviour
             target = Mathf.Min(target, Mathf.Max(0f, follow));
         }
 
+        // Slow for bends the magnet couldn't hold at speed (tight corners, street U-turns).
+        if (path != null)
+        {
+            // Two windows: the full lookahead and half of it (catches short, sharp corners).
+            Vector3 f0 = path.SmoothForward(distance);
+            for (int k = 1; k <= 2; k++)
+            {
+                float look = curveLookahead * k * 0.5f;
+                float turn = Vector3.Angle(f0, path.SmoothForward(distance + look)) * Mathf.Deg2Rad;
+                if (turn > 0.15f) target = Mathf.Min(target, Mathf.Sqrt(magnetStrength * curveGrip * look / turn));
+            }
+        }
+
         // Street level: stop at red lights (and amber, when there's room to stop).
         if (mine.layer == 0 && TrafficSignal.All.Count > 0)
             target = Mathf.Min(target, TrafficSignal.StreetLimit(me, fwd, Vector3.Dot(velocity, fwd), braking, carLength * 0.5f, followGain));
@@ -919,6 +937,7 @@ public class FlyingVehicle : MonoBehaviour
         ob.velocity -= n * (j * invB) - tangential * scrapeFriction * fB;
         me.AddImpact(j * invA);
         ob.AddImpact(j * invB);
+        if (-vn > 15f) PedestrianSystem.ReportDanger(transform.position); // a crash: people near it flee
     }
 
     // Static geometry, or a cheap civilian-vs-civilian contact.
@@ -931,6 +950,7 @@ public class FlyingVehicle : MonoBehaviour
         if (otherCar != null) OnCarContact(otherCar, Mathf.Max(0f, -vn));
         else if (vn < 0f && Driven == this) PoliceDispatch.Instance?.OnPlayerImpact(this, -vn);
         if (vn >= 0f) return;
+        if (-vn > 15f) PedestrianSystem.ReportDanger(transform.position);
 
         if (otherCar != null)
         {

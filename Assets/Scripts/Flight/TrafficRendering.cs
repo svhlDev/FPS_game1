@@ -37,6 +37,14 @@ public partial class TrafficSystem
     static readonly Plane[] frustum = new Plane[6];
     static int trafficLayer = -1;
 
+    // Occlusion: a CullingGroup on the main camera with one sphere per car. It uses the scene's baked
+    // occlusion data, so cars hidden behind buildings aren't drawn. Results lag a frame (the spheres
+    // are padded for that). Off with -noocclusion (benchmark comparison) or when there's no bake.
+    static CullingGroup cullGroup;
+    static Camera cullCamera;
+    static BoundingSphere[] spheres = new BoundingSphere[256];
+    public static bool OcclusionEnabled = !System.Array.Exists(System.Environment.GetCommandLineArgs(), a => a == "-noocclusion");
+
     // Take over drawing this car. Parts whose material can't be instanced keep their renderer.
     public static void AddRenderable(FlyingVehicle car)
     {
@@ -68,6 +76,36 @@ public partial class TrafficSystem
     void OnDisable() => RenderPipelineManager.beginCameraRendering -= DrawForCamera;
 
     static readonly ProfilerMarker DrawMarker = new ProfilerMarker("TrafficSystem.Draw");
+    static int groupCount = -1;
+    static bool groupValid;
+
+    // Spheres follow the cars; the camera's culling computes their visibility this frame and it is read
+    // next frame. A changed car count invalidates the results for one frame (everything is drawn).
+    static void UpdateCullGroup(Camera cam)
+    {
+        if (cullGroup == null || cullCamera != cam)
+        {
+            cullGroup?.Dispose();
+            cullGroup = new CullingGroup { targetCamera = cam };
+            cullCamera = cam;
+            cullGroup.SetBoundingSpheres(spheres);
+            groupCount = -1;
+        }
+        int n = drawnCars.Count;
+        if (spheres.Length < n)
+        {
+            spheres = new BoundingSphere[Mathf.NextPowerOfTwo(n)];
+            cullGroup.SetBoundingSpheres(spheres);
+            groupCount = -1;
+        }
+        for (int i = 0; i < n; i++)
+        {
+            var car = drawnCars[i];
+            spheres[i] = new BoundingSphere(car != null ? car.transform.position : Vector3.zero, 6f);
+        }
+        groupValid = n == groupCount;
+        if (!groupValid) { cullGroup.SetBoundingSphereCount(n); groupCount = n; }
+    }
 
     static void DrawForCamera(ScriptableRenderContext context, Camera cam)
     {
@@ -81,6 +119,9 @@ public partial class TrafficSystem
         Vector3 camPos = cam.transform.position;
         GeometryUtility.CalculateFrustumPlanes(cam, frustum);
 
+        bool useGroup = OcclusionEnabled && cam == Camera.main && cam.useOcclusionCulling;
+        if (useGroup) UpdateCullGroup(cam);
+
         foreach (var b in batchList) b.matrices.Clear();
         for (int i = 0; i < drawnCars.Count; i++)
         {
@@ -89,6 +130,7 @@ public partial class TrafficSystem
             Vector3 pos = car.transform.position;
             if ((pos - camPos).sqrMagnitude > cull2) continue;
             if (!GeometryUtility.TestPlanesAABB(frustum, new Bounds(pos, CarBoundsSize))) continue;
+            if (useGroup && groupValid && !cullGroup.IsVisible(i)) continue; // behind a building (last frame)
             foreach (var p in drawParts[car])
             {
                 var mat = p.renderer.sharedMaterial;

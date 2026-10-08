@@ -311,6 +311,7 @@ public class PoliceDriver : MonoBehaviour
 
     void ShowTracer(Vector3 a, Vector3 b)
     {
+        PedestrianSystem.ReportDanger(a); // gunfire: people near the shooter flee
         if (tracerMaterial == null) return;
         if (tracer == null)
         {

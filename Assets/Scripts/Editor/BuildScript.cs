@@ -41,6 +41,16 @@ public static class BuildScript
         if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
     }
 
+    // District only (batch: -executeMethod BuildScript.RebuildDistrict).
+    public static void RebuildDistrict()
+    {
+        bool ok = true;
+        try { DistrictBuilder.Build(); }
+        catch (System.Exception e) { Debug.LogException(e); ok = false; }
+        AssetDatabase.SaveAssets();
+        if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
+    }
+
     // Sky Avenue only, for PerfProbe frame-time runs (Builds/Bench/Bench.exe -perfprobe -perflabel X).
     //   Batch mode: Unity.exe -batchmode -quit -projectPath <repo> -executeMethod BuildScript.BuildBenchmark -logFile Builds/bench_build.log
     [MenuItem("Tools/Build Benchmark (Sky Avenue)")]
