@@ -483,7 +483,7 @@ public static partial class CityDressing
             if (kind == 0) Solid(plaza, "Bench", p + Vector3.up * 0.25f, new Vector3(2.2f, 0.5f, 0.7f), benchMat);
             else if (kind == 1)
             {
-                Solid(plaza, "Stall", p + Vector3.up * 1.2f, new Vector3(3f, 2.4f, 2.4f), benchMat);
+                Flammable.Add(Solid(plaza, "Stall", p + Vector3.up * 1.2f, new Vector3(3f, 2.4f, 2.4f), benchMat).gameObject, Flammable.Kind.Prop);
                 var awn = Slab(plaza, "StallAwning", p + Vector3.up * 2.55f, new Vector3(3.6f, 0.15f, 3f), kit.neon[rng.Next(kit.neon.Length)]);
                 Street(awn.gameObject, kit, false);
             }
@@ -518,11 +518,12 @@ public static partial class CityDressing
         return t;
     }
 
-    static void Solid(Transform parent, string name, Vector3 center, Vector3 size, Material mat)
+    static Transform Solid(Transform parent, string name, Vector3 center, Vector3 size, Material mat)
     {
         var t = Slab(parent, name, center, size, mat);
         t.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         MarkStatic(t.gameObject, false);
+        return t;
     }
 
     // ---------- market ----------
@@ -544,7 +545,8 @@ public static partial class CityDressing
                                       : new Vector3(e == 2 ? block.xMin : block.xMax, 0f, block.yMin + s);
                 Vector3 c = edge + outN * 1.4f; // against the building side of the sidewalk
                 Vector3 size = alongX ? new Vector3(3f, 2.3f, 2f) : new Vector3(2f, 2.3f, 3f);
-                Solid(root, "MarketStall", c + Vector3.up * (KerbHeight + 1.15f), size, kit.decoDark);
+                var stall = Solid(root, "MarketStall", c + Vector3.up * (KerbHeight + 1.15f), size, kit.decoDark);
+                Flammable.Add(stall.gameObject, Flammable.Kind.Prop);
                 var awn = Slab(root, "MarketAwning", c + outN * 0.6f + Vector3.up * (KerbHeight + 2.45f),
                                alongX ? new Vector3(3.4f, 0.12f, 3.2f) : new Vector3(3.2f, 0.12f, 3.4f), kit.neon[rng.Next(kit.neon.Length)]);
                 Street(awn.gameObject, kit, false);

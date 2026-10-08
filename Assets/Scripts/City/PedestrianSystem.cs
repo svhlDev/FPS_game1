@@ -263,6 +263,7 @@ public class PedestrianSystem : MonoBehaviour
         // Near pedestrians have no per-part hit colliders (cost); their CharacterController is the hit surface.
         CharacterFigure.Build(go.transform, CharacterFigure.Role.Civilian, rand, h, false, false);
         go.AddComponent<FigureAnimator>();
+        Flammable.Add(go, Flammable.Kind.Character);
         return go.transform;
     }
 

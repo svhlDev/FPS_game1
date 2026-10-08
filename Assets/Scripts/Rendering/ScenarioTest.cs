@@ -48,6 +48,7 @@ public class ScenarioTest : MonoBehaviour
             case "shots": yield return Shots(); break;
             case "peds": yield return Peds(); break;
             case "figures": yield return Figures(); break;
+            case "damage": yield return DamageTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -269,6 +270,156 @@ public class ScenarioTest : MonoBehaviour
         Log(waitingSeen > 0 ? "PASS pedestrians wait at crosswalks" : "WARN no crosswalk waits seen");
         Log(fallen == 0 ? "PASS nobody fell through" : "FAIL pedestrians fell");
         Log(around > 0 && fled == around ? "PASS pedestrians flee danger" : "FAIL flee reaction");
+    }
+
+    // ---------- car damage, fire, explosions, laser ----------
+
+    IEnumerator DamageTest()
+    {
+        var fpc = FirstPersonController.Instance;
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var cam = Camera.main;
+        IEnumerator ShotAt(string name, Vector3 target, Vector3 from)
+        {
+            cam.transform.SetParent(null);
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(target - from));
+            yield return null;
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(target - from));
+            yield return null;
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, "dmg_" + name + ".png"));
+            yield return null;
+        }
+        var pink = FlyingVehicle.PinkCar;
+        Log(pink != null ? $"pink car present: {pink.name}, top speed {pink.middleLaneMaxSpeed:0} m/s, turn {pink.headingTurnRate:0} deg/s"
+                         : "no pink car this run (1 in 300 per traffic car)");
+        var body = FlyingVehicle.Active[0].GetComponentInChildren<BoxCollider>();
+        Log($"car body size {Vector3.Scale(body.size, body.transform.lossyScale)}");
+
+        // 1. A real crash: the player's car into a tower face at 40 m/s.
+        var car = PickTopCar();
+        car.EjectDriver(-1);
+        car.Enter(fpc);
+        float h0 = car.Health.Health;
+        Vector3 wallDir = Vector3.zero; float wallDist = 0f;
+        foreach (var d in new[] { Vector3.right, Vector3.left, Vector3.forward, Vector3.back })
+            if (Physics.Raycast(car.transform.position, d, out var wh, 60f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                && wh.collider.GetComponentInParent<FlyingVehicle>() == null) { wallDir = d; wallDist = wh.distance; break; }
+        if (wallDir != Vector3.zero)
+        {
+            car.DebugPlace(car.transform.position, Quaternion.LookRotation(wallDir), wallDir * 40f);
+            for (int i = 0; i < 40; i++) { car.DebugThrottle = 1f; car.DebugAimAt(car.transform.position + wallDir * 10f); yield return new WaitForSeconds(0.05f); }
+            car.DebugThrottle = 0f;
+            Log($"crash into a wall {wallDist:0} m away at 40 m/s: health {h0:0} -> {car.Health.Health:0} ({car.Health.Fraction:P0})");
+            Log(car.Health.Health < h0 ? "PASS crashing damages the car" : "FAIL no crash damage");
+        }
+        else Log("WARN no wall found for the crash test");
+        yield return ShotAt("crashed", car.transform.position, car.transform.position + new Vector3(8f, 4f, 8f));
+        car.Health.Init(car.Health.maxHealth); // repaired, so it doesn't go critical and explode with us inside
+
+        // 2. Damage stages on a traffic car.
+        var stage = PickNearLaneCar(car.transform.position, 250f);
+        if (stage != null)
+        {
+            stage.Health.Damage(stage.Health.maxHealth * 0.45f, stage.transform.position + stage.transform.right * 2f, stage.transform.right);
+            yield return new WaitForSeconds(0.3f);
+            yield return ShotAt("55pct", stage.transform.position, stage.transform.position + stage.transform.right * 10f + Vector3.up * 3f);
+            stage.Health.Damage(stage.Health.maxHealth * 0.38f, stage.transform.position + stage.transform.forward * 4f, stage.transform.forward);
+            float y0 = stage.transform.position.y;
+            yield return new WaitForSeconds(1.5f);
+            Log($"critical: health {stage.Health.Fraction:P0}, state {stage.Health.Current}, mode {stage.Mode}, fell {y0 - stage.transform.position.y:0.0} m in 1.5 s");
+            Log(stage.Health.Critical || stage.Health.Wrecked ? "PASS critical: nosedive" : "FAIL not critical");
+            yield return ShotAt("critical", stage.transform.position, stage.transform.position + stage.transform.right * 12f + Vector3.up * 4f);
+        }
+
+        // 3. Chain reaction: blow up a car in the middle of traffic.
+        var bomb = PickNearLaneCar(car.transform.position, 400f, 3);
+        if (bomb != null)
+        {
+            var hp = new Dictionary<FlyingVehicle, float>();
+            foreach (var v in FlyingVehicle.Active) if (v.Health != null) hp[v] = v.Health.Health;
+            Vector3 at = bomb.transform.position;
+            int frames = 0; float worst = 0f, total = 0f;
+            bomb.Health.Damage(10000f, at, Vector3.up);
+            yield return ShotAt("explosion", at, at + new Vector3(25f, 10f, 25f));
+            for (float t = 0f; t < 10f; t += Time.unscaledDeltaTime)
+            {
+                yield return null;
+                frames++; total += Time.unscaledDeltaTime; worst = Mathf.Max(worst, Time.unscaledDeltaTime);
+            }
+            int damaged = 0, wrecks = 0, burning = 0;
+            foreach (var v in FlyingVehicle.Active)
+            {
+                if (v == bomb || v.Health == null) continue;
+                if (hp.TryGetValue(v, out float before) && v.Health.Health < before - 1f) damaged++;
+                if (v.Health.Wrecked) wrecks++;
+                if (v.Health.Burning) burning++;
+            }
+            Log($"chain: {damaged} other cars damaged, {wrecks} wrecks, {burning} burning; fire patches {FireSystem.PatchCount}, chunks {FireSystem.ChunkCount}; " +
+                $"frames avg {1000f * total / Mathf.Max(1, frames):0.0} ms, worst {1000f * worst:0} ms");
+            Log(damaged > 0 ? "PASS explosion damages neighbours" : "WARN explosion hit nothing (sparse spot)");
+            Log(FireSystem.PatchCount > 0 ? "PASS fire chunks landed as patches" : "FAIL no fire patches");
+            yield return ShotAt("aftermath", at + Vector3.down * 20f, at + new Vector3(30f, 15f, 30f));
+        }
+
+        // 4. Fire pooling on a car ignites it: pour onto the player's (stopped, repaired) car.
+        car.Health.Init(car.Health.maxHealth);
+        car.DebugPlace(car.transform.position, car.transform.rotation, Vector3.zero);
+        for (int i = 0; i < 4; i++)
+        {
+            FireSystem.Spray(car.transform.position + Vector3.up * 5f, Vector3.zero, 3, 0.3f, 1.2f);
+            yield return new WaitForSeconds(0.25f);
+        }
+        yield return new WaitForSeconds(2f);
+        Log($"poured fire on the player's car: burning {car.Health.Burning}, health {car.Health.Fraction:P0}, player still driving {FlyingVehicle.Driven == car}");
+        Log(car.Health.Burning ? "PASS fire pooled on a car ignites it" : car.Health.Fraction < 0.99f ? "WARN fire hurt the car but didn't ignite it" : "FAIL fire did nothing");
+        yield return ShotAt("burning", car.transform.position, car.transform.position + new Vector3(10f, 5f, 10f));
+
+        // 5. Laser: lethal force on the player's car (repaired, not burning); wait for police to close in.
+        // A fresh car for it (the burning one may be lost), next to a police car (45 m off its side,
+        // same height), so the test doesn't depend on chases.
+        PoliceDriver near = null;
+        foreach (var pd in FindObjectsByType<PoliceDriver>(FindObjectsSortMode.None))
+            if (pd.Car.Health == null || pd.Car.Health.Current == VehicleHealth.State.Ok) { near = pd; break; }
+        if (near == null) { Log("WARN no police car left for the laser test"); yield break; }
+        if (FlyingVehicle.Driven != null) FlyingVehicle.Driven.Exit(false);
+        car = PickNearLaneCar(near.transform.position, 2000f, 2);
+        if (car == null) { Log("WARN no car for the laser test"); yield break; }
+        car.EjectDriver(-1);
+        car.Enter(FirstPersonController.Instance);
+        car.DebugPlace(near.transform.position + near.transform.right * 45f, near.transform.rotation, Vector3.zero);
+        PoliceDispatch.Ensure().DebugStartPursuit(2);
+        PoliceDispatch.Instance.DebugForce(PoliceDispatch.Force.Lethal);
+        float wait = 0f;
+        while (wait < 40f && NearestPolice(car) > 90f) { wait += 0.5f; yield return new WaitForSeconds(0.5f); }
+        Log($"police within {NearestPolice(car):0} m after {wait:0} s");
+        float hl = car.Health.Health;
+        for (float t = 0f; t < 15f && car.Health.Current == VehicleHealth.State.Ok; t += 0.5f) yield return new WaitForSeconds(0.5f);
+        Log($"laser: player car health {hl:0} -> {car.Health.Health:0}, state {car.Health.Current}; beam frames {PoliceDriver.LaserFireFrames}, on target {PoliceDriver.LaserHitFrames}");
+        Log(car.Health.Health < hl ? "PASS police laser damages the car" : "FAIL laser never hit");
+        var cop = NearestPoliceCar(car);
+        if (cop != null) yield return ShotAt("laser", car.transform.position, (car.transform.position + cop.transform.position) * 0.5f + Vector3.up * 15f + Vector3.Cross(cop.transform.position - car.transform.position, Vector3.up).normalized * 25f);
+    }
+
+    PoliceDriver NearestPoliceCar(FlyingVehicle car)
+    {
+        PoliceDriver best = null; float bd = float.MaxValue;
+        var d = PoliceDispatch.Instance;
+        if (d == null) return null;
+        foreach (var u in d.Pursuing) if (u != null && Vector3.Distance(u.transform.position, car.transform.position) < bd) { bd = Vector3.Distance(u.transform.position, car.transform.position); best = u; }
+        return best;
+    }
+
+    static FlyingVehicle PickNearLaneCar(Vector3 near, float within, int skip = 0)
+    {
+        foreach (var v in FlyingVehicle.Active)
+        {
+            if (v.path == null || v.Mode != FlightMode.Lane || v.IsOccupied || v.GetComponent<PoliceDriver>() != null) continue;
+            if (v.Health == null || v.Health.Current != VehicleHealth.State.Ok) continue;
+            if ((v.transform.position - near).sqrMagnitude > within * within) continue;
+            if (skip-- > 0) continue;
+            return v;
+        }
+        return null;
     }
 
     // ---------- character figures ----------

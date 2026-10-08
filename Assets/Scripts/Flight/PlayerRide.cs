@@ -26,10 +26,15 @@ public class PlayerRide : MonoBehaviour
     public float tieDecay = 0.4f;
     public int punchesToDown = 4;
 
-    // Seat positions in the car's frame (body 3 x 1.5 x 6; driver on the left).
-    static readonly Vector3 BackSeat = new Vector3(0.4f, 0.85f, -1.4f);
-    static readonly Vector3 PassengerSeat = new Vector3(0.7f, 0.85f, 0.4f);
-    public static readonly Vector3 DriverSeat = new Vector3(-0.7f, 0.6f, 0.4f);
+    // Seat positions in the car's frame, from its body bounds (driver on the left).
+    static Vector3 Seat3(FlyingVehicle car, float x, float y, float z)
+    {
+        Vector3 h = car.BodyHalfExtents, c = car.BodyCenterLocal;
+        return c + new Vector3(h.x * x, h.y * y, h.z * z);
+    }
+    static Vector3 BackSeatOf(FlyingVehicle car) => Seat3(car, 0.27f, 1.13f, -0.47f);
+    static Vector3 PassengerSeatOf(FlyingVehicle car) => Seat3(car, 0.47f, 1.13f, 0.13f);
+    public static Vector3 DriverSeatOf(FlyingVehicle car) => Seat3(car, -0.47f, 0.8f, 0.13f);
 
     public FlyingVehicle Car => car;
     public Seat CurrentSeat { get; private set; }
@@ -85,7 +90,7 @@ public class PlayerRide : MonoBehaviour
     {
         var c = car;
         Quaternion rot = c.PlatformRotation;
-        Vector3 pos = c.transform.position + rot * new Vector3(side * (c.BodyHalfExtents.x + 0.9f), -0.6f, rear ? -1.4f : 0.4f);
+        Vector3 pos = c.transform.position + rot * new Vector3(side * (c.BodyHalfExtents.x + 0.9f), -0.6f, (rear ? -0.47f : 0.13f) * c.BodyHalfExtents.z);
         End();
         fpc.gameObject.SetActive(true);
         fpc.PlaceAt(pos, rot, c.Velocity);
@@ -208,7 +213,7 @@ public class PlayerRide : MonoBehaviour
         // Punch the driver: the aim has to pass close to the driver's seat.
         if (punched && car.hasDriver)
         {
-            Vector3 seat = car.transform.TransformPoint(DriverSeat);
+            Vector3 seat = car.transform.TransformPoint(DriverSeatOf(car));
             Ray ray = new Ray(cam.transform.position, cam.transform.forward);
             Vector3 toSeat = seat - ray.origin;
             float along = Vector3.Dot(toSeat, ray.direction);
@@ -230,7 +235,7 @@ public class PlayerRide : MonoBehaviour
     void LateUpdate()
     {
         if (car == null || cam == null) return;
-        Vector3 seat = CurrentSeat == Seat.Back ? BackSeat : PassengerSeat;
+        Vector3 seat = CurrentSeat == Seat.Back ? BackSeatOf(car) : PassengerSeatOf(car);
         Vector3 pos = car.transform.position + car.PlatformRotation * seat;
         if (shake > 0f)
         {

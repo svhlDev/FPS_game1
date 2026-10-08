@@ -26,18 +26,18 @@ public static class TwinTowersBuilder
     // Rings
     const int RingsPerTower = 3;
     const float InnerRingRadius = 70f;      // hands-free speed ~ sqrt(magnetStrength * radius): 35 m/s needs ~61 m
-    const float CarWidth = 3f;
-    const float CarLength = 6f;
-    const float CarHalfHeight = 0.75f;
+    static readonly float CarWidth = CarSize.x;
+    static readonly float CarLength = CarSize.z;
+    static readonly float CarHalfHeight = CarSize.y * 0.5f;
     const float RingGap = 4f;               // gap between car edges in neighbouring rings: a sprint jump
-    const float RingSpacing = CarWidth + RingGap;
+    static readonly float RingSpacing = CarWidth + RingGap;
     const float ParallelRunLength = 100f;   // straights between the semicircles; 0 = true circles
     const float WaypointSpacing = 12f;
     const float SideLaneBlend = 40f;
 
     // Placement: outermost straights of A and B face each other one RingSpacing apart.
-    const float OuterRingRadius = InnerRingRadius + (RingsPerTower - 1) * RingSpacing;
-    const float TowerDistance = 2f * OuterRingRadius + RingSpacing;
+    static readonly float OuterRingRadius = InnerRingRadius + (RingsPerTower - 1) * RingSpacing;
+    static readonly float TowerDistance = 2f * OuterRingRadius + RingSpacing;
 
     // Traffic: rush hour. 18 cars x 9 lanes x 2 towers = 324.
     const int CarsPerLane = 18;

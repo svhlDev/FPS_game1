@@ -150,10 +150,22 @@ public class FlyingVehicle : MonoBehaviour
     public float abandonedSinkSpeed = 3f;
     [Tooltip("Forward boost after a successful restart (m/s).")]
     public float restartBoost = 10f;
-    public float maxIntegrity = 100f;
-    [Tooltip("Integrity regained per second once regenDelay has passed without a hit.")]
-    public float integrityRegen = 5f;
-    public float regenDelay = 10f;
+
+    [Header("Kind")]
+    [Tooltip("Handling and toughness (VehicleProfile). Pink is never placed: 1 in 300 traffic cars turns pink at start, at most one at a time.")]
+    public VehicleKind kind = VehicleKind.Standard;
+    [Tooltip("Collision damage per m/s of normal impact speed above collisionDamageSpeed.")]
+    public float collisionDamagePerMs = 4f;
+    public float collisionDamageSpeed = 6f;
+    [Tooltip("Static geometry counts as this mass when a car hits it.")]
+    public float staticMass = 3f;
+
+    public enum VehicleKind { Standard, Police, Pink }
+    public VehicleProfile Profile => kind == VehicleKind.Pink ? VehicleProfile.Pink : kind == VehicleKind.Police ? VehicleProfile.Police : VehicleProfile.Standard;
+    public VehicleHealth Health { get; private set; }
+    static FlyingVehicle pinkAlive;
+    public static FlyingVehicle PinkCar => pinkAlive;
+    float criticalStart;
 
     public bool IsOccupied => driver != null;
     public FirstPersonController Driver => driver;
@@ -168,8 +180,6 @@ public class FlyingVehicle : MonoBehaviour
     public bool OnSurface { get; private set; }
     // Towed down and parked by the police: locked until the pursuit ends.
     public bool Impounded { get; set; }
-    public float Integrity { get; private set; }
-    public float LastHitTime { get; private set; } = -100f;
     // Report resting contact with other cars every frame (pursuing police).
     public bool ReportContacts { get; set; }
     public bool HasAutopilot => autopilot;
@@ -318,7 +328,7 @@ public class FlyingVehicle : MonoBehaviour
     void Start()
     {
         started = true;
-        Integrity = maxIntegrity;
+        SetupKind();
         isPolice = GetComponent<PoliceDriver>() != null;
         allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
@@ -354,7 +364,119 @@ public class FlyingVehicle : MonoBehaviour
         TrafficSystem.AddRenderable(this); // drawn instanced from here on
     }
 
-    void OnDestroy() => TrafficSystem.RemoveRenderable(this);
+    void OnDestroy()
+    {
+        TrafficSystem.RemoveRenderable(this);
+        if (pinkAlive == this) pinkAlive = null;
+    }
+
+    // Handling profile, health, flammability; 1 in 300 traffic cars turns into the pink one.
+    void SetupKind()
+    {
+        if (kind == VehicleKind.Standard && path != null && hasDriver && pinkAlive == null && Random.value < 1f / 300f) MakePink();
+        var p = Profile;
+        middleLaneMaxSpeed *= p.maxSpeedScale; sideLaneMaxSpeed *= p.maxSpeedScale;
+        layerMaxSpeed *= p.maxSpeedScale; freeMaxSpeed *= p.maxSpeedScale;
+        acceleration *= p.accelScale; braking *= p.accelScale;
+        laneChangeSmoothTime /= p.layerShiftScale; altitudeSmoothTime /= p.layerShiftScale;
+        headingTurnRate = p.headingTurnRate;
+        lateralGrip *= p.lateralGripScale;
+        Health = GetComponent<VehicleHealth>() ?? gameObject.AddComponent<VehicleHealth>();
+        Health.Init(p.maxHealth);
+        Flammable.Add(gameObject, Flammable.Kind.Car);
+    }
+
+    void MakePink()
+    {
+        kind = VehicleKind.Pink;
+        pinkAlive = this;
+        var body = GetComponentInChildren<BoxCollider>();
+        var rend = body != null ? body.GetComponent<Renderer>() : null;
+        if (rend != null) rend.sharedMaterial = CharacterFigure.Mat(VehicleProfile.Pink.colour);
+        // Faint emissive trim along the sides.
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader != null && body != null)
+        {
+            var trimMat = new Material(shader) { enableInstancing = true };
+            trimMat.SetColor("_BaseColor", VehicleProfile.Pink.colour * 1.4f);
+            for (int side = -1; side <= 1; side += 2)
+            {
+                var t = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                t.name = "PinkTrim";
+                Destroy(t.GetComponent<Collider>());
+                t.transform.SetParent(transform, false);
+                t.transform.localPosition = colCenter + new Vector3(side * (colHalf.x + 0.02f), -colHalf.y * 0.3f, 0f);
+                t.transform.localScale = new Vector3(0.05f, 0.08f, colHalf.z * 1.8f);
+                var r = t.GetComponent<Renderer>();
+                r.sharedMaterial = trimMat;
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                t.layer = gameObject.layer;
+            }
+        }
+    }
+
+    // ---------- health hooks (VehicleHealth) ----------
+
+    // Critical: the magnet and the lane AI fail; the car noses over and falls (UpdateCritical).
+    public void OnCritical()
+    {
+        criticalStart = Time.time;
+        autopilot = false;
+        Disabled = false;
+        if (Mode != FlightMode.Free) Mode = FlightMode.Free;
+        if (IsOccupied) Flash("CRITICAL  -  BAIL OUT  (E door, hold E roof)");
+    }
+
+    // Exploded: everyone inside dies, the car is a falling burning wreck (UpdateWreck).
+    public void OnWrecked()
+    {
+        autopilot = false;
+        Disabled = false;
+        if (Mode != FlightMode.Free) Mode = FlightMode.Free;
+        if (lights != null) lights.SetOn(false);
+        hasDriver = false;
+        var pd = GetComponent<PoliceDriver>();
+        if (pd != null) Destroy(pd);
+        if (PlayerRide.Active && PlayerRide.Instance.Car == this) PlayerRide.Instance.Release();
+        var who = driver;
+        if (who != null)
+        {
+            Exit(false);
+            who.Die("Killed in the explosion");
+        }
+    }
+
+    // A push from outside (explosions): a velocity change scaled by the whole body's mass.
+    public void AddImpulse(Vector3 impulse)
+    {
+        var root = AttachHost != null ? AttachHost : this;
+        if (root.parked) root.SetParked(false);
+        root.velocity += impulse / Mathf.Max(0.1f, root.EffectiveMass);
+    }
+
+    // 0 = first person (cockpit), 1 = fully zoomed out (DashboardGauge shows only in first person).
+    public float CameraZoom { get; private set; }
+
+    public void Shake(float amount) { if (IsOccupied) shake = Mathf.Max(shake, Mathf.Clamp01(amount)); }
+
+    // Impact damage: (v - collisionDamageSpeed) * collisionDamagePerMs, scaled by the other's mass / own.
+    void ImpactDamage(float speed, float otherMass, Vector3 point, Vector3 outward)
+    {
+        if (Health == null || speed <= collisionDamageSpeed) return;
+        Health.Damage((speed - collisionDamageSpeed) * collisionDamagePerMs * otherMass / Mathf.Max(0.1f, EffectiveMass), point, outward);
+    }
+
+    // A burning wreck hitting something: fire splashes, and it hurts (and may ignite) another car.
+    void WreckImpact(FlyingVehicle other, Vector3 point, float speed)
+    {
+        if (Health == null || !Health.Wrecked || speed <= 5f) return;
+        FireSystem.Spray(point, Vector3.up * 2f, 3, 3f, 7f);
+        if (other != null && other.Health != null)
+        {
+            other.Health.Damage(60f, point, (other.transform.position - point).normalized);
+            if (Random.value < 0.35f) other.Health.Ignite();
+        }
+    }
 
     static readonly ProfilerMarker UpdateMarker = new ProfilerMarker("FlyingVehicle.Update");
     static readonly ProfilerMarker AIMarker = new ProfilerMarker("FlyingVehicle.AITargetSpeed");
@@ -366,10 +488,10 @@ public class FlyingVehicle : MonoBehaviour
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (IsOccupied && kb != null) HandleModeInput(kb);
-        if (Integrity < maxIntegrity && Time.time - LastHitTime > regenDelay)
-            Integrity = Mathf.Min(maxIntegrity, Integrity + integrityRegen * Time.deltaTime);
 
         if (AttachHost != null) { FollowHost(); return; }
+        if (Health != null && Health.Wrecked) { UpdateWreck(); return; }
+        if (Health != null && Health.Critical) { UpdateCritical(kb, mouse); return; }
         if (Disabled) { UpdateDisabled(mouse); return; }
         if (autopilot && !IsOccupied) { UpdateAutopilot(); return; }
 
@@ -404,6 +526,7 @@ public class FlyingVehicle : MonoBehaviour
             if (kb.eKey.isPressed && Time.time - eDownTime >= RoofHoldTime) { Exit(true); return; }
         }
 
+        if (Health != null && Health.Current != VehicleHealth.State.Ok) return; // failing: only getting out works
         if (Disabled)
         {
             // R: restart sequence (not while holding E for the roof).
@@ -938,6 +1061,11 @@ public class FlyingVehicle : MonoBehaviour
         me.AddImpact(j * invA);
         ob.AddImpact(j * invB);
         if (-vn > 15f) PedestrianSystem.ReportDanger(transform.position); // a crash: people near it flee
+        Vector3 contact = transform.position - n * colHalf.x;
+        me.ImpactDamage(-vn, ob.EffectiveMass, contact, n);
+        ob.ImpactDamage(-vn, me.EffectiveMass, contact, -n);
+        me.WreckImpact(ob, contact, -vn);
+        ob.WreckImpact(me, contact, -vn);
     }
 
     // Static geometry, or a cheap civilian-vs-civilian contact.
@@ -951,6 +1079,10 @@ public class FlyingVehicle : MonoBehaviour
         else if (vn < 0f && Driven == this) PoliceDispatch.Instance?.OnPlayerImpact(this, -vn);
         if (vn >= 0f) return;
         if (-vn > 15f) PedestrianSystem.ReportDanger(transform.position);
+        Vector3 hitPoint = transform.position - normal * colHalf.x;
+        ImpactDamage(-vn, otherCar != null ? otherCar.EffectiveMass : staticMass, hitPoint, normal);
+        if (otherCar != null) otherCar.ImpactDamage(-vn, EffectiveMass, hitPoint, -normal);
+        WreckImpact(otherCar, hitPoint, -vn);
 
         if (otherCar != null)
         {
@@ -1280,21 +1412,58 @@ public class FlyingVehicle : MonoBehaviour
         hoverBlend = 1f;
         Mode = FlightMode.Layer;
         gridLayer = Mathf.Max(gridLayer, TrafficAuthority.NearestLayer(Underside));
-        if (Integrity <= 0f) Integrity = maxIntegrity * 0.25f;
         velocity += PlatformRotation * Vector3.forward * restartBoost;
         if (lights != null) lights.SetOn(true);
         Flash("RESTARTED");
         PoliceDispatch.Instance?.OnRestarted(this);
     }
 
-    // Gunfire. Shake for the driver; at 0 integrity the car goes down like an EMP.
+    // Damage from weapons (goes to VehicleHealth); a jolt for the driver.
     public void Damage(float amount)
     {
-        if (Disabled) return;
-        Integrity = Mathf.Max(0f, Integrity - amount);
-        LastHitTime = Time.time;
-        if (IsOccupied) shake = Mathf.Min(1f, shake + 0.35f);
-        if (Integrity <= 0f) Disable(true);
+        if (Health != null) Health.Damage(amount);
+        if (IsOccupied) shake = Mathf.Min(1f, shake + 0.1f);
+    }
+
+    // ---------- critical / wreck motion ----------
+
+    // Critical: no magnet, no lane AI. The nose pitches down 25 deg over a second and the car accelerates
+    // downward under gravity, keeping its forward speed; the driver keeps 30% steering.
+    void UpdateCritical(Keyboard kb, Mouse mouse)
+    {
+        float dt = Time.deltaTime;
+        UpdateAim(mouse);
+        Vector2 input = MoveInput(kb);
+        if (input.y != 0f || input.x != 0f) yaw = Mathf.MoveTowardsAngle(yaw, aimYaw, headingTurnRate * 0.3f * dt);
+        pitch = Mathf.MoveTowards(pitch, 25f, 25f * dt);
+        Vector3 hv = new Vector3(velocity.x, 0f, velocity.z);
+        Vector3 fwd = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
+        float along = Mathf.Max(Vector3.Dot(hv, fwd), 0f);
+        hv = Vector3.Lerp(hv, fwd * along, 0.3f * dt); // the remaining steering bends the path a little
+        velocity = new Vector3(hv.x, velocity.y + Physics.gravity.y * dt, hv.z);
+        Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
+        Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
+        transform.SetPositionAndRotation(pos, rot);
+    }
+
+    // A wreck: no hover, full gravity, keeps its momentum, tumbles a little; once at rest it lies there
+    // burning (VehicleHealth), then smoulders and stops updating.
+    void UpdateWreck()
+    {
+        if (Health.Smouldering && velocity.sqrMagnitude < 0.01f) return;
+        float dt = Time.deltaTime;
+        velocity += Physics.gravity * dt;
+        velocity.x *= Mathf.Exp(-0.1f * dt); velocity.z *= Mathf.Exp(-0.1f * dt);
+        pitch = Mathf.MoveTowards(pitch, 35f, 20f * dt);
+        Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
+        Vector3 before = transform.position;
+        Vector3 pos = MoveAndCollide(before, velocity * dt, rot);
+        transform.SetPositionAndRotation(pos, rot);
+        if ((pos - before).sqrMagnitude < 0.0004f && velocity.y > -1f)
+        {
+            velocity = Vector3.zero;
+            Health.OnRest();
+        }
     }
 
     // No propulsion: the velocity dies out over disableStopTime. The backup hover holds altitude,
@@ -1366,6 +1535,7 @@ public class FlyingVehicle : MonoBehaviour
         Transform anchor = cockpitAnchor != null ? cockpitAnchor : transform;
         Quaternion look = Quaternion.Euler(aimPitch, aimYaw, 0f);
         float z = zoom.Tick(Time.deltaTime);
+        CameraZoom = z;
         Vector3 pos = anchor.position - look * Vector3.forward * (z * maxCameraDistance) + Vector3.up * (z * 2f);
         if (shake > 0f)
         {
@@ -1393,6 +1563,7 @@ public class FlyingVehicle : MonoBehaviour
         aimYaw = yaw; aimPitch = 0f;
         Driven = this;
         VehicleHUD.Ensure();
+        DashboardGauge.Ensure(this);
         autopilot = false;
         if (!hijacked) { hijacked = true; PlayerSkills.AddHijack(); }
         if (Disabled)

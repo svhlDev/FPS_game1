@@ -410,6 +410,7 @@ public class PoliceDispatch : MonoBehaviour
 
     // Test hook (ScenarioTest): wanted at `level` with the nearest unit on the case.
     public void DebugStartPursuit(int level) => EnsureWanted(level, null);
+    public void DebugForce(Force f) => Escalate(f, "test");
 
     void Resist(string why)
     {
@@ -541,7 +542,7 @@ public class PoliceDispatch : MonoBehaviour
             }
             AssignChaseSlots(car);
             foreach (var u in chasers) u.Chase(car);
-            if (ForceLevel == Force.Lethal) foreach (var u in chasers) u.UpdateShooting(car);
+            foreach (var u in chasers) { if (ForceLevel == Force.Lethal) u.UpdateLaser(car); else u.StopLaser(); }
             return;
         }
 
@@ -1258,11 +1259,7 @@ public class PoliceDispatch : MonoBehaviour
             }
             y += 40;
         }
-        if (car != null && (ForceLevel == Force.Lethal || car.Integrity < car.maxIntegrity))
-        {
-            Bar(new Rect(right - 200, y, 200, 8), car.Integrity / car.maxIntegrity, new Color(0.9f, 0.3f, 0.2f), "Integrity");
-            y += 40;
-        }
+        // Car health has no HUD bar: read the car itself, or the dashboard gauge in first person.
         if (fpc != null && fpc.isActiveAndEnabled && fpc.Health < fpc.maxHealth)
         {
             Bar(new Rect(right - 200, y, 200, 8), fpc.Health / fpc.maxHealth, new Color(0.9f, 0.2f, 0.25f), "Health");

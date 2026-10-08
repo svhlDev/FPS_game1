@@ -64,6 +64,17 @@ public partial class TrafficSystem
         if (trafficLayer < 0) trafficLayer = car.gameObject.layer;
     }
 
+    // A part's mesh was replaced (a dented body): pick up the new mesh.
+    public static void RefreshRenderable(FlyingVehicle car)
+    {
+        if (car == null || !drawParts.TryGetValue(car, out var parts)) return;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var mf = parts[i].renderer != null ? parts[i].renderer.GetComponent<MeshFilter>() : null;
+            if (mf != null && mf.sharedMesh != null) parts[i].mesh = mf.sharedMesh;
+        }
+    }
+
     public static void RemoveRenderable(FlyingVehicle car)
     {
         if (!drawParts.TryGetValue(car, out var parts)) return;

@@ -12,7 +12,7 @@ using UnityEngine;
 //               they spread round the player instead of stacking.
 //   HoldSlot  : keep a slot around the target (docked to tow it, or boxing it in), arriving from outside.
 //   HoverNear : watch a point (the player on foot, the tow group).
-// At wanted level 3 PoliceDispatch also calls UpdateShooting. Runs before the cars move.
+// At lethal force PoliceDispatch also calls UpdateLaser. Runs before the cars move.
 // Car gunfire only happens at PoliceDispatch's Lethal force level.
 [DefaultExecutionOrder(-15)]
 [RequireComponent(typeof(FlyingVehicle))]
@@ -43,17 +43,15 @@ public class PoliceDriver : MonoBehaviour
     [Tooltip("Recover time after a hit.")]
     public float hitRecoverTime = 0.7f;
 
-    [Header("Shooting (wanted level 3)")]
-    public float shootRange = 120f;
-    public int burstShots = 3;
-    public float burstInterval = 2f;
-    public float shotInterval = 0.12f;
-    [Tooltip("Spread (degrees, cone radius) when the target was just sighted...")]
-    public float spreadStart = 6f;
-    [Tooltip("...shrinking to this after lockTime seconds in sight (about 40% hits at 60 m).")]
-    public float spreadLocked = 1.8f;
-    public float lockTime = 5f;
-    public float damagePerHit = 6f;
+    [Header("Laser (lethal force)")]
+    public float laserRange = 100f;
+    [Tooltip("Aiming line first (the dodge window), then the beam, every laserCycle seconds.")]
+    public float laserWarmup = 0.4f;
+    public float laserBurst = 1.2f;
+    public float laserCycle = 3f;
+    public float laserDamagePerSecond = 70f;
+    [Tooltip("How fast the beam swings after the target (deg/s): fast dodges slip out of it.")]
+    public float laserTrackRate = 35f;
     public Material tracerMaterial;
     public Material sparkMaterial;
     [Tooltip("Red stop cone over a tow (StopCone).")]
@@ -266,40 +264,97 @@ public class PoliceDriver : MonoBehaviour
 
     // ---------- shooting ----------
 
-    // Bursts of hitscan shots at the target's car while it is in sight; the spread tightens the
-    // longer it stays in sight.
-    public void UpdateShooting(FlyingVehicle target)
+    // Lethal force: a laser. While the target is in sight within laserRange: an aiming line for
+    // laserWarmup s, then the beam for laserBurst s, every laserCycle s. The beam swings after the target
+    // at laserTrackRate, and damages it only while the beam's ray actually hits it.
+    public void UpdateLaser(FlyingVehicle target)
     {
         float dt = Time.deltaTime;
-        Vector3 origin = transform.position + Vector3.up * 1.2f;
+        Vector3 origin = transform.position + Vector3.up * (Car.BodyHalfExtents.y + 0.3f);
         Vector3 to = target.transform.position - origin;
         float dist = to.magnitude;
-        bool sight = dist <= shootRange && PoliceDispatch.LineOfSight(origin, target.transform.position);
-        sightTime = sight ? sightTime + dt : 0f;
-        if (!sight) return;
-
-        if (Time.time >= nextBurst)
+        bool sight = dist <= laserRange && PoliceDispatch.LineOfSight(origin, target.transform.position);
+        float tc = Time.time - laserCycleStart;
+        bool firing = laserCycleStart >= 0f && tc < laserWarmup + laserBurst;
+        if (!sight && !firing) { laserCycleStart = -1f; HideLaser(); return; }
+        if (laserCycleStart < 0f || tc > laserCycle)
         {
-            shotsLeft = burstShots;
-            nextBurst = Time.time + burstInterval;
-            nextShot = Time.time;
+            laserCycleStart = Time.time; tc = 0f;
+            laserDir = to.normalized;
         }
-        if (shotsLeft <= 0 || Time.time < nextShot) return;
-        shotsLeft--;
-        nextShot = Time.time + shotInterval;
+        laserDir = Vector3.RotateTowards(laserDir, to.normalized, laserTrackRate * Mathf.Deg2Rad * dt, 0f);
 
-        float spread = Mathf.Lerp(spreadStart, spreadLocked, Mathf.Clamp01(sightTime / lockTime));
-        Vector2 r = Random.insideUnitCircle * spread;
-        Vector3 dir = Quaternion.LookRotation(to) * Quaternion.Euler(r.y, r.x, 0f) * Vector3.forward;
-        Vector3 end = origin + dir * shootRange * 1.5f;
-        if (Physics.Raycast(origin, dir, out var hit, shootRange * 1.5f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        Vector3 end = origin + laserDir * laserRange;
+        FlyingVehicle hitCar = null;
+        RaycastHit hit = default;
+        // First thing the beam meets, not counting this police car itself.
+        int n = Physics.RaycastNonAlloc(origin, laserDir, laserHits, laserRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        float best = float.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            if (laserHits[i].collider.GetComponentInParent<FlyingVehicle>() == Car) continue;
+            if (laserHits[i].distance < best) { best = laserHits[i].distance; hit = laserHits[i]; }
+        }
+        if (best < float.MaxValue)
         {
             end = hit.point;
-            if (hit.collider.GetComponentInParent<FlyingVehicle>() == target) target.Damage(damagePerHit);
-            ShowSpark(hit.point);
+            hitCar = hit.collider.GetComponentInParent<FlyingVehicle>();
         }
-        ShowTracer(origin, end);
+        if (tc < laserWarmup) ShowLaser(origin, end, 0.03f, false);
+        else if (tc < laserWarmup + laserBurst)
+        {
+            LaserFireFrames++;
+            ShowLaser(origin, end, 0.22f, true);
+            if (hitCar != null && hitCar == target && target.Health != null)
+            {
+                target.Health.Damage(laserDamagePerSecond * dt, hit.point, hit.normal);
+                LaserHitFrames++;
+                if (Random.value < dt * 12f) Effects.Puff(hit.point, hit.normal * 2f, 0.25f, 0.6f);
+            }
+        }
+        else HideLaser();
     }
+
+    float laserCycleStart = -1f;
+    static readonly RaycastHit[] laserHits = new RaycastHit[8];
+    public static int LaserHitFrames, LaserFireFrames;
+    Vector3 laserDir;
+    LineRenderer laser;
+
+    // Two shared materials: the thin aiming line and the beam (colours never change per car).
+    static Material aimMat, beamMat;
+
+    static Material LaserMat(bool beam)
+    {
+        ref Material m = ref (beam ? ref beamMat : ref aimMat);
+        if (m != null) return m;
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) return null;
+        m = new Material(shader);
+        m.SetColor("_BaseColor", beam ? new Color(1f, 0.08f, 0.05f) * 6f : new Color(1f, 0.1f, 0.08f) * 1.5f);
+        return m;
+    }
+
+    void ShowLaser(Vector3 a, Vector3 b, float width, bool beam)
+    {
+        if (laser == null)
+        {
+            var go = new GameObject("Laser");
+            laser = go.AddComponent<LineRenderer>();
+            laser.positionCount = 2;
+            laser.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            laser.receiveShadows = false;
+        }
+        laser.sharedMaterial = LaserMat(beam) ?? tracerMaterial;
+        laser.startWidth = laser.endWidth = width;
+        laser.SetPosition(0, a);
+        laser.SetPosition(1, b);
+        laser.enabled = true;
+    }
+
+    void HideLaser() { if (laser != null) laser.enabled = false; }
+
+    public void StopLaser() { laserCycleStart = -1f; HideLaser(); }
 
     void Update()
     {
@@ -353,5 +408,6 @@ public class PoliceDriver : MonoBehaviour
     {
         if (tracer != null) Destroy(tracer.gameObject);
         if (spark != null) Destroy(spark.gameObject);
+        if (laser != null) Destroy(laser.gameObject);
     }
 }

@@ -98,6 +98,7 @@ public class OfficerAgent : MonoBehaviour
         // The figure's hit colliders (BodyPart triggers on the Player layer) are what punches hit.
         var fig = CharacterFigure.Build(go.transform, CharacterFigure.Role.Police);
         go.AddComponent<FigureAnimator>();
+        Flammable.Add(go, Flammable.Kind.Character);
         var board = GameObject.CreatePrimitive(PrimitiveType.Cube);
         board.name = "Scooter";
         Object.Destroy(board.GetComponent<Collider>());

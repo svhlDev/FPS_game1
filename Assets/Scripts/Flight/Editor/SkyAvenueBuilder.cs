@@ -60,8 +60,8 @@ public static class SkyAvenueBuilder
     const float SkySize = 6000f;                           // ground, haze and cloud planes
 
     // Traffic loops
-    const float CarWidth = 3f, CarHalfHeight = 0.75f, CarLength = 6f;
-    const float LaneSpacing = CarWidth + 4f;               // between the two concentric lanes of a loop
+    static readonly float CarWidth = CarSize.x, CarHalfHeight = CarSize.y * 0.5f, CarLength = CarSize.z;
+    static readonly float LaneSpacing = CarWidth + 4f;     // between the two concentric lanes of a loop
     const float MedianGap = 10f;                           // between car edges of the two directions
     const float EndClearance = 20f;                        // loops clear the back of the row by this much
     const float WaypointSpacing = 12f;
@@ -73,8 +73,8 @@ public static class SkyAvenueBuilder
     const float LightSpacing = 30f;
 
     // Derived lane geometry (x of the canyon straights)
-    const float MedianLaneX = MedianGap * 0.5f + CarWidth * 0.5f;   // 6.5: lane next to the median
-    const float WallLaneX = MedianLaneX + LaneSpacing;              // 13.5: lane nearer the buildings
+    static readonly float MedianLaneX = MedianGap * 0.5f + CarWidth * 0.5f;   // 6.5: lane next to the median
+    static readonly float WallLaneX = MedianLaneX + LaneSpacing;              // 13.5: lane nearer the buildings
 
     // Start deck
     const float DeckReach = 14f;                           // how far it sticks out into the canyon

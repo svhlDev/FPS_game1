@@ -210,6 +210,7 @@ public class FirstPersonController : MonoBehaviour
         cc.center = new Vector3(0f, figureHeight * 0.5f, 0f);
         Figure = CharacterFigure.Build(transform, CharacterFigure.Role.Player, null, figureHeight, shadows: true);
         Animator = gameObject.AddComponent<FigureAnimator>();
+        Flammable.Add(gameObject, Flammable.Kind.Character);
         Animator.FollowLook = true;
         // First person hides only the head (the camera is inside it); everything else stays visible.
         bodyRenderers = new[] { Figure.HeadRenderer };
@@ -324,6 +325,7 @@ public class FirstPersonController : MonoBehaviour
         float fallSpeed = -verticalVelocity;
         animVel = (grounded ? move + (platform != null ? slipVel : Vector3.zero) : horizontal) + Vector3.up * verticalVelocity;
         if (pendingDrag.sqrMagnitude > 1e-6f) { lastDragTime = Time.time; animVel += pendingDrag / Mathf.Max(dt, 1e-4f); }
+        UpdateBurning(dt, move);
         var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt + pendingDrag);
         pendingDrag = Vector3.zero;
         bool wasGrounded = grounded;
@@ -840,6 +842,52 @@ public class FirstPersonController : MonoBehaviour
     }
 
     public void Heal() => Health = maxHealth;
+
+    // Killed (an exploding car with you in it): placeholder death screen, back at the police station
+    // (or the start deck without one).
+    public void Die(string message)
+    {
+        Restrained = false; burningUntil = -1f;
+        var station = PoliceStation.Find();
+        if (station != null && station.door != null) { PlaceAt(station.door.position, station.door.rotation); Heal(); Flash("WASTED  -  " + message); }
+        else Respawn("WASTED  -  " + message);
+    }
+
+    // Thrown by a blast: airborne with this velocity.
+    public void Push(Vector3 velocity)
+    {
+        airVel += new Vector3(velocity.x, 0f, velocity.z);
+        verticalVelocity = Mathf.Max(verticalVelocity, velocity.y + 3f);
+        grounded = false;
+        LeavePlatform();
+    }
+
+    public void Shake(float amount) => camShake = Mathf.Max(camShake, amount * 0.6f);
+
+    // On fire: 12 damage a second for 6 s, or until you stand still for 1.5 s (stop, drop).
+    public void Ignite()
+    {
+        if (Time.time < burningUntil) return;
+        burningUntil = Time.time + 6f;
+        stillSince = -1f;
+        Flash("ON FIRE  -  stand still to put it out");
+    }
+    public bool OnFire => Time.time < burningUntil;
+    float burningUntil = -1f, stillSince = -1f;
+
+    void UpdateBurning(float dt, Vector3 move)
+    {
+        if (!OnFire) return;
+        Damage(12f * dt);
+        Effects.Flame(transform.position + Vector3.up * 1f, 1.2f);
+        if (move.sqrMagnitude < 0.01f && grounded)
+        {
+            if (stillSince < 0f) stillSince = Time.time;
+            else if (Time.time - stillSince > 1.5f) { burningUntil = -1f; Flash("Fire's out"); }
+        }
+        else stillSince = -1f;
+        if (Random.value < dt * 0.5f) FireSystem.Spray(transform.position + Vector3.up, Vector3.zero, 1, 1f, 3f);
+    }
 
     // Test hooks (ScenarioTest): set the look pitch / yaw directly.
     public void DebugLook(float pitchDeg, float? yawDeg = null)

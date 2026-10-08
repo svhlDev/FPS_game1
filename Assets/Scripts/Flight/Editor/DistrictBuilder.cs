@@ -151,7 +151,11 @@ public static class DistrictBuilder
         for (int ring = 0; ring < 2; ring++)
         {
             // Ring 0 is the inner rectangle (avenue wall lane, inner side-street lane, nearer the map).
-            float inner = ring == 0 ? 13.5f : 6.5f, side = ring == 0 ? 166.5f : 173.5f, end = ring == 0 ? 278f : 285f;
+            // Lane x from the car width: the median lane clears the 10 m median, rings are a car + 4 m apart.
+            float w = CarSize.x, median = 5f + w * 0.5f, spacing = w + 4f;
+            float inner = ring == 0 ? median + spacing : median;
+            float side = ring == 0 ? 170f - spacing * 0.5f : 170f + spacing * 0.5f;
+            float end = ring == 0 ? 278f : 278f + spacing;
             var east = MakeLoop($"AvenueEast_{ring}", lanesRoot, Rounded(new[]
             {
                 new Vector2(inner, -end), new Vector2(inner, end), new Vector2(side, end), new Vector2(side, -end),
@@ -167,7 +171,8 @@ public static class DistrictBuilder
         // the north edge; the south one east along the south cross street and back along the south edge.
         for (int ring = 0; ring < 2; ring++)
         {
-            float z = ring == 0 ? 133.5f : 126.5f, edge = ring == 0 ? 285f : 292f, xe = ring == 0 ? 285f : 292f;
+            float cs = CarSize.x + 4f; // ring spacing, both rings in the street's north / south half
+            float z = ring == 0 ? 120f + 4f + cs : 120f + 4f, edge = ring == 0 ? 285f : 285f + cs, xe = edge;
             skyLanes.Add(MakeLoop($"CrossNorth_{ring}", lanesRoot, Rounded(new[]
             {
                 new Vector2(-xe, edge), new Vector2(xe, edge), new Vector2(xe, z), new Vector2(-xe, z),
@@ -181,7 +186,8 @@ public static class DistrictBuilder
         var streetLanes = new List<LanePath>();
         foreach (var st in streets)
         {
-            float off = st.lanesPerDir >= 2 ? CityDressing.StreetLaneWidth * 1.5f : CityDressing.StreetLaneWidth * 0.5f;
+            // Outer lane on 2-lane streets; 1-lane streets keep opposing cars (CarSize.x wide) clear of each other.
+            float off = st.lanesPerDir >= 2 ? CityDressing.StreetLaneWidth * 1.5f : Mathf.Max(CityDressing.StreetLaneWidth * 0.5f, CarSize.x * 0.5f + 0.5f);
             streetLanes.Add(MakeLoop($"Street_{st.name}", lanesRoot, StreetLoop(st, off), 0, new[] { 0 }, false));
         }
         var allLanes = new List<LanePath>(skyLanes);

@@ -57,6 +57,7 @@ public class NpcBody : MonoBehaviour
         var fig = CharacterFigure.Build(go.transform, role);
         var npc = go.AddComponent<NpcBody>();
         npc.anim = go.AddComponent<FigureAnimator>();
+        Flammable.Add(go, Flammable.Kind.Character);
         npc.bodyRend = fig.Renderers[0];
         return npc;
     }
