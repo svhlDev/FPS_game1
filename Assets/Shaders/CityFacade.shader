@@ -5,6 +5,8 @@
 //     10 m, so floors line up with the layer grid. In the underworld band most buildings switch to the
 //     industrial style (by building seed).
 //       0 grid office 2.5 x 3.33 | 1 ribbon 10 x 3.33 | 2 curtain wall 1.6 x 3.33 | 3 residential 3.33 x 3.33 | 4 industrial 5 x 5
+//       5 storefront 5 x 3.33: wide warm shop windows, half of them lit. Every building's first
+//         _StreetHeight m (the street level) uses it, whatever its own style.
 //   - Per-window integer hash: lit or dark, warm or cool tint. Lit fraction = style's base value x band x
 //     per-building occupancy (0.2-1, skewed low, from the seed) x _LitFraction (global scale). Big-opening
 //     styles (ribbon, curtain wall) glow at half emission.
@@ -29,6 +31,7 @@ Shader "FPS/CityFacade"
         _GlassReflect ("Dark Glass Reflection Tint", Color) = (0.1, 0.14, 0.22, 1)
         _BandHeights ("Band Heights (traffic min, traffic max)", Vector) = (90, 160, 0, 0)
         _BandLit ("Lit Multiplier (under, traffic, upper)", Vector) = (0.5, 1.2, 0.7, 0)
+        _StreetHeight ("Storefront Height (m)", Float) = 10
     }
 
     SubShader
@@ -50,6 +53,7 @@ Shader "FPS/CityFacade"
             float4 _GlassReflect;
             float4 _BandHeights;
             float4 _BandLit;
+            float _StreetHeight;
         CBUFFER_END
         ENDHLSL
 
@@ -89,25 +93,27 @@ Shader "FPS/CityFacade"
             };
 
             // Per style: cell (w, h) in metres, opening (w, h) as a fraction of the cell.
-            static const float4 kStyleCell[5] =
+            static const float4 kStyleCell[6] =
             {
                 float4(2.5, 10.0 / 3.0, 0.70, 0.70),        // 0 grid office
                 float4(10.0, 10.0 / 3.0, 0.97, 0.55),       // 1 ribbon: continuous glass bands per floor
                 float4(1.6, 10.0 / 3.0, 0.92, 0.92),        // 2 curtain wall: nearly all glass
                 float4(10.0 / 3.0, 10.0 / 3.0, 0.45, 0.55), // 3 residential: small punched windows
                 float4(5.0, 5.0, 0.30, 0.25),               // 4 industrial: sparse slits
+                float4(5.0, 10.0 / 3.0, 0.90, 0.75),        // 5 storefront: wide shop windows
             };
             // Per style: base lit fraction, warm bias, sodium bias, glass reflection multiplier.
-            static const float4 kStyleLook[5] =
+            static const float4 kStyleLook[6] =
             {
                 float4(0.15, 0.0, 0.00, 1.0),
                 float4(0.06, 0.0, 0.00, 1.2),
                 float4(0.05, 0.0, 0.00, 2.2),
                 float4(0.18, 0.6, 0.00, 0.8),
                 float4(0.05, 0.0, 0.85, 0.6),
+                float4(0.50, 0.9, 0.00, 0.8),               // lit fraction used as is (no band / occupancy)
             };
             // Per style: emission multiplier (panorama windows glow rather than blaze).
-            static const float kStyleEmission[5] = { 1.0, 0.5, 0.5, 1.0, 1.0 };
+            static const float kStyleEmission[6] = { 1.0, 0.5, 0.5, 1.0, 1.0, 0.8 };
 
             Varyings vert(Attributes v)
             {
@@ -147,6 +153,8 @@ Shader "FPS/CityFacade"
                     uint seed = (uint)round(i.color.a * 255.0);
                     uint style = min((uint)round(i.style), 4u);
                     if (y < _BandHeights.x && (seed & 3u) != 0u) style = 4u;   // industrial dominates the underworld
+                    bool storefront = y < _StreetHeight;
+                    if (storefront) style = 5u;                                  // shops at street level
                     float4 cellDef = kStyleCell[style];
                     float4 look = kStyleLook[style];
 
@@ -173,7 +181,7 @@ Shader "FPS/CityFacade"
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
                     // Per-building occupancy, skewed low: some towers are nearly dark.
                     float occupancy = lerp(0.2, 1.0, pow(U01(Pcg3d(uint3(seed, 9u, 41u)).x), 1.5));
-                    float litFraction = saturate(look.x * _LitFraction * bandMul * occupancy);
+                    float litFraction = storefront ? look.x : saturate(look.x * _LitFraction * bandMul * occupancy);
                     float emission = _EmissionStrength * kStyleEmission[style];
                     float isLit = step(h, litFraction);
 
@@ -181,7 +189,8 @@ Shader "FPS/CityFacade"
                     float3 avgTint = 0.5 * (_WarmColor.rgb + _CoolColor.rgb);
                     tint = lerp(lerp(tint, _WarmColor.rgb, look.y), _SodiumColor.rgb, look.z);
                     avgTint = lerp(lerp(avgTint, _WarmColor.rgb, look.y), _SodiumColor.rgb, look.z);
-                    if (y < _BandHeights.x)                                                   // sodium underworld
+                    if (storefront) { }                                                       // shops stay warm
+                    else if (y < _BandHeights.x)                                              // sodium underworld
                     {
                         tint = lerp(tint, _SodiumColor.rgb, 0.75);
                         avgTint = lerp(avgTint, _SodiumColor.rgb, 0.75);

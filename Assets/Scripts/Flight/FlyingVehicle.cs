@@ -9,12 +9,16 @@ using UnityEngine.InputSystem;
 //           Steer far enough away and you break free.
 //   Layer : free horizontal flight holding a grid layer's ride height. Over a rooftop or the
 //           ground that's simply that layer; unoccupied over a surface, the car settles and parks.
-//   Free  : full 3D, unregistered. Police get interested.
+//   Free  : full 3D.
+// Police don't care about any of this; they care about crashes (see PoliceDispatch).
+// Disabled (EMP or shot down): no propulsion, lights dead, the backup hover holds altitude (or the
+// police tow it down to the street). R starts the restart sequence; E still exits.
 // Mouse always aims the camera. The car turns toward the aim only while W/S is held (Halo style).
 // Space / Shift+Space : one level up / down (off-lane: one layer; on a flyway: the next lane that exists here)
 // Ctrl (tap)          : Lane <-> Layer (magnet off / magnet on to a lane at this layer)
 // Ctrl + Space        : Free <-> Layer (locks to the nearest layer)
-// E tap / hold        : exit through the door / onto the roof
+// E tap / hold        : exit through the door / onto the roof (longer hold while disabled)
+// R (disabled)        : restart sequence
 public enum FlightMode { Lane, Layer, Free }
 
 // Moves before the player so a rider standing on the roof is carried with this frame's motion.
@@ -111,8 +115,46 @@ public class FlyingVehicle : MonoBehaviour
     [Header("Exit")]
     [Tooltip("Hold E this long to exit onto the roof instead of through the door.")]
     public float roofExitHoldTime = 0.35f;
+    [Tooltip("Roof exit hold while the car is disabled (climbing out of a dead car takes longer).")]
+    public float disabledRoofExitHoldTime = 1.5f;
+
+    [Header("Disabled / damage")]
+    [Tooltip("Seconds for a disabled car's velocity to die out.")]
+    public float disableStopTime = 1f;
+    [Tooltip("Descent speed while police tow a disabled car down to the street.")]
+    public float towSpeed = 8f;
+    [Tooltip("Descent speed of an abandoned disabled car (its backup hover gives out slowly).")]
+    public float abandonedSinkSpeed = 3f;
+    [Tooltip("Forward boost after a successful restart (m/s).")]
+    public float restartBoost = 10f;
+    public float maxIntegrity = 100f;
+    [Tooltip("Integrity regained per second once regenDelay has passed without a hit.")]
+    public float integrityRegen = 5f;
+    public float regenDelay = 10f;
+    [Tooltip("Pursuit autopilot acceleration (m/s^2).")]
+    public float autopilotAcceleration = 45f;
 
     public bool IsOccupied => driver != null;
+    public FirstPersonController Driver => driver;
+
+    // ---- police / damage state ----
+    public bool Disabled { get; private set; }
+    // Disabled by gunfire: the restart sequence is twice as long.
+    public bool ShotDown { get; private set; }
+    // Set by PoliceDispatch while units hold it at its sides: it descends at towSpeed.
+    public bool Towed { get; set; }
+    // A disabled car that has come to rest on a surface.
+    public bool OnSurface { get; private set; }
+    public float Integrity { get; private set; }
+    public float LastHitTime { get; private set; } = -100f;
+    // Report resting contact with other cars every frame (pursuing police).
+    public bool ReportContacts { get; set; }
+    public bool HasAutopilot => autopilot;
+    // 0..1 progress of a held E (for the HUD while disabled).
+    public float RoofHoldProgress => eArmed && IsOccupied && Keyboard.current != null && Keyboard.current.eKey.isPressed
+        ? Mathf.Clamp01((Time.time - eDownTime) / RoofHoldTime) : 0f;
+    float RoofHoldTime => Disabled ? disabledRoofExitHoldTime : roofExitHoldTime;
+
     // Resting on a surface until someone gets in (CarLights keeps its lights off).
     public bool IsParked => parked;
 
@@ -193,6 +235,9 @@ public class FlyingVehicle : MonoBehaviour
     BoxCollider bodyCol;
     Vector3 colHalf, colCenter;
     float shake;
+    bool autopilot; Vector3 apTarget, apTargetVel; float apSpeed;
+    float disableDecel;
+    bool hijacked;
     readonly RaycastHit[] hitBuf = new RaycastHit[16];
     readonly Collider[] overlapBuf = new Collider[16];
     static int collisionMask;   // everything except the on-foot player
@@ -222,6 +267,7 @@ public class FlyingVehicle : MonoBehaviour
     void Start()
     {
         started = true;
+        Integrity = maxIntegrity;
         allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
         int playerLayer = LayerMask.NameToLayer("Player");
@@ -268,6 +314,11 @@ public class FlyingVehicle : MonoBehaviour
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (IsOccupied && kb != null) HandleModeInput(kb);
+        if (Integrity < maxIntegrity && Time.time - LastHitTime > regenDelay)
+            Integrity = Mathf.Min(maxIntegrity, Integrity + integrityRegen * Time.deltaTime);
+
+        if (Disabled) { UpdateDisabled(mouse); return; }
+        if (autopilot && !IsOccupied) { UpdateAutopilot(); return; }
 
         switch (Mode)
         {
@@ -286,6 +337,28 @@ public class FlyingVehicle : MonoBehaviour
 
     void HandleModeInput(Keyboard kb)
     {
+        // Tap E = door, hold E = roof. Only presses made after entering count.
+        // A disabled car takes longer to climb out of; starting to bail cancels the restart sequence.
+        if (kb.eKey.wasPressedThisFrame && Time.frameCount != enterFrame)
+        {
+            eArmed = true; eDownTime = Time.time;
+            if (RestartQTE.Active) RestartQTE.Cancel();
+        }
+        if (eArmed)
+        {
+            if (kb.eKey.wasReleasedThisFrame) { Exit(false); return; }
+            if (kb.eKey.isPressed && Time.time - eDownTime >= RoofHoldTime) { Exit(true); return; }
+        }
+
+        if (Disabled)
+        {
+            // R: restart sequence (not while holding E for the roof).
+            if (kb.rKey.wasPressedThisFrame && !eArmed && !RestartQTE.Active)
+                RestartQTE.Begin("RESTART  (Bypass " + PlayerSkills.BypassLevel + ")",
+                                 PlayerSkills.RestartLength(ShotDown), PlayerSkills.PromptWindow, true, Restart);
+            return; // no propulsion: Space / Ctrl do nothing
+        }
+
         bool ctrl = kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed;
         if (kb.spaceKey.wasPressedThisFrame)
         {
@@ -297,13 +370,6 @@ public class FlyingVehicle : MonoBehaviour
         {
             if (!ctrlComboUsed) ToggleLaneLock();
             ctrlComboUsed = false;
-        }
-        // Tap E = door, hold E = roof. Only presses made after entering count.
-        if (kb.eKey.wasPressedThisFrame && Time.frameCount != enterFrame) { eArmed = true; eDownTime = Time.time; }
-        if (eArmed)
-        {
-            if (kb.eKey.wasReleasedThisFrame) Exit(false);
-            else if (kb.eKey.isPressed && Time.time - eDownTime >= roofExitHoldTime) Exit(true);
         }
     }
 
@@ -317,20 +383,23 @@ public class FlyingVehicle : MonoBehaviour
             int next = Mathf.Clamp(gridLayer + dir, 0, TrafficAuthority.MaxLayer);
             if (next == gridLayer) return;
             gridLayer = next;
-            Flash($"Layer {gridLayer} (off-lane change)");
-            TrafficAuthority.Instance?.ReportViolation(this, "Off-lane layer change");
+            Flash($"Layer {gridLayer}");
         }
     }
 
     void StepLane(int dir)
     {
-        if (!path.NextLevel(laneLevel, dir, distance, out int next)) return;
-        laneLevel = next;
-        if (path.IsNoSwitch(distance))
+        if (!path.NextLevel(laneLevel, dir, distance, out int next))
         {
-            Flash("Illegal lane switch!");
-            TrafficAuthority.Instance?.ReportViolation(this, "Illegal lane switch");
+            // Single-level lane (street traffic): magnet off and step a layer like off-lane flight.
+            if (path.Levels.Count == 1)
+            {
+                Mode = FlightMode.Layer;
+                StepLevel(dir);
+            }
+            return;
         }
+        laneLevel = next;
     }
 
     void ToggleFree()
@@ -338,7 +407,7 @@ public class FlyingVehicle : MonoBehaviour
         if (Mode == FlightMode.Free) { LockToNearestLayer(); return; }
         Mode = FlightMode.Free;
         pitch = 0f;
-        Flash("FREE FLIGHT: unregistered");
+        Flash("Free flight");
     }
 
     void ToggleLaneLock()
@@ -617,6 +686,26 @@ public class FlyingVehicle : MonoBehaviour
             target = Mathf.Min(target, Mathf.Max(0f, follow));
         }
 
+        // The player on foot in our lane ahead: brake behind them like behind a car (cars never push
+        // the player, they just stop).
+        var walker = FirstPersonController.Instance;
+        if (walker != null && walker.isActiveAndEnabled)
+        {
+            Vector3 r = walker.transform.position - me;
+            float ahead = Vector3.Dot(r, fwd);
+            if (ahead > 0f && ahead < yieldLookRange && Mathf.Abs(r.y) < 3f)
+            {
+                Vector3 side = r - fwd * ahead;
+                side.y = 0f;
+                if (side.sqrMagnitude < 2.5f * 2.5f)
+                {
+                    float gap = ahead - carLength * 0.5f - 0.5f;
+                    float follow = gap < minGap ? 0f : followGain * (gap - followGap);
+                    target = Mathf.Min(target, Mathf.Max(0f, follow));
+                }
+            }
+        }
+
         // Anything else on a collision course (crossings, cars cutting in, the player's car).
         TrafficSystem.CellOf(me, out int cx, out int cz);
         for (int dx = -1; dx <= 1; dx++)
@@ -706,6 +795,8 @@ public class FlyingVehicle : MonoBehaviour
         Vector3 otherVel = otherCar != null ? otherCar.velocity : Vector3.zero;
         Vector3 rel = velocity - otherVel;
         float vn = Vector3.Dot(rel, normal);
+        if (otherCar != null) OnCarContact(otherCar, Mathf.Max(0f, -vn));
+        else if (vn < 0f && Driven == this) PoliceDispatch.Instance?.OnPlayerImpact(this, -vn);
         if (vn >= 0f) return;
 
         if (otherCar != null)
@@ -724,6 +815,27 @@ public class FlyingVehicle : MonoBehaviour
             velocity = rel;
         }
         AddImpact(-vn);
+    }
+
+    // Called from the collision code every frame this car touches another one (resting contact
+    // included, impactSpeed 0). Police care when the player's car is involved.
+    public void OnCarContact(FlyingVehicle other, float impactSpeed)
+    {
+        if (Driven == this || Driven == other) PoliceDispatch.Instance?.OnCarContact(this, other, impactSpeed);
+    }
+
+    // Resting contact: the sweep only sees cars we move into, so check a slightly grown box.
+    void ReportTouching(Vector3 pos, Quaternion rot)
+    {
+        if (bodyCol == null) return;
+        int count = Physics.OverlapBoxNonAlloc(pos + rot * colCenter, colHalf + Vector3.one * 0.3f, overlapBuf, rot,
+                                               collisionMask, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            if (overlapBuf[i] == bodyCol) continue;
+            var other = overlapBuf[i].GetComponentInParent<FlyingVehicle>();
+            if (other != null && other != this) OnCarContact(other, 0f);
+        }
     }
 
     void AddImpact(float impact)
@@ -797,6 +909,132 @@ public class FlyingVehicle : MonoBehaviour
         transform.SetPositionAndRotation(pos, rot);
     }
 
+    // ---------- autopilot (police pursuit) ----------
+
+    // Fly toward a point (moving at targetVel) at up to maxSpeed, with the normal collision sweep.
+    // Leaves the lane; ClearAutopilot hands the car back to the lane AI.
+    public void SetAutopilot(Vector3 target, Vector3 targetVel, float maxSpeed)
+    {
+        if (!autopilot)
+        {
+            autopilot = true;
+            SetParked(false);
+            Mode = FlightMode.Free;
+        }
+        apTarget = target; apTargetVel = targetVel; apSpeed = maxSpeed;
+    }
+
+    public void ClearAutopilot()
+    {
+        if (!autopilot) return;
+        autopilot = false;
+        Mode = FlightMode.Layer; // traffic flies back to its lane from here
+    }
+
+    void UpdateAutopilot()
+    {
+        float dt = Time.deltaTime;
+        Vector3 to = apTarget - transform.position;
+        // Match the target's motion, plus close the gap (eases in over the last few metres).
+        Vector3 desired = Vector3.ClampMagnitude(apTargetVel + to * 2f, apSpeed);
+        velocity = Vector3.MoveTowards(velocity, desired, autopilotAcceleration * dt);
+
+        Vector3 face = new Vector3(velocity.x, 0f, velocity.z);
+        if (face.sqrMagnitude < 4f) face = new Vector3(to.x, 0f, to.z); // slow: face the target
+        if (face.sqrMagnitude > 0.25f)
+            yaw = Mathf.MoveTowardsAngle(yaw, Quaternion.LookRotation(face).eulerAngles.y, headingTurnRate * 1.5f * dt);
+        Quaternion heading = Quaternion.Euler(0f, yaw, 0f);
+        float bank = Mathf.Clamp(-Vector3.Dot(velocity, heading * Vector3.right) * 0.6f, -20f, 20f);
+        Quaternion rot = heading * Quaternion.Euler(Mathf.Clamp(-velocity.y * 1.5f, -20f, 20f), 0f, bank);
+
+        Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
+        if (pos.y < minAltitude) { pos.y = minAltitude; velocity.y = Mathf.Max(0f, velocity.y); }
+        transform.SetPositionAndRotation(pos, rot);
+        if (ReportContacts) ReportTouching(pos, rot);
+    }
+
+    // ---------- disabled (EMP / shot down) ----------
+
+    public void Disable(bool shotDown)
+    {
+        if (Disabled) return;
+        Disabled = true;
+        ShotDown = shotDown;
+        OnSurface = false;
+        Towed = false;
+        autopilot = false;
+        if (Mode != FlightMode.Layer) Mode = FlightMode.Layer; // magnet off
+        disableDecel = Mathf.Max(1f, velocity.magnitude) / Mathf.Max(0.05f, disableStopTime);
+        altVel = 0f;
+        if (lights != null) lights.SetOn(false);
+        if (IsOccupied) Flash(shotDown ? "SHOT DOWN  -  R restart | E door | hold E roof" : "EMP  -  R restart | E door | hold E roof");
+    }
+
+    // Restart sequence succeeded: propulsion back, a kick forward.
+    void Restart()
+    {
+        if (!Disabled) return;
+        Disabled = false;
+        ShotDown = false;
+        Towed = false;
+        OnSurface = false;
+        SetParked(false);
+        hoverBlend = 1f;
+        Mode = FlightMode.Layer;
+        gridLayer = Mathf.Max(gridLayer, TrafficAuthority.NearestLayer(Underside));
+        if (Integrity <= 0f) Integrity = maxIntegrity * 0.25f;
+        velocity += PlatformRotation * Vector3.forward * restartBoost;
+        if (lights != null) lights.SetOn(true);
+        Flash("RESTARTED");
+        PoliceDispatch.Instance?.OnRestarted(this);
+    }
+
+    // Gunfire. Shake for the driver; at 0 integrity the car goes down like an EMP.
+    public void Damage(float amount)
+    {
+        if (Disabled) return;
+        Integrity = Mathf.Max(0f, Integrity - amount);
+        LastHitTime = Time.time;
+        if (IsOccupied) shake = Mathf.Min(1f, shake + 0.35f);
+        if (Integrity <= 0f) Disable(true);
+    }
+
+    // No propulsion: the velocity dies out over disableStopTime. The backup hover holds altitude,
+    // unless the police are towing it down (or nobody is in it: then it sinks slowly). It comes to
+    // rest on the first surface below.
+    void UpdateDisabled(Mouse mouse)
+    {
+        float dt = Time.deltaTime;
+        UpdateAim(mouse);
+        Vector3 hv = new Vector3(velocity.x, 0f, velocity.z);
+        hv = Vector3.MoveTowards(hv, Vector3.zero, disableDecel * dt);
+
+        float vy = 0f;
+        if (!OnSurface)
+        {
+            float sink = Towed ? towSpeed : IsOccupied ? 0f : abandonedSinkSpeed;
+            vy = -sink;
+            // Touch down once the underside is within hover height of a surface.
+            if (sink > 0f && ProbeSurface(transform.position, 0.05f, TrafficAuthority.Hover + sink * dt + 0.05f, out surfaceY))
+            {
+                OnSurface = true;
+                vy = 0f;
+            }
+        }
+        if (OnSurface)
+        {
+            // Settle onto the surface (sinks the last bit of hover).
+            float restY = surfaceY + RootAboveUnderside;
+            float y = Mathf.MoveTowards(transform.position.y, restY, TrafficAuthority.Hover / Mathf.Max(0.05f, sinkTime) * dt);
+            vy = (y - transform.position.y) / Mathf.Max(dt, 1e-5f);
+        }
+        velocity = new Vector3(hv.x, vy, hv.z);
+
+        Quaternion rot = PlatformRotation;
+        Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
+        transform.SetPositionAndRotation(pos, rot);
+    }
+
     // ---------- camera ----------
 
     void LateUpdate()
@@ -821,7 +1059,7 @@ public class FlyingVehicle : MonoBehaviour
         cam.transform.SetPositionAndRotation(pos, look);
     }
 
-    // ---------- enter / exit / police ----------
+    // ---------- enter / exit ----------
 
     public void Enter(FirstPersonController who)
     {
@@ -838,7 +1076,13 @@ public class FlyingVehicle : MonoBehaviour
         aimYaw = yaw; aimPitch = 0f;
         Driven = this;
         VehicleHUD.Ensure();
-        TrafficAuthority.Instance?.SetPlayerVehicle(this);
+        autopilot = false;
+        if (!hijacked) { hijacked = true; PlayerSkills.AddHijack(); }
+        if (Disabled)
+        {
+            if (lights != null) lights.SetOn(false);
+            Flash("DISABLED  -  R restart | E door | hold E roof");
+        }
     }
 
     // toRoof: stand on the roof centre facing the car's yaw, already locked on. The car keeps
@@ -849,6 +1093,7 @@ public class FlyingVehicle : MonoBehaviour
         driver = null;
         eArmed = false;
         if (Driven == this) Driven = null;
+        if (RestartQTE.Active) RestartQTE.Cancel();
 
         // From here the car is a traffic agent again: on its lane it just carries on,
         // off it, it finds its way back.
@@ -865,7 +1110,7 @@ public class FlyingVehicle : MonoBehaviour
         who.BlockInteractThisFrame();
         if (toRoof) who.MountPlatform(this);
         cam = null;
-        TrafficAuthority.Instance?.SetPlayerVehicle(null);
+        PoliceDispatch.Instance?.OnPlayerExited(this);
     }
 
     public void ForceStop()

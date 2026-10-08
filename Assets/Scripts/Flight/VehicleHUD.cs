@@ -105,6 +105,6 @@ public class VehicleHUD : MonoBehaviour
         string flash = car.FlashMessage;
         if (flash != null) GUI.Label(new Rect(20, y + 50, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),
-            "Space: layer up   Shift+Space: layer down   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof");
+            "Space: layer up   Shift+Space: layer down   Ctrl: magnet off/on   Ctrl+Space: free flight/lock layer   Scroll: zoom   E: exit (door)   hold E: roof   R: restart (disabled)");
     }
 }

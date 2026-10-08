@@ -13,6 +13,7 @@ public static partial class CityDressing
 
     // Facade style ids, matching kStyleCell in CityFacade.shader.
     public const int StyleGrid = 0, StyleRibbon = 1, StyleCurtain = 2, StyleResidential = 3, StyleIndustrial = 4;
+    public const int StyleStorefront = 5; // shader-only: every building's street level (first 10 m)
 
     const float MinShaft = 12f;          // narrowest part of any tower (m)
     const float RecessInset = 4f;

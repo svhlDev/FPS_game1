@@ -18,7 +18,6 @@ public static class TwinTowersBuilder
     const int RingBaseLayer = 24;           // rings ride at layers 20 / 24 / 28
     const int RingLayerOffset = 4;
     const int DeckLayer = 29;               // deck tops at 145 m: traffic in layer 28 passes 5 m below
-    const int PoliceLayer = 26;
 
     // Towers
     const float TowerRadius = 30f;
@@ -102,7 +101,6 @@ public static class TwinTowersBuilder
             GetMaterial("TrafficCarTeal", new Color(0.1f, 0.7f, 0.7f)),
             GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
         };
-        var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
         var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
@@ -214,22 +212,13 @@ public static class TwinTowersBuilder
         // Player at Tower A's doorway, facing out
         var fpc = CreatePlayer(new Vector3(centerA.x - (TowerRadius + 3f), DeckTop, centerA.z),
                                Quaternion.LookRotation(Vector3.left), mainCam, playerMat);
-        fpc.fallRespawnGround = ground.GetComponent<Collider>();
 
-        // Police hovering off the far ends of the rings
+        // Police patrolling the rings like traffic
         var policeRoot = new GameObject("Police").transform;
-        float endZ = ParallelRunLength * 0.5f + OuterRingRadius + 15f;
-        Vector3[] posts =
+        for (int i = 0; i < PoliceCount; i++)
         {
-            centerA + new Vector3(0f, 0f, endZ), centerA + new Vector3(0f, 0f, -endZ),
-            centerB + new Vector3(0f, 0f, endZ), centerB + new Vector3(0f, 0f, -endZ),
-        };
-        for (int i = 0; i < Mathf.Min(PoliceCount, posts.Length); i++)
-        {
-            var cop = Slab(policeRoot, $"Police_{i}", posts[i] + Vector3.up * (TrafficAuthority.RideHeight(PoliceLayer) + CarRootAboveUnderside),
-                           new Vector3(CarWidth, CarHalfHeight * 2f, CarLength), policeMat);
-            AddKinematicBody(cop.gameObject);
-            cop.gameObject.AddComponent<PoliceUnit>();
+            var lane = lanes[i % lanes.Count];
+            CreatePoliceCar($"Police_{i}", policeRoot, lane, lane.Length * (0.25f + 0.5f * (i / lanes.Count % 2)), 0, SpeedMax);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));

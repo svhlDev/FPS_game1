@@ -14,6 +14,8 @@ using static FlightGrayboxBuilder;
 // 40 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
 // Towers 250-600 m (1 in 5 a giant through the cloud deck), smog layer and cloud deck above.
+// Street level (layer 0) is playable: road, sidewalks, paved alleys, shops, lamps (CityStreet.cs), and
+// two sparse street-traffic loops, one per direction, that stop for you when you're on foot in their lane.
 // Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
 // ledges, underworld haze, fog, bloom). Same CitySeed = same city.
 public static class SkyAvenueBuilder
@@ -43,7 +45,6 @@ public static class SkyAvenueBuilder
     static readonly int[] LaneLevels = { -2, -1, 0, 1, 2, 7, 8, 9, 10, 11 };
     const int DeckLayer = 25;                              // deck top 250 m, 20 m above the top lane (layer 23)
     const int DeckTowerMinLayers = 30;                     // the deck's tower is at least 300 m tall
-    const int PoliceLayer = 15;
 
     // Canyon and building rows (canyon centred on x = 0)
     const float CanyonLength = 600f;
@@ -83,6 +84,11 @@ public static class SkyAvenueBuilder
 
     const int PoliceCount = 4;
 
+    // Street traffic: one loop per direction at layer 0 on the outer road lanes, wrapping round the rows.
+    const float StreetLaneX = CityDressing.StreetLaneWidth * 1.5f;  // 5.25: outer lane centre
+    const float StreetCarSpacing = 120f;
+    const float StreetSpeed = 15f;
+
     static float Snap(float h) => Mathf.Max(1, Mathf.RoundToInt(h / LayerSpacing)) * LayerSpacing;
     static float Ride(int layer) => layer * LayerSpacing + 0.5f;
 
@@ -118,7 +124,6 @@ public static class SkyAvenueBuilder
             GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
         };
         var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
-        var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
         // Layout + traffic use `rng` (same sequence as before the look pass); setbacks and decoration
@@ -193,14 +198,46 @@ public static class SkyAvenueBuilder
             {
                 float radius = innerRadius + ring * LaneSpacing; // ring 1 is the lane next to the median
                 lanes.Add(MakeLoop($"{(side < 0 ? "West" : "East")}Loop_{ring}", lanesRoot,
-                                   RacetrackClockwise(center, radius, CanyonLength)));
+                                   RacetrackClockwise(center, radius, CanyonLength, Ride(BaseLayer))));
             }
+        }
+        // Street loops: same shape at layer 0 on the outer road lanes (east runs north, west south).
+        var streetLanes = new List<LanePath>();
+        float streetRadius = (halfW + rowDepth + EndClearance - StreetLaneX) * 0.5f;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            var center = new Vector3(side * (StreetLaneX + streetRadius), 0f, 0f);
+            streetLanes.Add(MakeLoop($"{(side < 0 ? "West" : "East")}Street", lanesRoot,
+                                     RacetrackClockwise(center, streetRadius, CanyonLength, Ride(0)), 0, new[] { 0 }, false));
         }
 
         // Traffic: MaxTrafficCars split across every level of every loop lane in proportion to lane
         // length (at least MinCarsPerLane each, never closer than MinSpawnGap).
         var trafficRoot = new GameObject("Traffic").transform;
         int carIndex = 0;
+
+        // Street traffic first (sparse, slow, its own random stream); it comes out of the same budget.
+        var streetRng = new System.Random(CitySeed * 31 + 7);
+        int streetCars = 0;
+        foreach (var path in streetLanes)
+        {
+            int count = Mathf.Max(1, Mathf.RoundToInt(path.Length / StreetCarSpacing));
+            float spacing = path.Length / count, phase = (float)streetRng.NextDouble() * spacing;
+            for (int i = 0; i < count; i++)
+            {
+                float start = Mathf.Repeat(phase + i * spacing, path.Length);
+                var v = CreateVehicle($"StreetCar_{streetCars++:000}", Pick(trafficMats, streetRng));
+                v.transform.SetParent(trafficRoot, false);
+                v.path = path;
+                v.startDistance = start;
+                v.startLevel = 0;
+                v.aiCruiseSpeed = StreetSpeed;
+                path.Sample(start, out var sp, out var sf);
+                v.transform.SetPositionAndRotation(sp + Vector3.up * CarRootAboveUnderside, Quaternion.LookRotation(sf));
+            }
+        }
+        int skyBudget = Mathf.Max(0, MaxTrafficCars - streetCars);
+
         float totalLength = 0f;
         foreach (var path in lanes) totalLength += path.Length * LaneLevels.Length;
         foreach (var path in lanes)
@@ -208,7 +245,7 @@ public static class SkyAvenueBuilder
             float L = path.Length;
             foreach (int level in LaneLevels)
             {
-                int count = Mathf.Clamp(Mathf.RoundToInt(MaxTrafficCars * L / totalLength), MinCarsPerLane,
+                int count = Mathf.Clamp(Mathf.RoundToInt(skyBudget * L / totalLength), MinCarsPerLane,
                                         Mathf.Max(1, Mathf.FloorToInt(L / MinSpawnGap)));
                 float spacing = L / count;
                 float maxJitter = Mathf.Min(SpacingJitter * spacing, (spacing - MinSpawnGap) * 0.5f);
@@ -268,10 +305,15 @@ public static class SkyAvenueBuilder
 
         // Player at the doorway, facing the canyon. Spawn = respawn point.
         var fpc = CreatePlayer(new Vector3(face + 3f, deckTop, deckZ), Quaternion.LookRotation(Vector3.right), mainCam, playerMat);
-        fpc.fallRespawnGround = ground.GetComponent<Collider>();
 
         // ---------- look pass: decoration, ledges, bridges, holograms, atmosphere ----------
         kit.clearance = new CityDressing.Clearance(lanes);
+
+        // Street level: road, sidewalks, alleys, lamps, signs, vents.
+        var streetPlots = new List<CityDressing.StreetPlot>();
+        foreach (var plot in plots)
+            streetPlots.Add(new CityDressing.StreetPlot { side = plot.side, center = plot.center, footprint = plot.footprint });
+        CityDressing.BuildStreet(cityRoot, halfW, halfL, streetPlots, decoRng, kit);
         kit.keepOut.Add(new Bounds(new Vector3(deckMidX, deckTop, deckZ), new Vector3(deckLen + 6f, 30f, DeckWidth + 6f)));
         for (int r = 0; r < rows.Count; r++)
         {
@@ -307,25 +349,24 @@ public static class SkyAvenueBuilder
         CityDressing.AddHeightFog();
         CityDressing.SetupAtmosphere(mainCam, "SkyAvenue_Post");
 
-        // Police hovering over the median.
+        // Police patrolling the loops like traffic (more are dispatched during a pursuit).
         var policeRoot = new GameObject("Police").transform;
         for (int i = 0; i < PoliceCount; i++)
         {
-            float z = Mathf.Lerp(-halfL * 0.75f, halfL * 0.75f, PoliceCount > 1 ? i / (float)(PoliceCount - 1) : 0.5f);
-            var cop = Slab(policeRoot, $"Police_{i}", new Vector3(0f, Ride(PoliceLayer) + CarRootAboveUnderside, z),
-                           new Vector3(CarWidth, CarHalfHeight * 2f, CarLength), policeMat);
-            AddKinematicBody(cop.gameObject);
-            cop.gameObject.AddComponent<PoliceUnit>();
+            var lane = lanes[i % lanes.Count];
+            CreatePoliceCar($"Police_{i}", policeRoot, lane, lane.Length * (0.1f + 0.2f * i), 0, SpeedMax);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
         EditorSceneManager.SaveScene(scene, ScenePath);
         Selection.activeGameObject = fpc.gameObject;
-        Debug.Log($"Sky Avenue built: {lanes.Count} loop lanes x {LaneLevels.Length} levels, {carIndex} traffic cars.");
+        Debug.Log($"Sky Avenue built: {lanes.Count} loop lanes x {LaneLevels.Length} levels, {carIndex} traffic cars, " +
+                  $"{streetCars} street cars.");
     }
 
-    // Closed flyway through the waypoints with full-loop lanes at every level.
-    static LanePath MakeLoop(string name, Transform parent, List<Vector3> wps)
+    // Closed flyway through the waypoints with full-loop lanes at every level (default: the sky streams).
+    static LanePath MakeLoop(string name, Transform parent, List<Vector3> wps, int baseLayer = BaseLayer,
+                             int[] levels = null, bool laneLights = true)
     {
         var go = new GameObject(name);
         go.transform.SetParent(parent, false);
@@ -337,20 +378,23 @@ public static class SkyAvenueBuilder
         }
         var path = go.AddComponent<LanePath>();
         path.closedLoop = true;
-        path.baseLayer = BaseLayer;
-        path.laneLevels = (int[])LaneLevels.Clone();
+        path.baseLayer = baseLayer;
+        path.laneLevels = (int[])(levels ?? LaneLevels).Clone();
         path.Rebuild();
-        go.AddComponent<LaneLights>().spacing = LightSpacing;
-        LaneLightBaker.Bake(path);
+        if (laneLights)
+        {
+            go.AddComponent<LaneLights>().spacing = LightSpacing;
+            LaneLightBaker.Bake(path);
+        }
         return path;
     }
 
     // Racetrack around c: straights along Z of length `run` at x = c.x +/- radius, semicircle ends.
     // Clockwise from above: +X side heads -Z, -X side heads +Z. Waypoints every ~WaypointSpacing m.
-    static List<Vector3> RacetrackClockwise(Vector3 c, float radius, float run)
+    static List<Vector3> RacetrackClockwise(Vector3 c, float radius, float run, float y)
     {
         var pts = new List<Vector3>();
-        float h = run * 0.5f, y = Ride(BaseLayer);
+        float h = run * 0.5f;
         int nStraight = Mathf.Max(1, Mathf.CeilToInt(run / WaypointSpacing));
         int nArc = Mathf.Max(4, Mathf.CeilToInt(Mathf.PI * radius / WaypointSpacing));
 

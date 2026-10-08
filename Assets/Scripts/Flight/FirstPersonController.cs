@@ -9,6 +9,7 @@ using UnityEngine.InputSystem;
 // Cars with a rear rack (VehicleGrabPoint) can be caught from the air (swept test, timing is
 // everything): you hang off the back and mash Space to climb up.
 // Boot thrusters: one extra jump in the air, and holding Space while falling glides.
+// Falling has no limit: you land on the street. A hard landing (no glide) staggers you for a moment.
 // Scroll zooms from first person out to a third-person shoulder boom (same feel as the car);
 // the body always faces the camera's yaw (strafe style). A blob shadow marks where you'll land.
 // Runs after the vehicles so it carries with this frame's car motion.
@@ -97,10 +98,10 @@ public class FirstPersonController : MonoBehaviour
     public float catchSwingSettle = 0.5f;
 
     [Header("Falling")]
-    [Tooltip("Respawn when this far below the lowest flyway lane in the scene.")]
-    public float killDepthBelowLowestLayer = 40f;
-    [Tooltip("Touching this collider respawns you (the ground far below the traffic). Leave empty to allow walking on it.")]
-    public Collider fallRespawnGround;
+    [Tooltip("Landing faster than this (m/s) staggers you: no input for staggerTime, camera dips.")]
+    public float staggerFallSpeed = 25f;
+    public float staggerTime = 1f;
+    public float staggerDip = 0.5f;
 
     [Header("Camera")]
     [Tooltip("Same zoom behaviour as the car camera; on-foot zoom is remembered separately.")]
@@ -124,6 +125,11 @@ public class FirstPersonController : MonoBehaviour
 
     public float SpawnTime { get; private set; }
     public bool IsHanging => hang != null;
+    // The player (on foot or not). Set in Awake, so it exists while driving too.
+    public static FirstPersonController Instance { get; private set; }
+    // No movement or interaction input (being escorted). Gravity still applies.
+    public bool Frozen { get; set; }
+    public Vector3 Velocity => (grounded ? Vector3.zero : airVel) + Vector3.up * verticalVelocity;
 
     CharacterController cc;
     float pitch;
@@ -158,7 +164,7 @@ public class FirstPersonController : MonoBehaviour
 
     Vector3 spawnPos;
     Quaternion spawnRot;
-    float killHeight = float.NegativeInfinity;
+    float staggerUntil = -1f;
     string flash; float flashUntil;
 
     int playerLayerMask;
@@ -168,6 +174,7 @@ public class FirstPersonController : MonoBehaviour
 
     void Awake()
     {
+        Instance = this;
         cc = GetComponent<CharacterController>();
         cc.minMoveDistance = 0f; // small carry/slide moves must not be dropped
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
@@ -182,11 +189,8 @@ public class FirstPersonController : MonoBehaviour
         spawnPos = transform.position;
         spawnRot = transform.rotation;
         SpawnTime = Time.time;
-        float lowest = float.PositiveInfinity;
-        foreach (var lane in FindObjectsByType<LanePath>())
-            lowest = Mathf.Min(lowest, TrafficAuthority.RideHeight(lane.LowestLayer));
-        killHeight = float.IsPositiveInfinity(lowest) ? float.NegativeInfinity : lowest - killDepthBelowLowestLayer;
         VehicleHUD.Ensure();
+        PoliceDispatch.Ensure();
     }
 
     void OnEnable()
@@ -238,8 +242,9 @@ public class FirstPersonController : MonoBehaviour
 
         Vector3 carVel = platform != null ? Carry(dt) : Vector3.zero;
 
-        float x = (kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f);
-        float z = (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f);
+        bool noInput = Frozen || Time.time < staggerUntil;
+        float x = noInput ? 0f : (kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f);
+        float z = noInput ? 0f : (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f);
         float speed = kb.leftShiftKey.isPressed ? sprintSpeed : walkSpeed;
         Vector3 move = Vector3.ClampMagnitude(transform.right * x + transform.forward * z, 1f) * speed;
 
@@ -253,19 +258,19 @@ public class FirstPersonController : MonoBehaviour
             airJumpsLeft = airJumps; // landing on anything, roofs included
             horizontal = platform != null ? move + slipVel : move;
             if (verticalVelocity < 0f) verticalVelocity = -2f;
-            if (kb.spaceKey.wasPressedThisFrame) verticalVelocity = JumpVelocity;
+            if (kb.spaceKey.wasPressedThisFrame && !noInput) verticalVelocity = JumpVelocity;
         }
         else
         {
             // A press in the air spends the double jump; keep holding and the glide takes over from the apex.
-            if (kb.spaceKey.wasPressedThisFrame && airJumpsLeft > 0 && fuel >= doubleJumpFuelCost)
+            if (kb.spaceKey.wasPressedThisFrame && !noInput && airJumpsLeft > 0 && fuel >= doubleJumpFuelCost)
             {
                 airJumpsLeft--;
                 fuel -= doubleJumpFuelCost;
                 verticalVelocity = Mathf.Max(verticalVelocity, JumpVelocity);
                 thrusterGlowUntil = Time.time + 0.25f;
             }
-            gliding = kb.spaceKey.isPressed && verticalVelocity < 0f && (glideFuelPerSecond <= 0f || fuel > 0f);
+            gliding = !noInput && kb.spaceKey.isPressed && verticalVelocity < 0f && (glideFuelPerSecond <= 0f || fuel > 0f);
             AirControl(move, dt, gliding ? glideAirControl : airControl);
             assistActive = verticalVelocity < 0f && LandingAssist(dt);
             horizontal = airVel;
@@ -278,9 +283,15 @@ public class FirstPersonController : MonoBehaviour
         }
 
         groundCollider = null;
+        float fallSpeed = -verticalVelocity;
         var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt);
         bool wasGrounded = grounded;
         grounded = (flags & CollisionFlags.Below) != 0;
+        if (grounded && !wasGrounded && fallSpeed > staggerFallSpeed)
+        {
+            staggerUntil = Time.time + staggerTime;
+            camShake = Mathf.Max(camShake, 0.5f);
+        }
 
         if (grounded)
         {
@@ -291,7 +302,6 @@ public class FirstPersonController : MonoBehaviour
                 else LeavePlatform();
             }
             if (car == null) airVel = Vector3.zero; // landing on anything but a car stops you dead
-            if (fallRespawnGround != null && groundCollider == fallRespawnGround) { Respawn(); return; }
         }
         else if (wasGrounded)
         {
@@ -306,9 +316,7 @@ public class FirstPersonController : MonoBehaviour
         if (platform != null)
             platformLocal = Quaternion.Inverse(platform.PlatformRotation) * (transform.position - platform.PlatformPosition);
 
-        if (transform.position.y < killHeight) { Respawn(); return; }
-
-        if (kb.eKey.wasPressedThisFrame && Time.frameCount != blockInteractFrame)
+        if (kb.eKey.wasPressedThisFrame && !noInput && Time.frameCount != blockInteractFrame)
         {
             if (platform != null && !platform.IsOccupied)
             {
@@ -352,6 +360,9 @@ public class FirstPersonController : MonoBehaviour
                 local += Random.insideUnitSphere * camShake * catchShake;
                 camShake = Mathf.MoveTowards(camShake, 0f, 2f * Time.deltaTime);
             }
+            // Hard landing: the view dips and comes back up over the stagger.
+            float stagger = Mathf.Clamp01((staggerUntil - Time.time) / Mathf.Max(staggerTime, 0.01f));
+            local += Vector3.down * staggerDip * Mathf.Sin(stagger * Mathf.PI);
             cam.localPosition = local;
             cam.localRotation = Quaternion.identity;
             SetBodyVisible(dist > showBodyDistance);
@@ -382,9 +393,9 @@ public class FirstPersonController : MonoBehaviour
         return allowed;
     }
 
-    // Cars and police have kinematic bodies; the component checks cover scenes built before that.
+    // Cars have kinematic bodies; the component check covers scenes built before that.
     static bool IsMoving(Collider c) =>
-        c.attachedRigidbody != null || c.GetComponentInParent<FlyingVehicle>() != null || c.GetComponentInParent<PoliceUnit>() != null;
+        c.attachedRigidbody != null || c.GetComponentInParent<FlyingVehicle>() != null;
 
     void SetBodyVisible(bool show)
     {
@@ -671,8 +682,11 @@ public class FirstPersonController : MonoBehaviour
 
     static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
 
-    void Respawn()
+    // Back to the start deck (Busted).
+    public void Respawn(string message)
     {
+        Frozen = false;
+        staggerUntil = -1f;
         hang = null;
         lastHandValid = false;
         gliding = false;
@@ -687,7 +701,7 @@ public class FirstPersonController : MonoBehaviour
         pitch = 0f;
         cameraRoot.localRotation = Quaternion.identity;
         SpawnTime = Time.time;
-        Flash("You fell");
+        Flash(message);
     }
 
     // ---------- interaction ----------
@@ -716,7 +730,20 @@ public class FirstPersonController : MonoBehaviour
 
     public void BlockInteractThisFrame() => blockInteractFrame = Time.frameCount;
 
-    void Flash(string msg) { flash = msg; flashUntil = Time.time + 2f; }
+    public void Flash(string msg) { flash = msg; flashUntil = Time.time + 2f; }
+
+    // Teleport (escort, placed beside the cop car): off any platform, falling from rest.
+    public void PlaceAt(Vector3 pos, Quaternion rot)
+    {
+        hang = null;
+        cc.enabled = false;
+        transform.SetPositionAndRotation(pos, rot);
+        cc.enabled = true;
+        LeavePlatform();
+        airVel = Vector3.zero;
+        verticalVelocity = 0f;
+        grounded = false;
+    }
 
     void OnGUI()
     {

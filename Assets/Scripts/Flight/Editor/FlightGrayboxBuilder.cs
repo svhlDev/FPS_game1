@@ -19,7 +19,6 @@ public static class FlightGrayboxBuilder
     const float Half = Blocks * Pitch * 0.5f;
     const int LaneBaseLayer = 8;         // flyway middle lanes ride at layer 8 (40.5 m); side lanes at 4 / 12
     const int LaneLayerOffset = 4;
-    const int PoliceLayer = 10;
     internal const float CarRootAboveUnderside = 0.75f; // car body is 1.5 m tall, centred on the root
     const float ParallelGap = 8f;        // spacing between parallel lanes
     const float CornerRadius = 30f;
@@ -71,7 +70,6 @@ public static class FlightGrayboxBuilder
             GetMaterial("TrafficCarTeal", new Color(0.1f, 0.7f, 0.7f)),
             GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
         };
-        var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
         var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
@@ -207,16 +205,12 @@ public static class FlightGrayboxBuilder
                                                    Quaternion.LookRotation(Vector3.left));
         }
 
-        // Police at a handful of corridor intersections
+        // Police patrolling a few of the lanes
         var policeRoot = new GameObject("Police").transform;
-        int[,] posts = { { 1, 1 }, { 2, 4 }, { 4, 2 }, { 5, 5 }, { 1, 5 }, { 5, 1 } };
-        for (int i = 0; i < posts.GetLength(0); i++)
+        for (int i = 0; i < 6; i++)
         {
-            var cop = Slab(policeRoot, $"Police_{i}",
-                new Vector3(Avenue(posts[i, 0]) + 15f, TrafficAuthority.RideHeight(PoliceLayer) + CarRootAboveUnderside, Avenue(posts[i, 1]) + 15f),
-                new Vector3(3f, 1.5f, 5f), policeMat);
-            AddKinematicBody(cop.gameObject);
-            cop.gameObject.AddComponent<PoliceUnit>();
+            var lane = lanes[(i * 5) % lanes.Count];
+            CreatePoliceCar($"Police_{i}", policeRoot, lane, lane.Length * 0.37f, 0, 20f);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
@@ -487,6 +481,35 @@ public static class FlightGrayboxBuilder
         v.cockpitAnchor = cockpit;
         AddCarLights(root);
         SetLayerRecursive(root, TrafficLayer());
+        return v;
+    }
+
+    // Police car: an ordinary FlyingVehicle (same physics as everyone) in police colours - dark blue
+    // body, white side band, blue and red light bar on the roof (decoration only) - plus a PoliceDriver.
+    // Patrols `path` like traffic until PoliceDispatch sends it after the player.
+    internal static FlyingVehicle CreatePoliceCar(string name, Transform parent, LanePath path, float distance, int level, float speed)
+    {
+        var v = CreateVehicle(name, GetMaterial("PoliceBody", new Color(0.04f, 0.07f, 0.2f)));
+        // Body is 3 x 1.5 x 6: the band is just proud of its sides, the bar sits on the roof.
+        LightBox(v.gameObject, "Band", new Vector3(0f, 0.05f, 0f), new Vector3(3.04f, 0.35f, 3.4f),
+                 GetMaterial("PoliceWhite", new Color(0.85f, 0.87f, 0.9f)));
+        LightBox(v.gameObject, "BarBlue", new Vector3(-0.45f, 0.85f, -0.4f), new Vector3(0.85f, 0.2f, 0.35f),
+                 GetUnlitMaterial("PoliceBarBlue", new Color(0.15f, 0.35f, 1f), 4f));
+        LightBox(v.gameObject, "BarRed", new Vector3(0.45f, 0.85f, -0.4f), new Vector3(0.85f, 0.2f, 0.35f),
+                 GetUnlitMaterial("PoliceBarRed", new Color(1f, 0.1f, 0.08f), 4f));
+        SetLayerRecursive(v.gameObject, TrafficLayer());
+        var driver = v.gameObject.AddComponent<PoliceDriver>();
+        driver.tracerMaterial = GetUnlitMaterial("PoliceTracer", new Color(1f, 0.85f, 0.5f), 6f);
+        driver.sparkMaterial = GetUnlitMaterial("Sparks", new Color(1f, 0.6f, 0.2f), 6f);
+
+        v.transform.SetParent(parent, false);
+        v.path = path;
+        v.startDistance = distance;
+        v.startLevel = level;
+        v.aiCruiseSpeed = speed;
+        path.Sample(distance, out var p, out var f);
+        float w = path.LaneWeight(level, distance, out var off);
+        v.transform.SetPositionAndRotation(path.ToWorld(p, f, off * w) + Vector3.up * CarRootAboveUnderside, Quaternion.LookRotation(f));
         return v;
     }
 
