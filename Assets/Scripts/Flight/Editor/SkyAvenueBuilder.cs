@@ -13,6 +13,7 @@ using static FlightGrayboxBuilder;
 // Each loop has 2 concentric lanes, each with 10 stacked levels in two streams (layers 10-14 and 19-23):
 // 40 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
+// Towers 500-1200 m (1 in 5 a giant through the cloud deck), smog layer and cloud deck above.
 // Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
 // ledges, lane guide strips, underworld haze, fog, bloom). Same CitySeed = same city.
 public static class SkyAvenueBuilder
@@ -22,7 +23,7 @@ public static class SkyAvenueBuilder
 
     // Altitude bands for the look: underworld below layer 9, traffic band 9-15, upper city 16+.
     const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 23;   // both streams get the bright treatment (90-240 m)
-    const int TallTowerLayers = 54;                        // towers this tall get a blinking aircraft light
+    const int TallTowerLayers = 90;                        // giants (900 m+) get a blinking aircraft light
     const float HologramChance = 0.25f;
     const float BridgeChance = 0.35f;        // per LedgeAlley
     const float ClimbAlleyChance = 0.5f;     // alleys kept perfectly flat for wall running / bouncing
@@ -44,20 +45,25 @@ public static class SkyAvenueBuilder
     const int PoliceLayer = 15;
 
     // Canyon and building rows (canyon centred on x = 0)
-    const float CanyonLength = 800f;
+    const float CanyonLength = 1200f;
     const float CanyonWidth = 60f;
-    const float RowDepth = 60f;
-    const float FootprintMin = 40f, FootprintMax = 60f;
-    const float AlleyWidth = 20f;
-    const float HeightMin = 300f, HeightMax = 600f;
+    const float FootprintMin = 70f, FootprintMax = 120f;
+    const float AlleyMin = 14f, AlleyMax = 20f;            // close walls for wall running
+    const float HeightMin = 500f, HeightMax = 900f;
+    const float GiantChance = 0.2f;                        // giants pierce the cloud deck
+    const float GiantMin = 900f, GiantMax = 1200f;
+
+    // Sky
+    static readonly float[] CloudHeights = { 420f, 460f };
+    const float SkySize = 6000f;                           // ground, haze and cloud planes
 
     // Traffic loops
     const float CarWidth = 3f, CarHalfHeight = 0.75f, CarLength = 6f;
     const float LaneSpacing = CarWidth + 4f;               // between the two concentric lanes of a loop
     const float MedianGap = 10f;                           // between car edges of the two directions
-    const float EndClearance = 20f;                        // inner semicircle radius = row half-depth + this
+    const float EndClearance = 20f;                        // loops clear the back of the row by this much
     const float WaypointSpacing = 12f;
-    const int CarsPerLane = 20;
+    const float CarSpacing = 45f;                          // one car per ~45 m of lane, so long loops stay busy
     const float SpeedMin = 18f, SpeedMax = 20f;
     const float SpacingJitter = 0.1f;
     const float MinSpawnGap = 15f;
@@ -66,8 +72,6 @@ public static class SkyAvenueBuilder
     // Derived lane geometry (x of the canyon straights)
     const float MedianLaneX = MedianGap * 0.5f + CarWidth * 0.5f;   // 6.5: lane next to the median
     const float WallLaneX = MedianLaneX + LaneSpacing;              // 13.5: lane nearer the buildings
-    const float InnerRadius = RowDepth * 0.5f + EndClearance;       // 50
-    const float LoopCenterX = WallLaneX + InnerRadius;              // 63.5
 
     // Start deck
     const float DeckReach = 14f;                           // how far it sticks out into the canyon
@@ -93,7 +97,7 @@ public static class SkyAvenueBuilder
         var ta = new GameObject("TrafficAuthority").AddComponent<TrafficAuthority>();
         ta.layerSpacing = LayerSpacing;
         ta.hoverHeight = 0.5f;
-        ta.maxLayer = 70;
+        ta.maxLayer = 130;                                 // above the giants
 
         var groundMat = GetMaterial("UnderworldGround", new Color(0.05f, 0.05f, 0.06f));
         var kit = CityDressing.CreateKit(LayerSpacing, TrafficBandMinLayer, TrafficBandMaxLayer);
@@ -122,7 +126,7 @@ public static class SkyAvenueBuilder
 
         var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
         ground.name = "Ground";
-        ground.transform.localScale = new Vector3(300f, 1f, 300f); // 3 km square
+        ground.transform.localScale = new Vector3(SkySize / 10f, 1f, SkySize / 10f);
         SetMat(ground, groundMat);
 
         // Building rows. Each tower's canyon face is flush with the canyon edge.
@@ -138,16 +142,23 @@ public static class SkyAvenueBuilder
             while (z < halfL)
             {
                 float len = Mathf.Min(Mathf.Lerp(FootprintMin, FootprintMax, (float)rng.NextDouble()), halfL - z);
-                if (len < AlleyWidth) break;
+                if (len < FootprintMin * 0.5f) break;
                 float depth = Mathf.Lerp(FootprintMin, FootprintMax, (float)rng.NextDouble());
-                float h = Snap(Mathf.Lerp(HeightMin, HeightMax, (float)rng.NextDouble()));
+                bool giant = rng.NextDouble() < GiantChance;
+                float h = Snap(giant ? Mathf.Lerp(GiantMin, GiantMax, (float)rng.NextDouble())
+                                     : Mathf.Lerp(HeightMin, HeightMax, (float)rng.NextDouble()));
                 float cx = side * (halfW + depth * 0.5f);
                 var tint = Pick(WallTints, rng);
                 plots.Add((side, new Vector3(cx, 0f, z + len * 0.5f), new Vector2(depth, len), Mathf.RoundToInt(h / LayerSpacing), tint));
                 if (side < 0) westTowers.Add(new Vector2(z + len * 0.5f, len * 0.5f));
-                z += len + AlleyWidth;
+                z += len + Mathf.Lerp(AlleyMin, AlleyMax, (float)rng.NextDouble());
             }
         }
+        // Loops follow the rows: the outer straight of each loop clears the deepest tower by EndClearance.
+        float rowDepth = 0f;
+        foreach (var plot in plots) rowDepth = Mathf.Max(rowDepth, plot.footprint.x);
+        float innerRadius = (halfW + rowDepth + EndClearance - WallLaneX) * 0.5f;
+        float loopCenterX = WallLaneX + innerRadius;
         // The deck hangs off the west tower nearest mid-length: keep that one a plain slab (no slot, no recess).
         int deckPlot = -1;
         for (int p = 0; p < plots.Count; p++)
@@ -174,16 +185,16 @@ public static class SkyAvenueBuilder
         var lanes = new List<LanePath>();
         for (int side = -1; side <= 1; side += 2)
         {
-            var center = new Vector3(side * LoopCenterX, 0f, 0f);
+            var center = new Vector3(side * loopCenterX, 0f, 0f);
             for (int ring = 0; ring < 2; ring++)
             {
-                float radius = InnerRadius + ring * LaneSpacing; // ring 1 is the lane next to the median
+                float radius = innerRadius + ring * LaneSpacing; // ring 1 is the lane next to the median
                 lanes.Add(MakeLoop($"{(side < 0 ? "West" : "East")}Loop_{ring}", lanesRoot,
                                    RacetrackClockwise(center, radius, CanyonLength)));
             }
         }
 
-        // Traffic: CarsPerLane on every level of every loop lane.
+        // Traffic: one car per CarSpacing metres on every level of every loop lane.
         var trafficRoot = new GameObject("Traffic").transform;
         int carIndex = 0;
         foreach (var path in lanes)
@@ -191,7 +202,7 @@ public static class SkyAvenueBuilder
             float L = path.Length;
             foreach (int level in LaneLevels)
             {
-                int count = Mathf.Min(CarsPerLane, Mathf.FloorToInt(L / MinSpawnGap));
+                int count = Mathf.Max(1, Mathf.FloorToInt(L / Mathf.Max(CarSpacing, MinSpawnGap)));
                 float spacing = L / count;
                 float maxJitter = Mathf.Min(SpacingJitter * spacing, (spacing - MinSpawnGap) * 0.5f);
                 float phase = (float)rng.NextDouble() * spacing;
@@ -288,7 +299,9 @@ public static class SkyAvenueBuilder
                 CityDressing.AddCables(row[a].root, row[a], row[a + 1], decoRng, kit);
             }
         }
-        CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, 2400f, HazeHeights, kit);
+        CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, SkySize, HazeHeights, kit);
+        CityDressing.AddCloudDeck(cityRoot, Vector3.zero, SkySize, CloudHeights, Vector3.forward);
+        CityDressing.AddHeightFog();
         CityDressing.SetupAtmosphere(mainCam, "SkyAvenue_Post");
 
         // Police hovering over the median.

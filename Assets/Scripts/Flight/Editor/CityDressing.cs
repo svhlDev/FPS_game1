@@ -288,10 +288,13 @@ public static partial class CityDressing
         foreach (var m in t.masses) if (m.max.y > crownBase.max.y) crownBase = m;
         Vector3 roof = new Vector3(crownBase.center.x, crownBase.max.y, crownBase.center.z);
         float tipY;
+        // Crowns scale with the tower (x1 at 400 m).
+        float crownScale = Mathf.Max(1f, t.heightLayers * kit.spacing / 400f);
         if (rng.NextDouble() < 0.5)
         {
-            float h = Mathf.Lerp(20f, 60f, (float)rng.NextDouble());
-            Cylinder(deco, "Spire", roof + Vector3.up * h * 0.5f, new Vector3(1.2f, h * 0.5f, 1.2f), kit.decoDark, kit);
+            float h = Mathf.Lerp(20f, 60f, (float)rng.NextDouble()) * crownScale;
+            float r = 1.2f * Mathf.Sqrt(crownScale);
+            Cylinder(deco, "Spire", roof + Vector3.up * h * 0.5f, new Vector3(r, h * 0.5f, r), kit.decoDark, kit);
             tipY = roof.y + h;
             roof.y = tipY;
         }
@@ -301,9 +304,11 @@ public static partial class CityDressing
             tipY = roof.y;
             for (int i = 0; i < count; i++)
             {
-                float h = Mathf.Lerp(8f, 25f, (float)rng.NextDouble());
-                var p = roof + new Vector3(Mathf.Lerp(-4f, 4f, (float)rng.NextDouble()), h * 0.5f, Mathf.Lerp(-4f, 4f, (float)rng.NextDouble()));
-                Cylinder(deco, "Antenna", p, new Vector3(0.25f, h * 0.5f, 0.25f), kit.decoDark, kit);
+                float h = Mathf.Lerp(8f, 25f, (float)rng.NextDouble()) * crownScale;
+                float spread = 4f * crownScale;
+                var p = roof + new Vector3(Mathf.Lerp(-spread, spread, (float)rng.NextDouble()), h * 0.5f, Mathf.Lerp(-spread, spread, (float)rng.NextDouble()));
+                float r = 0.25f * Mathf.Sqrt(crownScale);
+                Cylinder(deco, "Antenna", p, new Vector3(r, h * 0.5f, r), kit.decoDark, kit);
                 if (roof.y + h > tipY) { tipY = roof.y + h; }
             }
             roof.y = tipY;
@@ -315,7 +320,7 @@ public static partial class CityDressing
             Object.DestroyImmediate(light.GetComponent<Collider>());
             light.transform.SetParent(deco, false);
             light.transform.position = new Vector3(roof.x, tipY + 0.5f, roof.z);
-            light.transform.localScale = Vector3.one * 1.2f;
+            light.transform.localScale = Vector3.one * 1.2f * Mathf.Sqrt(crownScale);
             light.GetComponent<Renderer>().sharedMaterial = kit.aircraftRed;
             light.AddComponent<AircraftLight>().phase = (float)rng.NextDouble();
             // Not static: it toggles its renderer.
@@ -466,17 +471,19 @@ public static partial class CityDressing
         var fogColor = new Color(0.10f, 0.08f, 0.17f);
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.Exponential;
-        RenderSettings.fogDensity = 0.006f; // ~70% visible across the canyon, ~3% at 600 m
+        // Only for very long distances now: the smog (HeightFogFeature) does the near work.
+        RenderSettings.fogDensity = 0.0015f;
         RenderSettings.fogColor = fogColor;
 
         var sky = ShaderMaterial("NightSky", "FPS/NightSky", m => m.SetColor("_HorizonColor", fogColor * 1.4f));
         RenderSettings.skybox = sky;
         cam.clearFlags = CameraClearFlags.Skybox;
         cam.allowHDR = true;
-        cam.farClipPlane = 3000f;
+        cam.farClipPlane = 7000f;
         cam.allowMSAA = false;
         var camData = cam.GetUniversalAdditionalCameraData();
         camData.renderPostProcessing = true;
+        camData.requiresDepthTexture = true; // the height fog reads it
         camData.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing;
         camData.antialiasingQuality = AntialiasingQuality.High;
 
@@ -525,6 +532,91 @@ public static partial class CityDressing
         var vol = new GameObject("PostProcessVolume").AddComponent<Volume>();
         vol.isGlobal = true;
         vol.sharedProfile = profile;
+    }
+
+    // ---------- smog and clouds ----------
+
+    // Scene object carrying the smog parameters; the renderer feature reads them (and is a no-op
+    // in scenes without one). Also makes sure the feature is installed.
+    public static HeightFogSettings AddHeightFog()
+    {
+        EnsureHeightFogFeature();
+        return new GameObject("HeightFog").AddComponent<HeightFogSettings>();
+    }
+
+    // Adds HeightFogFeature to every URP renderer in the project (the same steps as the renderer's
+    // "Add Renderer Feature" button) and turns the depth texture on in every URP asset.
+    public static void EnsureHeightFogFeature()
+    {
+        var shader = Shader.Find("Hidden/FPS/HeightFog");
+        if (shader == null) Debug.LogError("Shader 'Hidden/FPS/HeightFog' not found. Has Unity imported Assets/Shaders?");
+        foreach (var guid in AssetDatabase.FindAssets("t:UniversalRendererData"))
+        {
+            var data = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(AssetDatabase.GUIDToAssetPath(guid));
+            if (data == null) continue;
+            HeightFogFeature feature = null;
+            foreach (var f in data.rendererFeatures) if (f is HeightFogFeature h) feature = h;
+            if (feature == null)
+            {
+                feature = ScriptableObject.CreateInstance<HeightFogFeature>();
+                feature.name = "HeightFog";
+                feature.hideFlags |= HideFlags.HideInHierarchy;
+                AssetDatabase.AddObjectToAsset(feature, data);
+                AssetDatabase.TryGetGUIDAndLocalFileIdentifier(feature, out _, out long localId);
+                var so = new SerializedObject(data);
+                var list = so.FindProperty("m_RendererFeatures");
+                var map = so.FindProperty("m_RendererFeatureMap");
+                list.arraySize++;
+                list.GetArrayElementAtIndex(list.arraySize - 1).objectReferenceValue = feature;
+                map.arraySize++;
+                map.GetArrayElementAtIndex(map.arraySize - 1).longValue = localId;
+                so.ApplyModifiedProperties();
+            }
+            feature.shader = shader;
+            feature.SetActive(true);
+            EditorUtility.SetDirty(feature);
+            EditorUtility.SetDirty(data);
+        }
+        foreach (var guid in AssetDatabase.FindAssets("t:UniversalRenderPipelineAsset"))
+        {
+            var asset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(AssetDatabase.GUIDToAssetPath(guid));
+            if (asset == null || asset.supportsCameraDepthTexture) continue;
+            asset.supportsCameraDepthTexture = true;
+            EditorUtility.SetDirty(asset);
+        }
+        AssetDatabase.SaveAssets();
+    }
+
+    // Two big cloud planes. Subdivided planes (not quads) so per-vertex fog interpolates well.
+    // canyonAxis: direction of the canyon through `center`, where the underside glow is strongest.
+    public static void AddCloudDeck(Transform parent, Vector3 center, float size, float[] heights, Vector3 canyonAxis)
+    {
+        for (int i = 0; i < heights.Length; i++)
+        {
+            int layer = i;
+            var mat = ShaderMaterial($"CloudDeck_{i}", "FPS/CloudDeck", m =>
+            {
+                m.SetFloat("_Scale", layer == 0 ? 900f : 1300f);
+                m.SetFloat("_Coverage", layer == 0 ? 0.55f : 0.45f);
+                m.SetFloat("_Opacity", layer == 0 ? 0.85f : 0.7f);
+                m.SetFloat("_Seed", 11f + layer * 5f);
+                m.SetVector("_Scroll", layer == 0 ? new Vector4(4f, 0f, 1.5f, 0f) : new Vector4(-2.5f, 0f, 3f, 0f));
+                m.SetVector("_GlowCenter", new Vector4(center.x, center.z, 0f, 0f));
+                m.SetVector("_GlowAxis", new Vector4(canyonAxis.x, canyonAxis.z, 0f, 0f));
+                m.renderQueue = (int)RenderQueue.Transparent + layer;
+            });
+            var plane = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            plane.name = $"CloudDeck_{heights[i]:0}";
+            Object.DestroyImmediate(plane.GetComponent<Collider>());
+            plane.transform.SetParent(parent, false);
+            plane.transform.position = new Vector3(center.x, heights[i], center.z);
+            plane.transform.localScale = new Vector3(size / 10f, 1f, size / 10f);
+            var r = plane.GetComponent<Renderer>();
+            r.sharedMaterial = mat;
+            r.shadowCastingMode = ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            MarkStatic(plane, false);
+        }
     }
 
     static T AddOverride<T>(VolumeProfile profile) where T : VolumeComponent
