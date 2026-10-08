@@ -26,7 +26,7 @@ public static class CityDressing
         public float spacing;                 // grid layer height
         public float trafficMin, trafficMax;  // world heights of the traffic band
         public Material facade, decoDark, aircraftRed, laneNorth, laneSouth, haze, bridge, sodium;
-        public Material[] neon, holograms;
+        public Material[] neon, holograms, flickerHolograms; // flicker variants: ~1 in 10 holograms
         public Clearance clearance;
         public readonly List<Bounds> keepOut = new List<Bounds>();
 
@@ -53,6 +53,9 @@ public static class CityDressing
         kit.facade = ShaderMaterial("CityFacade", "FPS/CityFacade", m =>
         {
             m.SetVector("_BandHeights", new Vector4(kit.trafficMin, kit.trafficMax, 0f, 0f));
+            m.SetFloat("_LitFraction", 0.15f);
+            m.SetFloat("_EmissionStrength", 1.6f);
+            m.SetVector("_BandLit", new Vector4(0.5f, 1.2f, 0.7f, 0f));
         });
         kit.decoDark = LitMaterial("DecoDark", new Color(0.12f, 0.12f, 0.13f));
         kit.bridge = LitMaterial("BridgeDeck", new Color(0.2f, 0.21f, 0.24f));
@@ -78,15 +81,26 @@ public static class CityDressing
             ("HoloWhiteCyan", new Color(0.9f, 0.95f, 1f), new Color(0.3f, 0.8f, 1f)),
         };
         kit.holograms = new Material[palettes.Length];
+        kit.flickerHolograms = new Material[palettes.Length];
         for (int i = 0; i < palettes.Length; i++)
         {
             var p = palettes[i];
+            float seed = i * 3.7f;
             kit.holograms[i] = ShaderMaterial(p.name, "FPS/Hologram", m =>
             {
                 m.SetColor("_ColorA", p.a);
                 m.SetColor("_ColorB", p.b);
                 m.SetFloat("_Intensity", 1.6f);
-                m.SetFloat("_Seed", i * 3.7f);
+                m.SetFloat("_Seed", seed);
+                m.SetFloat("_FlickerRate", 0f);
+            });
+            kit.flickerHolograms[i] = ShaderMaterial(p.name + "_Flicker", "FPS/Hologram", m =>
+            {
+                m.SetColor("_ColorA", p.a);
+                m.SetColor("_ColorB", p.b);
+                m.SetFloat("_Intensity", 1.6f);
+                m.SetFloat("_Seed", seed);
+                m.SetFloat("_FlickerRate", 0.03f);
             });
         }
         kit.haze = ShaderMaterial("UnderworldHaze", "FPS/Hologram", m =>
@@ -350,7 +364,8 @@ public static class CityDressing
         quad.transform.SetPositionAndRotation(c, Quaternion.LookRotation(-n)); // quad faces along -Z: show it to the canyon
         quad.transform.localScale = new Vector3(w, h, 1f);
         var r = quad.GetComponent<Renderer>();
-        r.sharedMaterial = kit.holograms[rng.Next(kit.holograms.Length)];
+        var set = rng.NextDouble() < 0.1 ? kit.flickerHolograms : kit.holograms; // only a few flicker
+        r.sharedMaterial = set[rng.Next(set.Length)];
         r.shadowCastingMode = ShadowCastingMode.Off;
         r.receiveShadows = false;
         MarkStatic(quad, false);
@@ -434,7 +449,11 @@ public static class CityDressing
         cam.clearFlags = CameraClearFlags.Skybox;
         cam.allowHDR = true;
         cam.farClipPlane = 3000f;
-        cam.GetUniversalAdditionalCameraData().renderPostProcessing = true;
+        cam.allowMSAA = false;
+        var camData = cam.GetUniversalAdditionalCameraData();
+        camData.renderPostProcessing = true;
+        camData.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing;
+        camData.antialiasingQuality = AntialiasingQuality.High;
 
         var ambient = new Color(0.05f, 0.05f, 0.085f);
         RenderSettings.ambientMode = AmbientMode.Flat;
@@ -459,9 +478,11 @@ public static class CityDressing
         AssetDatabase.CreateAsset(profile, path);
 
         var bloom = AddOverride<Bloom>(profile);
-        bloom.threshold.value = 1f;
-        bloom.intensity.value = 1.2f;
+        bloom.threshold.value = 1.2f;
+        bloom.intensity.value = 0.8f;
         bloom.scatter.value = 0.7f;
+        bloom.clamp.value = 20f;
+        bloom.highQualityFiltering.value = true;
         var tone = AddOverride<Tonemapping>(profile);
         tone.mode.value = TonemappingMode.ACES;
         var adjust = AddOverride<ColorAdjustments>(profile);

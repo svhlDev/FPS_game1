@@ -1,5 +1,6 @@
 // Gradient night skybox for URP: dark top, a faint glow at the horizon (matching the fog), dark below.
-// No textures. A sparse star field from a direction hash.
+// No textures. A sparse star field from a direction hash: soft points sized from fwidth, so they
+// don't sparkle while the camera pans. Set _StarBrightness to 0 for no stars.
 Shader "FPS/NightSky"
 {
     Properties
@@ -8,7 +9,7 @@ Shader "FPS/NightSky"
         _HorizonColor ("Horizon", Color) = (0.12, 0.08, 0.18, 1)
         _BottomColor ("Bottom", Color) = (0.03, 0.02, 0.05, 1)
         _Exponent ("Gradient Exponent", Float) = 0.45
-        _StarDensity ("Star Density", Range(0, 1)) = 0.004
+        _StarDensity ("Star Density", Range(0, 1)) = 0.002
         _StarBrightness ("Star Brightness", Float) = 0.8
     }
 
@@ -60,10 +61,17 @@ Shader "FPS/NightSky"
                     ? lerp(_HorizonColor.rgb, _TopColor.rgb, pow(saturate(d.y), _Exponent))
                     : lerp(_HorizonColor.rgb, _BottomColor.rgb, pow(saturate(-d.y * 4.0), 0.5));
 
-                // Stars: sparse cells on a direction grid, only above the horizon.
-                float3 cell = floor(d * 300.0);
-                float s = step(1.0 - _StarDensity, Hash31(cell)) * saturate(d.y * 4.0);
-                col += s * _StarBrightness * Hash31(cell + 3.7);
+                // Stars: one candidate per cell on a direction grid, only above the horizon.
+                float3 g = d * 300.0;
+                float3 cell = floor(g);
+                float present = step(1.0 - _StarDensity, Hash31(cell));
+                float3 starPos = 0.25 + 0.5 * float3(Hash31(cell + 1.3), Hash31(cell + 2.9), Hash31(cell + 4.1));
+                float dist = length(frac(g) - starPos);
+                float px = length(fwidth(g));
+                float radius = 0.08 + px;                       // at least about a pixel wide
+                float soft = 1.0 - smoothstep(0.0, radius, dist);
+                float energy = saturate(0.08 / radius);         // dimmer when smeared over more pixels
+                col += present * soft * energy * _StarBrightness * (0.4 + 0.6 * Hash31(cell + 3.7)) * saturate(d.y * 4.0);
                 return half4(col, 1.0);
             }
             ENDHLSL

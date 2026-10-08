@@ -14,7 +14,7 @@ Shader "FPS/Hologram"
         _ScrollSpeed ("Scroll Speed", Float) = 0.15
         _ScanlineDensity ("Scanlines per unit V", Float) = 120
         _ScanlineStrength ("Scanline Strength", Range(0, 1)) = 0.45
-        _FlickerRate ("Flicker Chance", Range(0, 1)) = 0.04
+        _FlickerRate ("Flicker Chance (0 = never)", Range(0, 1)) = 0
         _EdgeFade ("Edge Fade", Range(0.001, 0.5)) = 0.06
         _Seed ("Seed", Float) = 0
     }
@@ -56,8 +56,19 @@ Shader "FPS/Hologram"
             struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; UNITY_VERTEX_INPUT_INSTANCE_ID };
             struct Varyings { float4 positionCS : SV_POSITION; float2 uv : TEXCOORD0; float fogFactor : TEXCOORD1; float3 positionWS : TEXCOORD2; };
 
-            float Hash11(float x) { return frac(sin(x * 127.1 + 311.7) * 43758.5453); }
-            float Hash21(float2 p) { return frac(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+            // Integer hashes: stable at any input size (sin-based hashes break down with large inputs).
+            uint HashU(uint x)
+            {
+                x ^= x >> 16; x *= 0x7feb352dU;
+                x ^= x >> 15; x *= 0x846ca68bU;
+                x ^= x >> 16;
+                return x;
+            }
+            float Hash(int a, int b, int c)
+            {
+                uint h = HashU((uint)a * 1597334677U ^ HashU((uint)b * 3812015801U ^ HashU((uint)c)));
+                return h * (1.0 / 4294967295.0);
+            }
 
             Varyings vert(Attributes v)
             {
@@ -73,23 +84,28 @@ Shader "FPS/Hologram"
 
             half4 frag(Varyings i) : SV_Target
             {
-                float t = _Time.y;
+                // Wrapped time keeps precision in long sessions.
+                float t = frac(_Time.y / 1000.0) * 1000.0;
                 // Per-object variation from world position, so many panels can share a material.
-                float seed = _Seed + Hash21(floor(i.positionWS.xz / 50.0));
+                int2 site = int2(floor(i.positionWS.xz / 50.0));
+                int seedI = (int)(_Seed * 1000.0);
+                float seed = frac(_Seed + Hash(site.x, site.y, seedI));
+                int objI = seedI + site.x * 73 + site.y * 151;
 
                 float3 col = lerp(_ColorA.rgb, _ColorB.rgb, saturate(i.uv.y + 0.25 * sin(t * 0.7 + seed * 6.28)));
 
                 // Blocky scrolling content
                 float2 cells = max(_PatternCells.xy, 1.0);
-                float2 c = floor(float2(i.uv.x, i.uv.y + t * _ScrollSpeed) * cells);
-                float block = step(0.45, Hash21(c + seed * 13.0 + floor(t * 0.5)));
+                int2 c = int2(floor(float2(i.uv.x, i.uv.y + t * _ScrollSpeed) * cells));
+                float block = step(0.45, Hash(c.x + objI, c.y, (int)floor(t * 0.5)));
                 float content = lerp(1.0, 0.35 + 0.65 * block, _Pattern);
 
-                // Scanlines
-                float scan = lerp(1.0, 0.5 + 0.5 * sin((i.uv.y + t * 0.05) * _ScanlineDensity * 6.2832), _ScanlineStrength);
+                // Scanlines, faded out once they're too fine for the screen (no moire / crawling).
+                float scanStrength = _ScanlineStrength * (1.0 - saturate((fwidth(i.uv.y) * _ScanlineDensity - 0.3) / 0.4));
+                float scan = lerp(1.0, 0.5 + 0.5 * sin((i.uv.y + t * 0.05) * _ScanlineDensity * 6.2832), scanStrength);
 
                 // Occasional flicker: a few frames at a time
-                float flick = step(1.0 - _FlickerRate, Hash11(floor(t * 12.0) + seed * 71.0));
+                float flick = _FlickerRate > 0.0 ? step(1.0 - _FlickerRate, Hash((int)floor(t * 12.0), objI, 71)) : 0.0;
                 float flicker = 1.0 - 0.7 * flick;
 
                 // Soft edges

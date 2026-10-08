@@ -5,6 +5,8 @@
 //   - Vertex colour: rgb = this building's wall tint, a = building seed (set by the builder, so per-building
 //     variation survives static batching without MaterialPropertyBlocks).
 //   - Roofs (up-facing) get no windows.
+//   - Far away (window cells smaller than ~0.25-0.6 px) the pattern fades to its average colour,
+//     so distant facades don't sparkle or crawl.
 // Altitude bands (world Y): below _BandHeights.x = underworld, up to _BandHeights.y = traffic band, above = upper city.
 Shader "FPS/CityFacade"
 {
@@ -13,15 +15,15 @@ Shader "FPS/CityFacade"
         _WallColor ("Wall Color (multiplies vertex colour)", Color) = (1, 1, 1, 1)
         _RoofColor ("Roof Color", Color) = (0.07, 0.07, 0.08, 1)
         _WindowSize ("Window Cell (w, h) and Opening (x, y)", Vector) = (2.5, 3.3333, 0.7, 0.7)
-        _LitFraction ("Lit Fraction", Range(0, 1)) = 0.35
-        _EmissionStrength ("Emission Strength", Float) = 3
+        _LitFraction ("Lit Fraction", Range(0, 1)) = 0.15
+        _EmissionStrength ("Emission Strength", Float) = 1.6
         [HDR] _WarmColor ("Warm Window", Color) = (1, 0.72, 0.42, 1)
         [HDR] _CoolColor ("Cool Window", Color) = (0.6, 0.78, 1, 1)
         [HDR] _SodiumColor ("Underworld Window", Color) = (1, 0.55, 0.2, 1)
         _GlassColor ("Dark Glass", Color) = (0.02, 0.03, 0.05, 1)
         _GlassReflect ("Dark Glass Reflection Tint", Color) = (0.1, 0.14, 0.22, 1)
         _BandHeights ("Band Heights (traffic min, traffic max)", Vector) = (90, 160, 0, 0)
-        _BandLit ("Lit Multiplier (under, traffic, upper)", Vector) = (0.35, 1.4, 0.8, 0)
+        _BandLit ("Lit Multiplier (under, traffic, upper)", Vector) = (0.5, 1.2, 0.7, 0)
     }
 
     SubShader
@@ -139,15 +141,34 @@ Shader "FPS/CityFacade"
 
                     float y = i.positionWS.y;
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
-                    float isLit = step(h, saturate(_LitFraction * bandMul));
+                    float litFraction = saturate(_LitFraction * bandMul);
+                    float isLit = step(h, litFraction);
 
                     float3 tint = lerp(_WarmColor.rgb, _CoolColor.rgb, step(0.5, h2));
-                    if (y < _BandHeights.x) tint = lerp(tint, _SodiumColor.rgb, 0.75);       // sodium underworld
-                    else if (y >= _BandHeights.y) tint = lerp(tint, _CoolColor.rgb, 0.7);    // cool upper city
+                    float3 avgTint = 0.5 * (_WarmColor.rgb + _CoolColor.rgb);
+                    if (y < _BandHeights.x)                                                   // sodium underworld
+                    {
+                        tint = lerp(tint, _SodiumColor.rgb, 0.75);
+                        avgTint = lerp(avgTint, _SodiumColor.rgb, 0.75);
+                    }
+                    else if (y >= _BandHeights.y)                                             // cool upper city
+                    {
+                        tint = lerp(tint, _CoolColor.rgb, 0.7);
+                        avgTint = lerp(avgTint, _CoolColor.rgb, 0.7);
+                    }
 
-                    float3 glass = _GlassColor.rgb * light + _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n)) ;
-                    float3 window = isLit > 0.5 ? tint * _EmissionStrength * (0.55 + 0.45 * h2) : glass;
-                    color = lerp(wall * light, window, win);
+                    // Most lit windows are dim, a few are bright.
+                    float brightness = lerp(0.15, 1.0, pow(h2, 2.5));
+                    float3 glass = _GlassColor.rgb * light + _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
+                    float3 window = isLit > 0.5 ? tint * _EmissionStrength * brightness : glass;
+                    float3 nearColor = lerp(wall * light, window, win);
+
+                    // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average.
+                    // Mean brightness of lerp(0.15, 1, h^2.5) over uniform h is 0.15 + 0.85 / 3.5.
+                    float px = max(fwidth(g).x, fwidth(g).y);
+                    float3 avgWindow = avgTint * _EmissionStrength * (0.15 + 0.85 / 3.5) * litFraction + glass * (1.0 - litFraction);
+                    float3 farColor = lerp(wall * light, avgWindow, _WindowSize.z * _WindowSize.w);
+                    color = lerp(nearColor, farColor, smoothstep(0.25, 0.6, px));
                 }
 
                 color = MixFog(color, i.fogFactor);
