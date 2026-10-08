@@ -56,6 +56,8 @@ public class PoliceDriver : MonoBehaviour
     public float damagePerHit = 6f;
     public Material tracerMaterial;
     public Material sparkMaterial;
+    [Tooltip("Red stop cone over a tow (StopCone).")]
+    public Material coneMaterial;
 
     public FlyingVehicle Car { get; private set; }
     public bool IsPursuing { get; private set; }

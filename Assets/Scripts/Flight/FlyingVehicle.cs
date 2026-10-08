@@ -89,8 +89,13 @@ public class FlyingVehicle : MonoBehaviour
     public float parkSmoothTime = 0.15f;
 
     [Header("Collisions")]
+    [Tooltip("Car-vs-car pushing splits by inverse mass. Civilian / player 1, police 1.6; a tow group " +
+             "(towed car + attached dockers) counts as one body with the summed mass.")]
+    public float mass = 1f;
     [Tooltip("0 = dead stop on impact, 1 = full rebound.")]
     public float bounciness = 0.25f;
+    [Tooltip("Below this relative speed (m/s) car-vs-car contact doesn't bounce, so a steady push carries the other car along.")]
+    public float pushRestitutionSpeed = 3f;
     [Tooltip("Speed lost scraping along walls and other cars.")]
     public float scrapeFriction = 0.2f;
     public float impactShake = 0.35f;
@@ -113,6 +118,12 @@ public class FlyingVehicle : MonoBehaviour
     public float yieldHorizon = 3f;
     [Tooltip("Unoccupied cars farther than this from the camera skip collision and just follow their lane.")]
     public float physicsLodRadius = 300f;
+    [Tooltip("Looks this far down its lane for stops (red cones, disabled cars) to route round.")]
+    public float avoidLookahead = 80f;
+    [Tooltip("Margin round a stop cone that counts as blocked.")]
+    public float coneMargin = 4f;
+    [Tooltip("A disabled car without a cone blocks this radius.")]
+    public float disabledCarClearance = 15f;
 
     [Header("Camera")]
     public Transform cockpitAnchor;
@@ -213,7 +224,11 @@ public class FlyingVehicle : MonoBehaviour
         get => mode;
         private set
         {
-            if (value == FlightMode.Layer && mode != FlightMode.Layer) gridLayer = TrafficAuthority.NearestLayer(Underside);
+            if (value == FlightMode.Layer && mode != FlightMode.Layer)
+            {
+                gridLayer = TrafficAuthority.NearestLayer(Underside);
+                if (!parked) hoverBlend = 1f; // flying, not lifting off a surface (else it dives toward y = 0)
+            }
             mode = value;
             SyncLaneRegistration();
         }
@@ -244,6 +259,27 @@ public class FlyingVehicle : MonoBehaviour
     Vector3 colHalf, colCenter;
     float shake;
     bool autopilot; float apYaw, apThrottle, apTargetY, apVertical; DriveModel apModel;
+
+    // Tow group: dockers attach rigidly to the towed car (fixed offset in its yaw frame).
+    public FlyingVehicle AttachHost { get; private set; }
+    public bool IsAttached => AttachHost != null;
+    readonly List<FlyingVehicle> attached = new List<FlyingVehicle>();
+    Vector3 attachLocal; float attachBlend; int followFrame = -1;
+    // A car this one doesn't collide with (a docker on its way to the car it will tow).
+    public FlyingVehicle IgnoreCar { get; set; }
+    public bool InTowGroup => AttachHost != null || attached.Count > 0 || Towed;
+    // Pairs involving the player, police or a tow group get full mass-based resolution.
+    bool FullResolution => Driven == this || isPolice || InTowGroup || Disabled;
+    bool isPolice;
+    bool ghostCars;                 // tow watchdog: no collision with other cars until it lands
+    float watchY, watchUntil;
+    public float DisabledTime { get; private set; }
+    float lastCrashFlash = -10f; int lastContactFrame = -10;
+
+    // Lane avoidance of stops.
+    static readonly List<FlyingVehicle> disabledCars = new List<FlyingVehicle>();
+    float nextAvoid, avoidStopAt = -1f;
+    bool returnClear = true;
     float disableDecel;
     bool hijacked;
     readonly RaycastHit[] hitBuf = new RaycastHit[16];
@@ -259,6 +295,9 @@ public class FlyingVehicle : MonoBehaviour
     void OnDisable()
     {
         All.Remove(this);
+        disabledCars.Remove(this);
+        if (AttachHost != null) Detach();
+        for (int i = attached.Count - 1; i >= 0; i--) if (attached[i] != null) attached[i].Detach();
         SyncLaneRegistration();
         if (Driven == this) Driven = null;
     }
@@ -276,6 +315,7 @@ public class FlyingVehicle : MonoBehaviour
     {
         started = true;
         Integrity = maxIntegrity;
+        isPolice = GetComponent<PoliceDriver>() != null;
         allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
         int playerLayer = LayerMask.NameToLayer("Player");
@@ -325,6 +365,7 @@ public class FlyingVehicle : MonoBehaviour
         if (Integrity < maxIntegrity && Time.time - LastHitTime > regenDelay)
             Integrity = Mathf.Min(maxIntegrity, Integrity + integrityRegen * Time.deltaTime);
 
+        if (AttachHost != null) { FollowHost(); return; }
         if (Disabled) { UpdateDisabled(mouse); return; }
         if (autopilot && !IsOccupied) { UpdateAutopilot(); return; }
 
@@ -508,6 +549,7 @@ public class FlyingVehicle : MonoBehaviour
 
     Vector2 MoveInput(Keyboard kb)
     {
+        if (IsOccupied && DebugThrottle != 0f) return new Vector2(0f, DebugThrottle);
         if (!IsOccupied || kb == null) return Vector2.zero;
         return new Vector2((kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f),
                            (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f));
@@ -547,8 +589,10 @@ public class FlyingVehicle : MonoBehaviour
         Vector2 input = MoveInput(kb);
         UpdateAim(mouse);
 
-        // Traffic drifts back to its own lane level whenever it legally can.
-        if (IsAI && laneLevel != startLevel && IsAvailable(startLevel) && !path.IsNoSwitch(distance))
+        // Traffic routes round stops (shifts level), and drifts back to its own level whenever it
+        // legally can and that level is clear.
+        if (IsAI) UpdateAvoidance();
+        if (IsAI && laneLevel != startLevel && returnClear && IsAvailable(startLevel) && !path.IsNoSwitch(distance))
             laneLevel = startLevel;
 
         distance = path.Project(transform.position, distance);
@@ -569,6 +613,7 @@ public class FlyingVehicle : MonoBehaviour
             return;
         }
 
+        lineDist = d;
         float w = Mathf.Pow(1f - d / captureRadius, magnetFalloff); // 1 at the line, 0 at the edge
         magnetHold = w;
 
@@ -694,6 +739,14 @@ public class FlyingVehicle : MonoBehaviour
             target = Mathf.Min(target, Mathf.Max(0f, follow));
         }
 
+        // Street level: stop at red lights (and amber, when there's room to stop).
+        if (mine.layer == 0 && TrafficSignal.All.Count > 0)
+            target = Mathf.Min(target, TrafficSignal.StreetLimit(me, fwd, Vector3.Dot(velocity, fwd), braking, carLength * 0.5f, followGain));
+
+        // A stop ahead that can't be passed on another level: stop short of it and wait.
+        if (avoidStopAt >= 0f)
+            target = Mathf.Min(target, Mathf.Max(0f, followGain * (avoidStopAt - carLength * 0.5f - followGap * 0.5f)));
+
         // The player on foot in our lane ahead: brake behind them like behind a car (cars never push
         // the player, they just stop).
         var walker = FirstPersonController.Instance;
@@ -746,18 +799,21 @@ public class FlyingVehicle : MonoBehaviour
         return target;
     }
 
-    // Sweep the car's box along its move, stop at the first hit, then push out of
-    // anything still overlapping (e.g. traffic that drove into us).
+    // Sweep the car's box along its move, stop at the first static hit (or civilian car, for
+    // civilian-vs-civilian), then push out of anything still overlapping. Pairs involving the player,
+    // police or a tow group don't stop at the sweep: the full step is taken and the overlap is split by
+    // inverse mass (both cars move), with a mass-weighted impulse. Static geometry is infinitely heavy.
     Vector3 MoveAndCollide(Vector3 from, Vector3 delta, Quaternion rot)
     {
         using var _ = CollideMarker.Auto();
         if (bodyCol == null) return from + delta;
         // Physics LOD: far-away traffic just follows its lane, no sweeps or depenetration.
-        if (!IsOccupied && TrafficSystem.IsBeyond(from, physicsLodRadius)) return from + delta;
+        if (!IsOccupied && !InTowGroup && TrafficSystem.IsBeyond(from, physicsLodRadius)) return from + delta;
         Vector3 half = colHalf, center = colCenter;
         float dist = delta.magnitude;
         Vector3 moved = delta;
         const float skin = 0.05f;
+        bool full = FullResolution;
 
         if (dist > 1e-5f)
         {
@@ -767,7 +823,10 @@ public class FlyingVehicle : MonoBehaviour
             float best = float.MaxValue; int bestIdx = -1;
             for (int i = 0; i < n; i++)
             {
-                if (hitBuf[i].collider == bodyCol || hitBuf[i].distance <= 0f) continue;
+                var c = hitBuf[i].collider;
+                if (c == bodyCol || hitBuf[i].distance <= 0f) continue;
+                var car = c.GetComponentInParent<FlyingVehicle>();
+                if (car != null && (Ignores(car) || full || car.FullResolution)) continue; // resolved by overlap below
                 if (hitBuf[i].distance < best) { best = hitBuf[i].distance; bestIdx = i; }
             }
             if (bestIdx >= 0)
@@ -786,8 +845,21 @@ public class FlyingVehicle : MonoBehaviour
         {
             var c = overlapBuf[i];
             if (c == bodyCol) continue;
-            if (Physics.ComputePenetration(bodyCol, bodyPos, bodyRot, c, c.transform.position, c.transform.rotation,
-                                           out Vector3 sepDir, out float sepDist))
+            var car = c.GetComponentInParent<FlyingVehicle>();
+            if (car == this || (car != null && Ignores(car))) continue;
+            if (!Physics.ComputePenetration(bodyCol, bodyPos, bodyRot, c, c.transform.position, c.transform.rotation,
+                                            out Vector3 sepDir, out float sepDist)) continue;
+            if (car != null && (full || car.FullResolution))
+            {
+                // Split the overlap by inverse mass: each moves out by its share.
+                float invA = 1f / EffectiveMass, invB = 1f / car.EffectiveMass;
+                float shareA = invA / (invA + invB);
+                pos += sepDir * sepDist * shareA;
+                bodyPos += sepDir * sepDist * shareA;
+                car.PushBy(-sepDir * sepDist * (1f - shareA));
+                Collide(car, sepDir, invA, invB);
+            }
+            else
             {
                 pos += sepDir * sepDist;
                 bodyPos += sepDir * sepDist;
@@ -797,6 +869,59 @@ public class FlyingVehicle : MonoBehaviour
         return pos;
     }
 
+    // Tow group members don't collide with each other; a docker ignores its future tow; the watchdog
+    // turns all car collisions off for a stuck tow.
+    bool Ignores(FlyingVehicle other)
+    {
+        if (ghostCars || other.ghostCars) return true;
+        if (other == IgnoreCar || other.IgnoreCar == this) return true;
+        var a = AttachHost != null ? AttachHost : this;
+        var b = other.AttachHost != null ? other.AttachHost : other;
+        return a == b;
+    }
+
+    // Mass of the body this car belongs to (a tow group counts as one).
+    public float EffectiveMass
+    {
+        get
+        {
+            var root = AttachHost != null ? AttachHost : this;
+            float m = root.mass;
+            foreach (var a in root.attached) if (a != null) m += a.mass;
+            return Mathf.Max(0.01f, m);
+        }
+    }
+
+    // Shoved by another car's depenetration. Moves the whole tow group.
+    void PushBy(Vector3 d)
+    {
+        var root = AttachHost != null ? AttachHost : this;
+        if (root.parked) root.SetParked(false); // a parked car gets knocked loose and settles again
+        root.transform.position += d;
+        root.SyncAttached();
+    }
+
+    // Normal impulse split by mass (no bounce below pushRestitutionSpeed, so a steady push carries the
+    // other car), plus scrape friction. `n` points from the other car to this one.
+    void Collide(FlyingVehicle other, Vector3 n, float invA, float invB)
+    {
+        var ob = other.AttachHost != null ? other.AttachHost : other;
+        var me = AttachHost != null ? AttachHost : this;
+        Vector3 rel = me.velocity - ob.velocity;
+        float vn = Vector3.Dot(rel, n);
+        OnCarContact(other, Mathf.Max(0f, -vn));
+        if (vn >= 0f) return;
+        float e = -vn < pushRestitutionSpeed ? 0f : bounciness;
+        float j = -(1f + e) * vn / (invA + invB);
+        Vector3 tangential = rel - n * vn;
+        float fA = invA / (invA + invB), fB = 1f - fA;
+        me.velocity += n * (j * invA) - tangential * scrapeFriction * fA;
+        ob.velocity -= n * (j * invB) - tangential * scrapeFriction * fB;
+        me.AddImpact(j * invA);
+        ob.AddImpact(j * invB);
+    }
+
+    // Static geometry, or a cheap civilian-vs-civilian contact.
     void Bounce(Vector3 normal, Collider other)
     {
         var otherCar = other.GetComponentInParent<FlyingVehicle>();
@@ -814,7 +939,7 @@ public class FlyingVehicle : MonoBehaviour
             Vector3 tangential = rel - normal * vn;
             velocity += normal * j - tangential * scrapeFriction * 0.5f;
             otherCar.velocity -= normal * j - tangential * scrapeFriction * 0.5f;
-            otherCar.AddImpact(-vn);
+            otherCar.AddImpact(j);
         }
         else
         {
@@ -846,11 +971,123 @@ public class FlyingVehicle : MonoBehaviour
         }
     }
 
-    void AddImpact(float impact)
+    // Camera shake scales with the impulse (velocity change). Sustained pushing is a low rumble; CRASH
+    // only flashes for a fresh hard hit, not every frame of a shove.
+    void AddImpact(float impulse)
     {
         if (!IsOccupied) return;
-        if (impact > 2f) shake = Mathf.Min(1f, shake + impact / 25f);
-        if (impact > 15f) Flash("CRASH");
+        bool fresh = Time.frameCount - lastContactFrame > 10;
+        lastContactFrame = Time.frameCount;
+        shake = Mathf.Max(shake, Mathf.Clamp(impulse / 20f, 0.06f, 1f));
+        if (impulse > 15f && fresh && Time.time - lastCrashFlash > 1.5f)
+        {
+            lastCrashFlash = Time.time;
+            Flash("CRASH");
+        }
+    }
+
+    // ---------- tow group (attach) ----------
+
+    // Rigidly attach to `host` at a fixed offset in its yaw frame (blends in over 0.4 s). Autopilot and
+    // collisions with the host are off until Detach.
+    public void AttachTo(FlyingVehicle host, Vector3 localOffset)
+    {
+        if (AttachHost == host) return;
+        if (AttachHost != null) Detach();
+        AttachHost = host;
+        attachLocal = localOffset;
+        attachBlend = 0f;
+        host.attached.Add(this);
+    }
+
+    public void Detach()
+    {
+        if (AttachHost != null) AttachHost.attached.Remove(this);
+        AttachHost = null;
+    }
+
+    void SyncAttached()
+    {
+        for (int i = attached.Count - 1; i >= 0; i--)
+        {
+            if (attached[i] == null) { attached.RemoveAt(i); continue; }
+            attached[i].FollowHost();
+        }
+    }
+
+    // Once per frame: sit at the attach point (blending in from where it docked).
+    void FollowHost()
+    {
+        var host = AttachHost;
+        if (host == null || !host.isActiveAndEnabled) { Detach(); return; }
+        if (followFrame == Time.frameCount) return;
+        followFrame = Time.frameCount;
+        Quaternion hr = host.PlatformRotation;
+        Vector3 target = host.transform.position + hr * attachLocal;
+        attachBlend = Mathf.MoveTowards(attachBlend, 1f, Time.deltaTime / 0.4f);
+        float k = attachBlend >= 1f ? 1f : Mathf.Clamp01(attachBlend * 0.5f + 0.1f);
+        yaw = Mathf.LerpAngle(yaw, hr.eulerAngles.y, k);
+        transform.SetPositionAndRotation(Vector3.Lerp(transform.position, target, k), Quaternion.Euler(0f, yaw, 0f));
+        velocity = host.velocity;
+    }
+
+    // ---------- routing round stops ----------
+
+    // A stop at this point? Red cones (radius + coneMargin) and disabled cars not yet down.
+    bool HitsObstacle(Vector3 p)
+    {
+        var cones = StopCone.Active;
+        for (int i = 0; i < cones.Count; i++)
+            if (cones[i].BlocksTraffic(p, coneMargin, 3f)) return true;
+        float r2 = disabledCarClearance * disabledCarClearance;
+        for (int i = 0; i < disabledCars.Count; i++)
+        {
+            var d = disabledCars[i];
+            if (d == this || d.OnSurface) continue;
+            Vector3 q = d.transform.position;
+            float dx = p.x - q.x, dz = p.z - q.z;
+            if (dx * dx + dz * dz < r2 && Mathf.Abs(p.y - q.y) < 4f) return true;
+        }
+        return false;
+    }
+
+    // Distance along the lane (at `level`) to the first blocked point within avoidLookahead, or -1.
+    float BlockedDistance(int level)
+    {
+        for (float d = 0f; d <= avoidLookahead; d += 8f)
+        {
+            float dd = distance + d;
+            float w = path.LaneWeight(level, dd, out Vector2 off);
+            if (level != 0 && w < 0.5f) continue;
+            path.Sample(dd, out Vector3 bp, out Vector3 f);
+            Vector3 p = path.ToWorld(bp, f, level == 0 ? Vector2.zero : off * w) + Vector3.up * RootAboveUnderside;
+            if (HitsObstacle(p)) return d;
+        }
+        return -1f;
+    }
+
+    // A few times a second: if the lane ahead runs into a stop, shift to the nearest clear level; with
+    // none clear, stop short of it (AITargetSpeed). Also says whether the home level is clear again.
+    void UpdateAvoidance()
+    {
+        if (StopCone.Active.Count == 0 && disabledCars.Count == 0) { avoidStopAt = -1f; returnClear = true; return; }
+        if (Time.time < nextAvoid) return;
+        nextAvoid = Time.time + 0.3f + Random.value * 0.1f;
+        returnClear = laneLevel == startLevel || BlockedDistance(startLevel) < 0f;
+        float blocked = BlockedDistance(laneLevel);
+        avoidStopAt = -1f;
+        if (blocked < 0f) return;
+        for (int step = 1; step <= 3; step++)
+            for (int dir = 1; dir >= -1; dir -= 2)
+            {
+                int lv = laneLevel;
+                bool ok = true;
+                for (int k = 0; k < step && ok; k++) ok = path.NextLevel(lv, dir, distance, out lv);
+                if (!ok || BlockedDistance(lv) >= 0f) continue;
+                laneLevel = lv;
+                return;
+            }
+        avoidStopAt = blocked;
     }
 
     // Holds RideHeight(gridLayer). Rooftops and the ground snap to layer floors, so driving onto or
@@ -995,6 +1232,9 @@ public class FlyingVehicle : MonoBehaviour
     {
         if (Disabled) return;
         Disabled = true;
+        DisabledTime = Time.time;
+        if (!disabledCars.Contains(this)) disabledCars.Add(this);
+        watchUntil = Time.time + 2f; watchY = transform.position.y;
         ShotDown = shotDown;
         OnSurface = false;
         Towed = false;
@@ -1011,6 +1251,8 @@ public class FlyingVehicle : MonoBehaviour
     {
         if (!Disabled) return;
         Disabled = false;
+        disabledCars.Remove(this);
+        ghostCars = false;
         ShotDown = false;
         Towed = false;
         OnSurface = false;
@@ -1066,9 +1308,27 @@ public class FlyingVehicle : MonoBehaviour
         }
         velocity = new Vector3(hv.x, vy, hv.z);
 
+        // Watchdog: a tow that has descended less than 1 m in 2 s stops colliding with cars until it lands.
+        if (Towed && !OnSurface)
+        {
+            if (Time.time >= watchUntil)
+            {
+                if (watchY - transform.position.y < 1f) ghostCars = true;
+                watchY = transform.position.y;
+                watchUntil = Time.time + 2f;
+            }
+        }
+        else
+        {
+            watchY = transform.position.y;
+            watchUntil = Time.time + 2f;
+            if (OnSurface) ghostCars = false;
+        }
+
         Quaternion rot = PlatformRotation;
         Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
         transform.SetPositionAndRotation(pos, rot);
+        SyncAttached(); // dockers ride along
     }
 
     // ---------- camera ----------
@@ -1158,6 +1418,29 @@ public class FlyingVehicle : MonoBehaviour
         hasDriver = false;
         return NpcBody.Eject(this, side, driverKind, unconscious);
     }
+
+    // ---------- test hooks (ScenarioTest) ----------
+
+    public float DebugThrottle { get; set; }
+    float lineDist;
+
+    public void DebugPlace(Vector3 pos, Quaternion rot, Vector3 vel)
+    {
+        transform.SetPositionAndRotation(pos, rot);
+        yaw = rot.eulerAngles.y;
+        aimYaw = yaw;
+        velocity = vel;
+    }
+
+    // Point the player's aim at p (the car turns toward the aim while throttle is held).
+    public void DebugAimAt(Vector3 p)
+    {
+        Vector3 d = p - transform.position;
+        aimYaw = Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg;
+    }
+
+    // Sideways distance from its magnetic line (Lane mode), 99 when off the lane.
+    public float DebugLaneOffset() => Mode == FlightMode.Lane ? lineDist : 99f;
 
     public void ForceStop()
     {

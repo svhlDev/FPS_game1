@@ -64,6 +64,12 @@ public class PoliceDispatch : MonoBehaviour
     public float boxDistance = 8f;
     [Tooltip("Once the car is down, the docked units move out this far sideways to park alongside.")]
     public float parkAlongside = 7f;
+    [Tooltip("Gap between the towed car and a docked unit (m), beyond their half widths.")]
+    public float towGap = 0.6f;
+    [Tooltip("A docker this close to its slot attaches (blending in over 0.4 s).")]
+    public float attachRange = 2.5f;
+    [Tooltip("Tow not started this long after the car went down: it descends anyway.")]
+    public float tractorFallback = 5f;
     public float arrestTime = 3f;
 
     [Header("Apprehension")]
@@ -116,6 +122,8 @@ public class PoliceDispatch : MonoBehaviour
     float unseenTime, ignoreTime, lastResist = -100f, nextSpawn, nextOfficer;
     FlyingVehicle towCar;   // disabled car being towed (or impounded), player in it or not
     bool towing;
+    StopCone cone;
+    float downSince = -1f;
     float arrestTimer;
     bool pullingOut;
     FlyingVehicle lastPlayerCar;
@@ -267,7 +275,7 @@ public class PoliceDispatch : MonoBehaviour
         var pd = car.GetComponent<PoliceDriver>();
         if (pd == null) return;
         pursuing.Remove(pd);
-        dockers.Remove(pd);
+        if (dockers.Remove(pd)) UndockUnit(pd);
         chaseSlot.Remove(pd);
         if (pd == transportUnit) { transporting = false; transportUnit = null; }
         if (pd == dragUnit) dragUnit = null;
@@ -400,6 +408,9 @@ public class PoliceDispatch : MonoBehaviour
         WantedLevel = Mathf.Clamp(Mathf.Max(WantedLevel, level), 0, 3);
     }
 
+    // Test hook (ScenarioTest): wanted at `level` with the nearest unit on the case.
+    public void DebugStartPursuit(int level) => EnsureWanted(level, null);
+
     void Resist(string why)
     {
         if (WantedLevel <= 0 || WantedLevel >= 3 || Time.time - lastResist < resistCooldown) return;
@@ -460,7 +471,8 @@ public class PoliceDispatch : MonoBehaviour
     {
         float dt = Time.deltaTime;
         pursuing.RemoveAll(u => u == null || !u.isActiveAndEnabled);
-        dockers.RemoveAll(u => u == null || !pursuing.Contains(u));
+        for (int i = dockers.Count - 1; i >= 0; i--)
+            if (dockers[i] == null || !pursuing.Contains(dockers[i])) { UndockUnit(dockers[i]); dockers.RemoveAt(i); }
         officers.RemoveAll(o => o == null || o.State == OfficerAgent.Phase.Return);
 
         var car = FlyingVehicle.Driven;
@@ -658,10 +670,14 @@ public class PoliceDispatch : MonoBehaviour
 
     // ---------- disabled car: tow, box-in, arrest at the door ----------
 
+    // Docking: each docker flies to its side slot (half widths + towGap apart), ignoring collisions with
+    // the car; within 1 m it attaches rigidly. The tow starts as soon as the first docker is within 3 m
+    // of its slot (latched while the car is disabled), or after tractorFallback s regardless (dockers
+    // then attach on the way down). A red StopCone marks the stop until shortly after touchdown.
     void UpdateTow(FlyingVehicle car, bool occupied)
     {
         int want = Mathf.Min(occupied ? maxTowUnits : 1, pursuing.Count);
-        while (dockers.Count > want) dockers.RemoveAt(dockers.Count - 1);
+        while (dockers.Count > want) { UndockUnit(dockers[dockers.Count - 1]); dockers.RemoveAt(dockers.Count - 1); }
         while (dockers.Count < want)
         {
             PoliceDriver best = null; float bestSq = float.MaxValue;
@@ -675,22 +691,51 @@ public class PoliceDispatch : MonoBehaviour
         }
 
         bool down = car.OnSurface;
-        bool allDocked = dockers.Count > 0;
+        if (!down) downSince = -1f;
+        else if (downSince < 0f) downSince = Time.time;
+        if (cone == null && !down) cone = StopCone.Spawn(car.transform, ConeMaterial());
+        if (cone != null && down && Time.time - downSince > 3f) { Destroy(cone.gameObject); cone = null; }
+
+        Quaternion rot = car.PlatformRotation;
         for (int i = 0; i < dockers.Count; i++)
         {
             var u = dockers[i];
             float side = i == 0 ? 1f : -1f;
-            float x = down ? parkAlongside : car.BodyHalfExtents.x + u.Car.BodyHalfExtents.z + 0.1f;
-            u.HoldSlot(car, new Vector3(side * x, 0f, 0f), car.towSpeed + 2f);
-            allDocked &= u.AtSlot;
+            if (down)
+            {
+                // Down: let go and park alongside.
+                u.Car.Detach();
+                u.HoldSlot(car, new Vector3(side * parkAlongside, 0f, 0f), car.towSpeed + 2f);
+                continue;
+            }
+            if (u.Car.IsAttached) continue;
+            u.Car.IgnoreCar = car;
+            var slot = new Vector3(side * (car.BodyHalfExtents.x + u.Car.BodyHalfExtents.x + towGap), 0f, 0f);
+            u.HoldSlot(car, slot, car.towSpeed + 2f);
+            float d = (u.transform.position - (car.transform.position + rot * slot)).magnitude;
+            if (i == 0 && d < 3f) towing = true;
+            if (d < attachRange) u.Car.AttachTo(car, slot);
         }
-        if (allDocked) towing = true;
+        if (!towing && Time.time - car.DisabledTime > tractorFallback) towing = true; // descend anyway
         car.Towed = towing && !down;
         if (down && !occupied && !car.Impounded)
         {
             car.Impounded = true;
             Show("Car impounded");
         }
+    }
+
+    void UndockUnit(PoliceDriver u)
+    {
+        if (u == null) return;
+        u.Car.Detach();
+        u.Car.IgnoreCar = null;
+    }
+
+    Material ConeMaterial()
+    {
+        foreach (var u in units) if (u != null && u.coneMaterial != null) return u.coneMaterial;
+        return null;
     }
 
     // Player inside the disabled car: the non-towing units box it in (front, back, above); on the
@@ -747,8 +792,10 @@ public class PoliceDispatch : MonoBehaviour
             towCar.Impounded = false;
         }
         towCar = null;
+        foreach (var u in dockers) UndockUnit(u);
         dockers.Clear();
         towing = false;
+        if (cone != null) { Destroy(cone.gameObject); cone = null; }
     }
 
     static PoliceDriver Nearest(List<PoliceDriver> list, Vector3 p)
@@ -943,7 +990,12 @@ public class PoliceDispatch : MonoBehaviour
         pursuing.Clear();
         pursuing.Add(unit);
         chaseSlot.Clear();
-        if (towCar != null) { towCar.Towed = false; dockers.Clear(); }
+        if (towCar != null)
+        {
+            towCar.Towed = false;
+            foreach (var u in dockers) UndockUnit(u);
+            dockers.Clear();
+        }
 
         if (PoliceStation.Find() == null) { Busted("Busted"); return; }
         PlayerRide.Begin(fpc, unit.Car, PlayerRide.Seat.Back, true, true);

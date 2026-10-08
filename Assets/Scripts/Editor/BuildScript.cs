@@ -52,7 +52,8 @@ public static class BuildScript
         Directory.CreateDirectory(dir);
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
         {
-            scenes = new[] { "Assets/Scenes/SkyAvenue.unity" },
+            // BENCH_SCENE=<name>: a different scene (default Sky Avenue).
+            scenes = new[] { $"Assets/Scenes/{System.Environment.GetEnvironmentVariable("BENCH_SCENE") ?? "SkyAvenue"}.unity" },
             locationPathName = Path.Combine(dir, "Bench.exe"),
             target = BuildTarget.StandaloneWindows64,
             targetGroup = BuildTargetGroup.Standalone,

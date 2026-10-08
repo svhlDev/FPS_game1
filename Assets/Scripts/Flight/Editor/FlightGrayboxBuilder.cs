@@ -503,6 +503,8 @@ public static class FlightGrayboxBuilder
         var driver = v.gameObject.AddComponent<PoliceDriver>();
         driver.tracerMaterial = GetUnlitMaterial("PoliceTracer", new Color(1f, 0.85f, 0.5f), 6f);
         driver.sparkMaterial = GetUnlitMaterial("Sparks", new Color(1f, 0.6f, 0.2f), 6f);
+        driver.coneMaterial = GetStopConeMaterial();
+        v.mass = 1.6f;
         v.hasDriver = true;
         v.driverKind = FlyingVehicle.DriverKind.Officer;
 
@@ -568,6 +570,33 @@ public static class FlightGrayboxBuilder
         r.shadowCastingMode = ShadowCastingMode.Off;
         r.receiveShadows = false;
         return r;
+    }
+
+    // Translucent red glow for the police stop cone (Hologram shader: additive, double-sided).
+    internal static Material GetStopConeMaterial()
+    {
+        string assetPath = $"{MaterialFolder}/StopCone.mat";
+        var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+        var shader = Shader.Find("FPS/Hologram");
+        if (shader == null) return null;
+        if (mat == null)
+        {
+            mat = new Material(shader);
+            Directory.CreateDirectory(MaterialFolder);
+            AssetDatabase.CreateAsset(mat, assetPath);
+        }
+        else mat.shader = shader;
+        mat.SetColor("_ColorA", new Color(1f, 0.08f, 0.05f));
+        mat.SetColor("_ColorB", new Color(1f, 0.25f, 0.1f));
+        mat.SetFloat("_Intensity", 0.35f);
+        mat.SetFloat("_Pattern", 0f);
+        mat.SetFloat("_ScrollSpeed", 0.05f);
+        mat.SetFloat("_ScanlineDensity", 4f);
+        mat.SetFloat("_ScanlineStrength", 0.3f);
+        mat.SetFloat("_FlickerRate", 0f);
+        mat.SetFloat("_EdgeFade", 0.15f);
+        EditorUtility.SetDirty(mat);
+        return mat;
     }
 
     // URP Unlit colour times intensity (> 1 blooms), GPU instancing on.
