@@ -8,17 +8,21 @@ public class HeightFogSettings : MonoBehaviour
     public static HeightFogSettings Active { get; private set; }
 
     [Tooltip("Smog top height (m): full density below, exponential falloff above.")]
-    public float smogTop = 150f;
+    public float smogTop = 120f;
     [Tooltip("Extra smog top height per district (m), from a smooth low-frequency noise over XZ.")]
-    public float smogTopVariation = 230f;
-    [Tooltip("Height (m) over which density falls by 1/e above the smog top.")]
-    public float smogFalloff = 40f;
+    public float smogTopVariation = 120f;
+    [Tooltip("Height (m) over which the main term falls by 1/e above the smog top.")]
+    public float smogFalloff = 120f;
+    [Tooltip("Second, longer falloff (m) that softens the transition into clear air.")]
+    public float smogFalloffLong = 400f;
+    [Tooltip("Share of the long falloff term (0-1).")]
+    [Range(0f, 1f)] public float smogLongWeight = 0.3f;
     [Tooltip("Density (per m) at and below the smog top.")]
     public float smogDensity = 0.012f;
     [Tooltip("Size of a district noise cell (m).")]
     public float districtCellSize = 600f;
     [Tooltip("Sky pixels are treated as this far away, so the horizon sinks into smog.")]
-    public float skyDistance = 3000f;
+    public float skyDistance = 1200f;
     [Tooltip("Smog colour near the ground.")]
     public Color lowColor = new Color(0.08f, 0.05f, 0.07f);
     [Tooltip("Smog colour near its top: warmer and brighter, the city glow lit from below.")]

@@ -56,7 +56,8 @@ public static class BuildScript
             locationPathName = Path.Combine(dir, "Bench.exe"),
             target = BuildTarget.StandaloneWindows64,
             targetGroup = BuildTargetGroup.Standalone,
-            options = BuildOptions.None,
+            // BENCH_DEV=1: development player, for PerfProbe's per-marker breakdown (slower overall).
+            options = System.Environment.GetEnvironmentVariable("BENCH_DEV") == "1" ? BuildOptions.Development : BuildOptions.None,
         });
         PlayerSettings.enableFrameTimingStats = timingWas;
         bool ok = report.summary.result == BuildResult.Succeeded;

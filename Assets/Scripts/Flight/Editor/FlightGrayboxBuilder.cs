@@ -267,6 +267,7 @@ public static class FlightGrayboxBuilder
         });
 
         go.AddComponent<LaneLights>();
+        LaneLightBaker.Bake(path);
         return path;
     }
 
@@ -608,6 +609,7 @@ public static class FlightGrayboxBuilder
         }
         if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
         if (mat.HasProperty("_Color")) mat.SetColor("_Color", color);
+        mat.enableInstancing = true; // cars are drawn with Graphics.RenderMeshInstanced
         EditorUtility.SetDirty(mat);
         return mat;
     }

@@ -1,9 +1,12 @@
 // Full-screen height fog / smog (used by HeightFogFeature).
-// density(y) = _SmogDensity                                   for y <= top
-//            = _SmogDensity * exp(-(y - top) / _SmogFalloff)    for y >  top
-// integrated analytically along the view ray from the camera to the depth-buffer point (sky: _SkyDistance).
-// top = _SmogTop + _SmogTopVariation * districtNoise(endpoint.xz): smooth value noise on an integer
-// lattice (cells _DistrictCell m), so whole districts have higher or lower smog with no per-pixel noise.
+// Profile: full density up to the smog top, then a smooth falloff made of two exponentials
+//   density(y) = _SmogDensity * ((1 - w) * exp(-(y - top) / _SmogFalloff) + w * exp(-(y - top) / _SmogFalloffLong))
+// (w = _SmogLongWeight), integrated analytically along the view ray, so it thins gradually with height
+// and there is no raymarch noise.
+// top = _SmogTop + _SmogTopVariation * districtNoise(...), sampled near the CAMERA (at most 300 m along
+// the ray), so neighbouring pixels always agree: smooth value noise on an integer lattice (cells
+// _DistrictCell m). Sky pixels and anything farther than _SkyDistance count as _SkyDistance away, and
+// both fade toward the zenith the same way, so the skyline has no seam and the sky no hard edge.
 // Colour goes from _SmogLowColor near the ground to _SmogHighColor near the smog top.
 Shader "Hidden/FPS/HeightFog"
 {
@@ -28,6 +31,8 @@ Shader "Hidden/FPS/HeightFog"
             float _SmogTop;
             float _SmogTopVariation;
             float _SmogFalloff;
+            float _SmogFalloffLong;
+            float _SmogLongWeight;
             float _SmogDensity;
             float _DistrictCell;
             float _SkyDistance;
@@ -47,26 +52,26 @@ Shader "Hidden/FPS/HeightFog"
                 return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
             }
 
-            // Integral of density along y(t) = y0 + dy * t for t in [t0, t1], all above the top.
-            float AboveIntegral(float y0, float dy, float t0, float t1, float top)
+            // Integral of exp(-(y - top) / falloff) along y(t) = y0 + dy * t for t in [t0, t1], all above the top.
+            float AboveIntegral(float y0, float dy, float t0, float t1, float top, float falloff)
             {
                 if (t1 <= t0) return 0.0;
                 float ya = y0 + dy * t0, yb = y0 + dy * t1;
                 if (abs(dy) < 1e-3) // nearly horizontal: midpoint rule
-                    return (t1 - t0) * exp(-(0.5 * (ya + yb) - top) / _SmogFalloff);
-                return _SmogFalloff / dy * (exp(-(ya - top) / _SmogFalloff) - exp(-(yb - top) / _SmogFalloff));
+                    return (t1 - t0) * exp(-(0.5 * (ya + yb) - top) / falloff);
+                return falloff / dy * (exp(-(ya - top) / falloff) - exp(-(yb - top) / falloff));
             }
 
-            // Optical depth along the ray (in units of _SmogDensity).
+            // Optical depth along the ray (in units of _SmogDensity) for one falloff.
             // The ray crosses the smog top at most once: rising rays go below-then-above, falling rays
             // above-then-below (either part may be empty once tc is clamped to the ray).
-            float OpticalDepth(float y0, float dy, float dist, float top)
+            float OpticalDepth(float y0, float dy, float dist, float top, float falloff)
             {
                 if (abs(dy) < 1e-5)
-                    return y0 <= top ? dist : AboveIntegral(y0, 0.0, 0.0, dist, top);
+                    return y0 <= top ? dist : AboveIntegral(y0, 0.0, 0.0, dist, top, falloff);
                 float tc = clamp((top - y0) / dy, 0.0, dist);
-                if (dy > 0.0) return tc + AboveIntegral(y0, dy, tc, dist, top);
-                return AboveIntegral(y0, dy, 0.0, tc, top) + (dist - tc);
+                if (dy > 0.0) return tc + AboveIntegral(y0, dy, tc, dist, top, falloff);
+                return AboveIntegral(y0, dy, 0.0, tc, top, falloff) + (dist - tc);
             }
 
             half4 Frag(Varyings input) : SV_Target
@@ -86,15 +91,22 @@ Shader "Hidden/FPS/HeightFog"
                 float3 ray = posWS - camPos;
                 float dist = length(ray);
                 float3 dir = ray / max(dist, 1e-4);
-                if (sky)
-                {
-                    dist = _SkyDistance;
-                    posWS = camPos + dir * dist;
-                }
+                // Sky and far geometry share one distance, so towers fade into the sky without a seam.
+                dist = sky ? _SkyDistance : min(dist, _SkyDistance);
+                posWS = camPos + dir * dist;
 
-                float top = _SmogTop + _SmogTopVariation * ValueNoise(posWS.xz / _DistrictCell);
-                float od = _SmogDensity * OpticalDepth(camPos.y, dir.y, dist, top);
+                // District top sampled near the camera: neighbouring pixels always agree.
+                float2 sampleXZ = camPos.xz + dir.xz * min(dist, 300.0);
+                float top = _SmogTop + _SmogTopVariation * ValueNoise(sampleXZ / _DistrictCell);
+                float w = saturate(_SmogLongWeight);
+                float od = _SmogDensity * ((1.0 - w) * OpticalDepth(camPos.y, dir.y, dist, top, _SmogFalloff)
+                                         + w * OpticalDepth(camPos.y, dir.y, dist, top, _SmogFalloffLong));
                 float fog = 1.0 - exp(-od);
+
+                // Keep the zenith clear: fade toward straight up, for the sky and (blended in with distance)
+                // for far geometry too, so a tower top meeting the sky gets the same fade as the sky behind it.
+                float zenithFade = saturate(1.0 - dir.y * 4.0);
+                fog *= lerp(1.0, zenithFade, sky ? 1.0 : saturate(dist / _SkyDistance));
 
                 // Darker near the ground, warmer and brighter toward the smog top.
                 // Mean height of the ray inside the smog layer, relative to its top.

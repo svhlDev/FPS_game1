@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -252,10 +253,18 @@ public class FlyingVehicle : MonoBehaviour
         SyncLaneRegistration();
         lights = GetComponent<CarLights>();
         if (lights != null) lights.SetOn(!parked);
+        TrafficSystem.AddRenderable(this); // drawn instanced from here on
     }
+
+    void OnDestroy() => TrafficSystem.RemoveRenderable(this);
+
+    static readonly ProfilerMarker UpdateMarker = new ProfilerMarker("FlyingVehicle.Update");
+    static readonly ProfilerMarker AIMarker = new ProfilerMarker("FlyingVehicle.AITargetSpeed");
+    static readonly ProfilerMarker CollideMarker = new ProfilerMarker("FlyingVehicle.MoveAndCollide");
 
     void Update()
     {
+        using var _ = UpdateMarker.Auto();
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (IsOccupied && kb != null) HandleModeInput(kb);
@@ -588,6 +597,7 @@ public class FlyingVehicle : MonoBehaviour
     // and only cars in the neighbouring grid cells are checked for conflicts.
     float AITargetSpeed(Vector3 fwd)
     {
+        using var _ = AIMarker.Auto();
         TrafficSystem.EnsureBuilt();
         float target = aiCruiseSpeed;
         int self = TrafficIndex;
@@ -643,6 +653,7 @@ public class FlyingVehicle : MonoBehaviour
     // anything still overlapping (e.g. traffic that drove into us).
     Vector3 MoveAndCollide(Vector3 from, Vector3 delta, Quaternion rot)
     {
+        using var _ = CollideMarker.Auto();
         if (bodyCol == null) return from + delta;
         // Physics LOD: far-away traffic just follows its lane, no sweeps or depenetration.
         if (!IsOccupied && TrafficSystem.IsBeyond(from, physicsLodRadius)) return from + delta;

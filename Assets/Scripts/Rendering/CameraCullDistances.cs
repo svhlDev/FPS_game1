@@ -34,6 +34,5 @@ public class CameraCullDistances : MonoBehaviour
         }
         var cam = GetComponent<Camera>();
         cam.layerCullDistances = d;
-        cam.layerCullSpherical = true;
     }
 }

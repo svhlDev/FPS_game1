@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Unity.Profiling;
 using UnityEngine;
 
 // Frame-time benchmark. Starts itself when the player is launched with -perfprobe:
@@ -17,9 +18,32 @@ public class PerfProbe : MonoBehaviour
     public bool quitWhenDone = true;
 
     readonly List<float> frames = new List<float>(4096);
-    readonly List<float> cpuMain = new List<float>(4096), cpuRender = new List<float>(4096), gpu = new List<float>(4096);
+    readonly List<float> cpuMain = new List<float>(4096), cpuRender = new List<float>(4096), gpu = new List<float>(4096), presentWait = new List<float>(4096), cpuBusy = new List<float>(4096);
     readonly FrameTiming[] timing = new FrameTiming[1];
+
+    // Per-marker breakdown (only the samplers available in this player; development builds have most).
+    static readonly string[] Markers =
+    {
+        "PlayerLoop",
+        "Update.ScriptRunBehaviourUpdate",
+        "PreLateUpdate.ScriptRunBehaviourLateUpdate",
+        "FixedUpdate.PhysicsFixedUpdate",
+        "PostLateUpdate.FinishFrameRendering",
+        "PostLateUpdate.UpdateAllRenderers",
+        "FlyingVehicle.Update",
+        "FlyingVehicle.AITargetSpeed",
+        "FlyingVehicle.MoveAndCollide",
+        "FPC.SyncTransforms",
+        "TrafficSystem.Build",
+        "TrafficSystem.Draw",
+    };
+    readonly List<ProfilerRecorder> recorders = new List<ProfilerRecorder>();
+    readonly List<string> recorderNames = new List<string>();
+    readonly List<double> recorderSums = new List<double>();
+    int recordedFrames;
     float clock;
+    int warmupFrames;
+    bool measuring;
     Transform player;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -44,21 +68,50 @@ public class PerfProbe : MonoBehaviour
         Application.targetFrameRate = -1;
         var fpc = FindAnyObjectByType<FirstPersonController>();
         if (fpc != null) player = fpc.transform;
+        foreach (var name in Markers)
+        {
+            foreach (var cat in new[] { ProfilerCategory.Scripts, ProfilerCategory.Internal, ProfilerCategory.Render, ProfilerCategory.Physics })
+            {
+                var r = ProfilerRecorder.StartNew(cat, name);
+                if (r.Valid) { recorders.Add(r); recorderNames.Add(name); recorderSums.Add(0); break; }
+                r.Dispose();
+            }
+        }
+    }
+
+    void OnDestroy()
+    {
+        foreach (var r in recorders) r.Dispose();
     }
 
     void Update()
     {
         float dt = Time.unscaledDeltaTime;
-        clock += dt;
         FrameTimingManager.CaptureFrameTimings();
-        if (clock < warmup) return;
+        // Warm-up counts only ordinary frames (a multi-second scene-load hitch doesn't use it up)
+        // and lasts at least 60 frames.
+        if (!measuring)
+        {
+            clock += Mathf.Min(dt, 0.1f);
+            warmupFrames++;
+            if (clock < warmup || warmupFrames < 60) return;
+            measuring = true;
+            clock = warmup;
+        }
+        clock += dt;
         if (player != null) player.Rotate(0f, 360f / duration * dt, 0f);
         frames.Add(dt * 1000f);
+        for (int i = 0; i < recorders.Count; i++) recorderSums[i] += recorders[i].LastValue * 1e-6; // ns -> ms
+        recordedFrames++;
         if (FrameTimingManager.GetLatestTimings(1, timing) > 0)
         {
             if (timing[0].cpuMainThreadFrameTime > 0) cpuMain.Add((float)timing[0].cpuMainThreadFrameTime);
             if (timing[0].cpuRenderThreadFrameTime > 0) cpuRender.Add((float)timing[0].cpuRenderThreadFrameTime);
             if (timing[0].gpuFrameTime > 0) gpu.Add((float)timing[0].gpuFrameTime);
+            // Time the main thread spends waiting on Present (VSync / a full GPU queue) isn't CPU work.
+            presentWait.Add((float)timing[0].cpuMainThreadPresentWaitTime);
+            if (timing[0].cpuMainThreadFrameTime > 0)
+                cpuBusy.Add((float)(timing[0].cpuMainThreadFrameTime - timing[0].cpuMainThreadPresentWaitTime));
         }
         if (clock < warmup + duration) return;
 
@@ -96,9 +149,14 @@ public class PerfProbe : MonoBehaviour
         sb.AppendLine($"p99 ms: {P(0.99f):0.00}");
         sb.AppendLine($"max ms: {sorted[sorted.Count - 1]:0.00}");
         sb.AppendLine($"cpu main thread ms: {Stat(cpuMain)}");
+        sb.AppendLine($"cpu main thread busy ms (minus present wait): {Stat(cpuBusy)}");
+        sb.AppendLine($"present wait ms: {Stat(presentWait)}");
         sb.AppendLine($"cpu render thread ms: {Stat(cpuRender)}");
         sb.AppendLine($"gpu ms: {Stat(gpu)}");
         sb.AppendLine($"traffic cars: {FlyingVehicle.Active.Count}");
+        sb.AppendLine($"development build: {Debug.isDebugBuild}");
+        for (int i = 0; i < recorders.Count; i++)
+            sb.AppendLine($"  {recorderNames[i]}: {recorderSums[i] / Mathf.Max(1, recordedFrames):0.00} ms/frame");
         sb.AppendLine($"screen: {Screen.width}x{Screen.height}");
         sb.AppendLine($"gpu: {SystemInfo.graphicsDeviceName}");
         sb.AppendLine($"cpu: {SystemInfo.processorType}");

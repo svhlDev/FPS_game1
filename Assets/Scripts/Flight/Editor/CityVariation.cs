@@ -427,10 +427,7 @@ public static partial class CityDressing
             MarkStatic(Slab(root, "Railing", c + nrm * (depth * 0.5f - 0.05f) + Vector3.up * (SlabThickness * 0.5f + RailHeight * 0.5f),
                             Abs(tan) * railLen + Abs(nrm) * 0.08f + Vector3.up * RailHeight, kit.bridge).gameObject, true);
 
-        // Dim strip under some slab edges; small signs over some balcony rows (decoration).
-        if (rng.NextDouble() < 0.3)
-            Box(root, "UnderStrip", c + nrm * (depth * 0.5f - 0.1f) - Vector3.up * (SlabThickness * 0.5f + 0.05f),
-                Abs(tan) * Mathf.Max(0.5f, width - 0.4f) + Abs(nrm) * 0.15f + Vector3.up * 0.08f, NeonFor(y, rng, kit), kit);
+        // Small signs over some balcony rows (decoration).
         if (row && rng.NextDouble() < 0.3)
             Box(root, "RowSign", new Vector3(center.x, y + 2.4f, center.z) + nrm * 0.06f + tan * Rand(rng, -width * 0.3f, width * 0.3f),
                 Abs(tan) * 2.4f + Abs(nrm) * 0.12f + Vector3.up * 0.6f, NeonFor(y, rng, kit), kit);

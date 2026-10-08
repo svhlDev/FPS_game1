@@ -1,3 +1,4 @@
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -225,7 +226,7 @@ public class FirstPersonController : MonoBehaviour
         float dt = Time.deltaTime;
 
         // Cars moved this frame; make their colliders match before we query against them.
-        Physics.SyncTransforms();
+        using (SyncMarker.Auto()) Physics.SyncTransforms();
 
         // No mouse look while the cursor is released (Esc).
         Vector2 look = Cursor.lockState == CursorLockMode.Locked ? mouse.delta.ReadValue() * lookSensitivity : Vector2.zero;
@@ -318,6 +319,8 @@ public class FirstPersonController : MonoBehaviour
             else TryHijack();
         }
     }
+
+    static readonly ProfilerMarker SyncMarker = new ProfilerMarker("FPC.SyncTransforms");
 
     void OnControllerColliderHit(ControllerColliderHit hit)
     {

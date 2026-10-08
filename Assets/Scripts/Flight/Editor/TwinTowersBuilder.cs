@@ -328,6 +328,7 @@ public static class TwinTowersBuilder
         AddFullLoopSide(path, LaneLayer.Lower, L);
 
         go.AddComponent<LaneLights>();
+        LaneLightBaker.Bake(path);
         return path;
     }
 

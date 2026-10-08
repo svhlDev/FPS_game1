@@ -18,6 +18,8 @@ public class HeightFogFeature : ScriptableRendererFeature
     static readonly int SmogTop = Shader.PropertyToID("_SmogTop");
     static readonly int SmogTopVariation = Shader.PropertyToID("_SmogTopVariation");
     static readonly int SmogFalloff = Shader.PropertyToID("_SmogFalloff");
+    static readonly int SmogFalloffLong = Shader.PropertyToID("_SmogFalloffLong");
+    static readonly int SmogLongWeight = Shader.PropertyToID("_SmogLongWeight");
     static readonly int SmogDensity = Shader.PropertyToID("_SmogDensity");
     static readonly int DistrictCell = Shader.PropertyToID("_DistrictCell");
     static readonly int SkyDistance = Shader.PropertyToID("_SkyDistance");
@@ -40,6 +42,8 @@ public class HeightFogFeature : ScriptableRendererFeature
         material.SetFloat(SmogTop, s.smogTop);
         material.SetFloat(SmogTopVariation, s.smogTopVariation);
         material.SetFloat(SmogFalloff, Mathf.Max(0.01f, s.smogFalloff));
+        material.SetFloat(SmogFalloffLong, Mathf.Max(0.01f, s.smogFalloffLong));
+        material.SetFloat(SmogLongWeight, s.smogLongWeight);
         material.SetFloat(SmogDensity, s.smogDensity);
         material.SetFloat(DistrictCell, Mathf.Max(1f, s.districtCellSize));
         material.SetFloat(SkyDistance, s.skyDistance);

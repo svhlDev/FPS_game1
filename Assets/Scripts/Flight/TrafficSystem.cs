@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Profiling;
 using UnityEngine;
 
 // Per-frame snapshot of every vehicle for the traffic AI, built once before any car updates:
@@ -6,9 +7,9 @@ using UnityEngine;
 //  - each lane's registered cars sorted by progress per layer, so a car's leader is simply
 //    the next slot (wrapping on closed loops)
 //  - a coarse XZ grid (cell = yieldLookRange) for the crossing / cut-in check
-// Created automatically by the first car that registers with a lane.
+// Created automatically by the first car that registers. Instanced car drawing: TrafficRendering.cs.
 [DefaultExecutionOrder(-20)]
-public class TrafficSystem : MonoBehaviour
+public partial class TrafficSystem : MonoBehaviour
 {
     public struct CarState
     {
@@ -24,11 +25,11 @@ public class TrafficSystem : MonoBehaviour
 
     public static CarState[] States = new CarState[256];
     public static int Count;
-    public static float CellSize = 80f;
+    public static float CellSize = 80f;     // set each frame to the largest yieldLookRange
     // Physics LOD: cars farther than their physicsLodRadius from this point skip collision.
     public static Vector3 LodCenter;
     public static bool HasLodCenter;
-    public static bool IsBeyond(Vector3 p, float radius) => HasLodCenter && (p - LodCenter).sqrMagnitude > radius * radius;     // set each frame to the largest yieldLookRange
+    public static bool IsBeyond(Vector3 p, float radius) => HasLodCenter && (p - LodCenter).sqrMagnitude > radius * radius;
 
     static TrafficSystem instance;
     static int builtFrame = -1;
@@ -45,9 +46,14 @@ public class TrafficSystem : MonoBehaviour
 
     // ---------- lane registration ----------
 
-    public static void Register(FlyingVehicle car, LanePath path)
+    static void EnsureInstance()
     {
         if (instance == null) instance = new GameObject("TrafficSystem").AddComponent<TrafficSystem>();
+    }
+
+    public static void Register(FlyingVehicle car, LanePath path)
+    {
+        EnsureInstance();
         if (path.Cars.Count == 0) lanesWithCars.Add(path);
         path.Cars.Add(car);
     }
@@ -63,9 +69,12 @@ public class TrafficSystem : MonoBehaviour
 
     void Update() => EnsureBuilt();
 
+    static readonly ProfilerMarker BuildMarker = new ProfilerMarker("TrafficSystem.Build");
+
     public static void EnsureBuilt()
     {
         if (builtFrame == Time.frameCount) return;
+        using var _ = BuildMarker.Auto();
         builtFrame = Time.frameCount;
 
         var cam = Camera.main;

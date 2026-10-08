@@ -13,7 +13,7 @@ using static FlightGrayboxBuilder;
 // Each loop has 2 concentric lanes, each with 10 stacked levels in two streams (layers 10-14 and 19-23):
 // 40 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
-// Towers 500-1200 m (1 in 5 a giant through the cloud deck), smog layer and cloud deck above.
+// Towers 250-600 m (1 in 5 a giant through the cloud deck), smog layer and cloud deck above.
 // Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
 // ledges, lane guide strips, underworld haze, fog, bloom). Same CitySeed = same city.
 public static class SkyAvenueBuilder
@@ -23,7 +23,7 @@ public static class SkyAvenueBuilder
 
     // Altitude bands for the look: underworld below layer 9, traffic band 9-15, upper city 16+.
     const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 23;   // both streams get the bright treatment (90-240 m)
-    const int TallTowerLayers = 90;                        // giants (900 m+) get a blinking aircraft light
+    const int TallTowerLayers = 45;                        // giants (450 m+) get a blinking aircraft light
     const float HologramChance = 0.25f;
     const float BridgeChance = 0.35f;        // per LedgeAlley
     const float ClimbAlleyChance = 0.5f;     // alleys kept perfectly flat for wall running / bouncing
@@ -41,20 +41,21 @@ public static class SkyAvenueBuilder
     // Two streams on the same loops: layers 10-14 (100.5-140.5 m) and 19-23 (190.5-230.5 m), with the deck
     // (layer 16) in the 50 m gap between them. Space from layer 14 goes straight to 19.
     static readonly int[] LaneLevels = { -2, -1, 0, 1, 2, 7, 8, 9, 10, 11 };
-    const int DeckLayer = 16;                              // deck top 160 m
+    const int DeckLayer = 25;                              // deck top 250 m, 20 m above the top lane (layer 23)
+    const int DeckTowerMinLayers = 30;                     // the deck's tower is at least 300 m tall
     const int PoliceLayer = 15;
 
     // Canyon and building rows (canyon centred on x = 0)
-    const float CanyonLength = 1200f;
+    const float CanyonLength = 600f;
     const float CanyonWidth = 60f;
     const float FootprintMin = 70f, FootprintMax = 120f;
     const float AlleyMin = 14f, AlleyMax = 20f;            // close walls for wall running
-    const float HeightMin = 500f, HeightMax = 900f;
+    const float HeightMin = 250f, HeightMax = 450f;
     const float GiantChance = 0.2f;                        // giants pierce the cloud deck
-    const float GiantMin = 900f, GiantMax = 1200f;
+    const float GiantMin = 450f, GiantMax = 600f;
 
     // Sky
-    static readonly float[] CloudHeights = { 420f, 460f };
+    static readonly float[] CloudHeights = { 330f, 360f };
     const float SkySize = 6000f;                           // ground, haze and cloud planes
 
     // Traffic loops
@@ -98,7 +99,7 @@ public static class SkyAvenueBuilder
         var ta = new GameObject("TrafficAuthority").AddComponent<TrafficAuthority>();
         ta.layerSpacing = LayerSpacing;
         ta.hoverHeight = 0.5f;
-        ta.maxLayer = 130;                                 // above the giants
+        ta.maxLayer = 70;                                  // above the giants
 
         var groundMat = GetMaterial("UnderworldGround", new Color(0.05f, 0.05f, 0.06f));
         var kit = CityDressing.CreateKit(LayerSpacing, TrafficBandMinLayer, TrafficBandMaxLayer);
@@ -173,7 +174,8 @@ public static class SkyAvenueBuilder
             var plot = plots[p];
             int r = plot.side < 0 ? 0 : 1;
             bool deckTower = p == deckPlot;
-            var tower = CityDressing.BuildTower(rowRoots[r], $"Tower_{rows[r].Count:00}", plot.center, plot.footprint, plot.layers,
+            int layers = deckTower ? Mathf.Max(plot.layers, DeckTowerMinLayers) : plot.layers;
+            var tower = CityDressing.BuildTower(rowRoots[r], $"Tower_{rows[r].Count:00}", plot.center, plot.footprint, layers,
                                                 new Vector3(-plot.side, 0f, 0f), plot.tint, decoRng, kit,
                                                 deckTower ? CityDressing.Archetype.Slab : (CityDressing.Archetype?)null, allowRecess: !deckTower);
             tower.tall = tower.heightLayers >= TallTowerLayers;
@@ -343,6 +345,7 @@ public static class SkyAvenueBuilder
         path.laneLevels = (int[])LaneLevels.Clone();
         path.Rebuild();
         go.AddComponent<LaneLights>().spacing = LightSpacing;
+        LaneLightBaker.Bake(path);
         return path;
     }
 

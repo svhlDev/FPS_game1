@@ -206,33 +206,8 @@ public static partial class CityDressing
             var b = t.masses[k];
             bool recessed = t.massRecessed[k];
             bool flush = IsFlush(t, b) && !recessed;                      // on the continuous canyon wall
-            bool top = !MassAbove(t, b);
             Vector3 face = b.center + Vector3.Scale(n, b.extents);        // point on the canyon face
             float faceLen = Vector3.Dot(b.size, along);
-
-            // Vertical neon strips at the two canyon-side corners.
-            for (int s = -1; s <= 1; s += 2)
-            {
-                if (!flush || rng.NextDouble() > 0.45) continue;
-                float h = b.size.y * Mathf.Lerp(0.5f, 1f, (float)rng.NextDouble());
-                var c = new Vector3(0f, b.min.y + h * 0.5f, 0f) + Flat(face) + along * (s * faceLen * 0.5f) + n * 0.1f;
-                Box(deco, "NeonCorner", c, new Vector3(0.3f, h, 0.3f), NeonFor(c.y, rng, kit), kit);
-            }
-
-            // Neon band along the setback line (the roof edge of a mass with another above it).
-            if (!top && rng.NextDouble() < 0.5)
-            {
-                var mat = NeonFor(b.max.y, rng, kit);
-                var mid = new Vector3(b.center.x, b.max.y - 0.3f, b.center.z);
-                Vector3 across = new Vector3(Mathf.Abs(n.x), 0f, Mathf.Abs(n.z));
-                float depthLen = Vector3.Dot(b.size, across);
-                Vector3 thin = Vector3.up * 0.25f;
-                // Front and back (along the canyon), then the two alley sides.
-                for (int s = -1; s <= 1; s += 2)
-                    Box(deco, "NeonBand", mid + n * (s * (depthLen * 0.5f + 0.12f)), along * faceLen + across * 0.25f + thin, mat, kit);
-                for (int s = -1; s <= 1; s += 2)
-                    Box(deco, "NeonBand", mid + along * (s * (faceLen * 0.5f + 0.12f)), across * depthLen + along * 0.25f + thin, mat, kit);
-            }
 
             // Alley walls (the two faces along the canyon axis). ClimbAlley walls (and the slot between twin
             // shafts) get nothing that sticks out; LedgeAlley walls get AC units, pipes and pipe bundles.
