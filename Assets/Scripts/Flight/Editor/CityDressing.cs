@@ -158,7 +158,7 @@ public static partial class CityDressing
     // static batching.
     public static Tower BuildTower(Transform parent, string name, Vector3 baseCenter, Vector2 footprint, int heightLayers,
                                    Vector3 canyonNormal, Color wallTint, System.Random rng, Kit kit,
-                                   Archetype? archetype = null, bool allowRecess = true)
+                                   Archetype? archetype = null, bool allowRecess = true, int? style = null)
     {
         var t = new Tower { canyonNormal = canyonNormal, heightLayers = heightLayers, tint = wallTint };
         t.root = new GameObject(name).transform;
@@ -171,7 +171,7 @@ public static partial class CityDressing
         t.lengthCenter = t.depthAlongX ? baseCenter.z : baseCenter.x;
         t.seed = (float)rng.NextDouble();
 
-        BuildArchetype(t, archetype ?? PickArchetype(rng), depth, length, heightLayers, allowRecess, rng, kit);
+        BuildArchetype(t, archetype ?? PickArchetype(rng), depth, length, heightLayers, allowRecess, rng, kit, style);
         return t;
     }
 

@@ -137,36 +137,46 @@ public static partial class CityDressing
                 if (p.side == 1 && Mathf.Abs(p.center.z - z) < best) { best = Mathf.Abs(p.center.z - z); bz = p.center.z; }
             z = bz;
         }
+        BuildPoliceStationAt(parent, new Vector3(halfW, 0f, z), Vector3.left, new Vector3(halfW - SidewalkWidth - 8f, 0f, z), kit);
+    }
+
+    // General form: `facade` = point on the building face at street level, `outward` = the face normal
+    // (horizontal, axis-aligned), `padCenter` = landing pad centre on the road.
+    public static void BuildPoliceStationAt(Transform parent, Vector3 facade, Vector3 outward, Vector3 padCenter, Kit kit)
+    {
         var root = new GameObject("PoliceStation").transform;
         root.SetParent(parent, false);
         var station = root.gameObject.AddComponent<PoliceStation>();
         var blue = Neon("PoliceStationBlue", new Color(0.2f, 0.4f, 1f), 3f);
         var white = Neon("PoliceStationWhite", new Color(0.9f, 0.95f, 1f), 2f);
+        Vector3 along = new Vector3(Mathf.Abs(outward.z), 0f, Mathf.Abs(outward.x));
+        Vector3 Size(float n, float h, float a) => outward.x != 0f ? new Vector3(n, h, a) : new Vector3(a, h, n);
+        Vector3 At(float outBy, float y) => new Vector3(facade.x, y, facade.z) + outward * outBy;
 
         // Door (a dark recess look) with the sign above it.
-        var doorPanel = Slab(root, "StationDoorPanel", new Vector3(halfW - 0.05f, KerbHeight + 1.5f, z), new Vector3(0.1f, 3f, 3f), kit.decoDark);
+        var doorPanel = Slab(root, "StationDoorPanel", At(0.05f, KerbHeight + 1.5f), Size(0.1f, 3f, 3f), kit.decoDark);
         Street(doorPanel.gameObject, kit, false);
-        var sign = Slab(root, "StationSign", new Vector3(halfW - 0.15f, KerbHeight + 4.2f, z), new Vector3(0.2f, 1f, 6f), blue);
+        var sign = Slab(root, "StationSign", At(0.15f, KerbHeight + 4.2f), Size(0.2f, 1f, 6f), blue);
         Street(sign.gameObject, kit, false);
-        var signBand = Slab(root, "StationSignBand", new Vector3(halfW - 0.2f, KerbHeight + 4.2f, z), new Vector3(0.2f, 0.25f, 5f), white);
+        var signBand = Slab(root, "StationSignBand", At(0.2f, KerbHeight + 4.2f), Size(0.2f, 0.25f, 5f), white);
         Street(signBand.gameObject, kit, false);
         var door = new GameObject("Door").transform;
         door.SetParent(root, false);
-        door.SetPositionAndRotation(new Vector3(halfW - 2f, KerbHeight + 0.05f, z), Quaternion.LookRotation(Vector3.left));
+        door.SetPositionAndRotation(At(2f, KerbHeight + 0.05f), Quaternion.LookRotation(outward));
         station.door = door;
 
-        // Landing pad on the loading strip, edged with blue lights.
-        float padX = halfW - SidewalkWidth - 8f;
-        Flat(root, "StationPad", new Vector3(padX, 0.012f, z), new Vector3(10f, 0.01f, 14f), kit.padPaint, false);
+        // Landing pad on the road, edged with blue lights.
+        Vector3 pc = new Vector3(padCenter.x, 0f, padCenter.z);
+        Flat(root, "StationPad", pc + Vector3.up * 0.012f, Size(10f, 0.01f, 14f), kit.padPaint, false);
         for (int i = 0; i < 4; i++)
         {
-            float ex = i < 2 ? (i == 0 ? -5f : 5f) : 0f, ez = i >= 2 ? (i == 2 ? -7f : 7f) : 0f;
-            Vector3 size = i < 2 ? new Vector3(0.2f, 0.02f, 14f) : new Vector3(10f, 0.02f, 0.2f);
-            Flat(root, "StationPadEdge", new Vector3(padX + ex, 0.02f, z + ez), size, blue, false);
+            float n = i < 2 ? (i == 0 ? -5f : 5f) : 0f, a = i >= 2 ? (i == 2 ? -7f : 7f) : 0f;
+            Vector3 size = i < 2 ? Size(0.2f, 0.02f, 14f) : Size(10f, 0.02f, 0.2f);
+            Flat(root, "StationPadEdge", pc + outward * n + along * a + Vector3.up * 0.02f, size, blue, false);
         }
         var pad = new GameObject("Pad").transform;
         pad.SetParent(root, false);
-        pad.position = new Vector3(padX, 0f, z);
+        pad.position = pc;
         station.pad = pad;
     }
 

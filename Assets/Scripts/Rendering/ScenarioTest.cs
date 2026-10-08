@@ -44,6 +44,7 @@ public class ScenarioTest : MonoBehaviour
             case "tow": yield return Tow(); break;
             case "push": yield return Push(); break;
             case "district": yield return District(); break;
+            case "shots": yield return Shots(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -196,6 +197,37 @@ public class ScenarioTest : MonoBehaviour
         Log(entries > 0 && redEntries == 0 ? "PASS no street car entered an intersection on red" : $"FAIL red-light entries {redEntries} of {entries}");
         Log(stoppedAtRedMax > 0 ? "PASS cars queue at red lights" : "WARN no car seen waiting at a light");
         Log(longestStill < 60f ? "PASS no gridlock (nobody stood still a minute)" : "FAIL a street car stood still over a minute");
+    }
+
+    // ---------- screenshots ----------
+
+    // Saves shot_<n>.png next to the executable from a few fixed viewpoints (the camera is taken off
+    // the player for it). Viewpoints: -shotview x,y,z,yaw,pitch;x,y,z,yaw,pitch;... or the defaults.
+    IEnumerator Shots()
+    {
+        var cam = Camera.main;
+        if (cam == null) { Log("FAIL no camera"); yield break; }
+        cam.transform.SetParent(null);
+        string spec = null;
+        var args = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length - 1; i++) if (args[i] == "-shotview") spec = args[i + 1];
+        spec ??= "-28,181.6,0,90,0;0,650,-560,0,45;0,1.7,-160,0,-5;-40,8,-126,90,8;60,121.7,0,90,0;20,62,-60,40,10;230,300,-230,-45,25";
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        int n = 0;
+        foreach (var view in spec.Split(';'))
+        {
+            var v = view.Split(',');
+            if (v.Length < 5) continue;
+            float F(int k) => float.Parse(v[k], System.Globalization.CultureInfo.InvariantCulture);
+            cam.transform.SetPositionAndRotation(new Vector3(F(0), F(1), F(2)), Quaternion.Euler(F(4), F(3), 0f));
+            yield return new WaitForSeconds(1.5f);
+            string file = Path.Combine(dir, $"shot_{n}.png");
+            ScreenCapture.CaptureScreenshot(file);
+            yield return null; yield return null;
+            Log($"shot {n}: {view}");
+            n++;
+        }
+        yield return new WaitForSeconds(1f);
     }
 
     // ---------- push ----------

@@ -62,7 +62,8 @@ public static partial class CityDressing
         }
     }
 
-    static void BuildArchetype(Tower t, Archetype a, float D, float L, int H, bool allowRecess, System.Random rng, Kit kit)
+    // `style`: force one facade style for the whole tower (district builders), else picked per archetype.
+    static void BuildArchetype(Tower t, Archetype a, float D, float L, int H, bool allowRecess, System.Random rng, Kit kit, int? style = null)
     {
         var parts = new List<Part>();
         switch (a)
@@ -76,6 +77,7 @@ public static partial class CityDressing
         t.archetype = a;
         t.style = PickStyle(a, false, rng);
         int podiumStyle = PickStyle(a, true, rng);
+        if (style.HasValue) t.style = podiumStyle = style.Value;
 
         var columns = new List<Part>();
         if (allowRecess) AddRecesses(parts, columns, rng);

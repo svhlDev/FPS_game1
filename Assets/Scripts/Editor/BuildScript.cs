@@ -30,6 +30,7 @@ public static class BuildScript
             FlightGrayboxBuilder.Build();
             TwinTowersBuilder.Build();
             SkyAvenueBuilder.Build();
+            DistrictBuilder.Build();
         }
         catch (System.Exception e)
         {
