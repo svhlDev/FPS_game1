@@ -499,15 +499,14 @@ public static class FlightGrayboxBuilder
     }
 
     // Two warm headlights (just over the bloom threshold) and two dim red tail lights (under it) at the
-    // body's corners. Emissive boxes only: no Light components, no colliders. CarLights swaps the tails to
-    // the brake material while decelerating and everything to "off" while parked.
-    static Material headOnMat, tailOnMat, brakeMat, lightsOffMat;
+    // body's corners. Emissive boxes only: no Light components, no colliders. CarLights switches them to
+    // "off" while the car is parked.
+    static Material headOnMat, tailOnMat, lightsOffMat;
 
     static void AddCarLights(GameObject root)
     {
         if (headOnMat == null) headOnMat = GetUnlitMaterial("CarHeadlight", new Color(1f, 0.92f, 0.78f), 3f);
         if (tailOnMat == null) tailOnMat = GetUnlitMaterial("CarTaillight", new Color(1f, 0.08f, 0.05f), 0.8f);
-        if (brakeMat == null) brakeMat = GetUnlitMaterial("CarBrakeLight", new Color(1f, 0.08f, 0.05f), 2.5f);
         if (lightsOffMat == null) lightsOffMat = GetUnlitMaterial("CarLightOff", new Color(0.08f, 0.08f, 0.09f), 1f);
 
         // Body is 3 x 1.5 x 6, centred on the root.
@@ -525,7 +524,6 @@ public static class FlightGrayboxBuilder
         lights.taillights = tails;
         lights.headOn = headOnMat;
         lights.tailOn = tailOnMat;
-        lights.brakeOn = brakeMat;
         lights.off = lightsOffMat;
     }
 

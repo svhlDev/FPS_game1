@@ -63,7 +63,8 @@ public static class SkyAvenueBuilder
     const float MedianGap = 10f;                           // between car edges of the two directions
     const float EndClearance = 20f;                        // loops clear the back of the row by this much
     const float WaypointSpacing = 12f;
-    const float CarSpacing = 45f;                          // one car per ~45 m of lane, so long loops stay busy
+    const int MaxTrafficCars = 700;                        // total budget, split by lane length
+    const int MinCarsPerLane = 4;
     const float SpeedMin = 18f, SpeedMax = 20f;
     const float SpacingJitter = 0.1f;
     const float MinSpawnGap = 15f;
@@ -194,15 +195,19 @@ public static class SkyAvenueBuilder
             }
         }
 
-        // Traffic: one car per CarSpacing metres on every level of every loop lane.
+        // Traffic: MaxTrafficCars split across every level of every loop lane in proportion to lane
+        // length (at least MinCarsPerLane each, never closer than MinSpawnGap).
         var trafficRoot = new GameObject("Traffic").transform;
         int carIndex = 0;
+        float totalLength = 0f;
+        foreach (var path in lanes) totalLength += path.Length * LaneLevels.Length;
         foreach (var path in lanes)
         {
             float L = path.Length;
             foreach (int level in LaneLevels)
             {
-                int count = Mathf.Max(1, Mathf.FloorToInt(L / Mathf.Max(CarSpacing, MinSpawnGap)));
+                int count = Mathf.Clamp(Mathf.RoundToInt(MaxTrafficCars * L / totalLength), MinCarsPerLane,
+                                        Mathf.Max(1, Mathf.FloorToInt(L / MinSpawnGap)));
                 float spacing = L / count;
                 float maxJitter = Mathf.Min(SpacingJitter * spacing, (spacing - MinSpawnGap) * 0.5f);
                 float phase = (float)rng.NextDouble() * spacing;

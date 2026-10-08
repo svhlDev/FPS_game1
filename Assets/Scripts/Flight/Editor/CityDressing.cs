@@ -87,7 +87,7 @@ public static partial class CityDressing
         {
             m.SetVector("_BandHeights", new Vector4(kit.trafficMin, kit.trafficMax, 0f, 0f));
             m.SetFloat("_LitFraction", 1.3f); // global scale; base lit fraction comes per facade style
-            m.SetFloat("_EmissionStrength", 1.6f);
+            m.SetFloat("_EmissionStrength", 3.5f);
             m.SetVector("_BandLit", new Vector4(0.5f, 1.2f, 0.7f, 0f));
         });
         kit.decoDark = LitMaterial("DecoDark", new Color(0.12f, 0.12f, 0.13f));
@@ -517,7 +517,7 @@ public static partial class CityDressing
         AssetDatabase.CreateAsset(profile, path);
 
         var bloom = AddOverride<Bloom>(profile);
-        bloom.threshold.value = 1.2f;
+        bloom.threshold.value = 1.0f;
         bloom.intensity.value = 0.8f;
         bloom.scatter.value = 0.7f;
         bloom.clamp.value = 20f;

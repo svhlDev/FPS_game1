@@ -21,7 +21,7 @@ Shader "FPS/CityFacade"
         _WallColor ("Wall Color (multiplies vertex colour)", Color) = (1, 1, 1, 1)
         _RoofColor ("Roof Color", Color) = (0.07, 0.07, 0.08, 1)
         _LitFraction ("Lit Fraction Scale", Range(0, 2)) = 1
-        _EmissionStrength ("Emission Strength", Float) = 1.6
+        _EmissionStrength ("Emission Strength", Float) = 3.5
         [HDR] _WarmColor ("Warm Window", Color) = (1, 0.72, 0.42, 1)
         [HDR] _CoolColor ("Cool Window", Color) = (0.6, 0.78, 1, 1)
         [HDR] _SodiumColor ("Underworld Window", Color) = (1, 0.55, 0.2, 1)
@@ -193,16 +193,16 @@ Shader "FPS/CityFacade"
                     }
 
                     // Most lit windows are dim, a few are bright.
-                    float brightness = lerp(0.15, 1.0, pow(h2, 2.5));
+                    float brightness = lerp(0.35, 1.0, pow(h2, 1.5));
                     float3 glass = _GlassColor.rgb * light + look.w * _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
                     float3 window = isLit > 0.5 ? tint * emission * brightness : glass;
                     float3 nearColor = lerp(wall * light, window, win);
 
                     // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average
                     // (this style's opening area and lit fraction).
-                    // Mean brightness of lerp(0.15, 1, h^2.5) over uniform h is 0.15 + 0.85 / 3.5.
+                    // Mean brightness of lerp(0.35, 1, h^1.5) over uniform h is 0.35 + 0.65 / 2.5.
                     float px = max(fwidth(g).x, fwidth(g).y);
-                    float3 avgWindow = avgTint * emission * (0.15 + 0.85 / 3.5) * litFraction + glass * (1.0 - litFraction);
+                    float3 avgWindow = avgTint * emission * (0.35 + 0.65 / 2.5) * litFraction + glass * (1.0 - litFraction);
                     float3 farColor = lerp(wall * light, avgWindow, cellDef.z * cellDef.w);
                     color = lerp(nearColor, farColor, smoothstep(0.25, 0.6, px));
                 }

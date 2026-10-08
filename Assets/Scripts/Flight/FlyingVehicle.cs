@@ -114,6 +114,13 @@ public class FlyingVehicle : MonoBehaviour
     public bool IsOccupied => driver != null;
     // Resting on a surface until someone gets in (CarLights keeps its lights off).
     public bool IsParked => parked;
+
+    // Lights follow the parked state (off while parked, on otherwise).
+    void SetParked(bool value)
+    {
+        parked = value;
+        if (lights != null) lights.SetOn(!value);
+    }
     public Vector3 Velocity => velocity;
     // Frame a rider stands in: yaw only, so banking and pitch never fling them.
     public Vector3 PlatformPosition => transform.position;
@@ -173,6 +180,7 @@ public class FlyingVehicle : MonoBehaviour
     float aimYaw, aimPitch;
     float magnetHold;                   // 0..1, for the HUD
     bool parked, ctrlComboUsed;
+    CarLights lights;
     float hoverBlend;                   // 0 = resting on the surface, 1 = full hover height
     float surfaceY;                     // last known surface height under the car
     FirstPersonController driver;
@@ -229,7 +237,7 @@ public class FlyingVehicle : MonoBehaviour
             {
                 Mode = FlightMode.Layer;
                 gridLayer = TrafficAuthority.NearestLayer(surfaceY + TrafficAuthority.Hover);
-                parked = true;
+                SetParked(true);
                 hoverBlend = 0f;
             }
             else Mode = FlightMode.Free;
@@ -242,6 +250,8 @@ public class FlyingVehicle : MonoBehaviour
             velocity = path.SmoothForward(startDistance) * speed;
         }
         SyncLaneRegistration();
+        lights = GetComponent<CarLights>();
+        if (lights != null) lights.SetOn(!parked);
     }
 
     void Update()
@@ -751,7 +761,7 @@ public class FlyingVehicle : MonoBehaviour
         {
             transform.SetPositionAndRotation(new Vector3(pos.x, targetY, pos.z), heading);
             velocity = Vector3.zero; altVel = 0f;
-            parked = true;
+            SetParked(true);
         }
     }
 
@@ -806,7 +816,7 @@ public class FlyingVehicle : MonoBehaviour
     {
         if (IsOccupied) return;
         driver = who;
-        parked = false;
+        SetParked(false);
         enterFrame = Time.frameCount;
         eArmed = false;
         cam = who.playerCamera;
