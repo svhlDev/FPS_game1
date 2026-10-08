@@ -46,6 +46,8 @@ public static class BuildScript
     public static void BuildBenchmark()
     {
         const string dir = "Builds/Bench";
+        bool timingWas = PlayerSettings.enableFrameTimingStats;
+        PlayerSettings.enableFrameTimingStats = true; // PerfProbe's CPU / GPU split
         if (Directory.Exists(dir)) Directory.Delete(dir, true);
         Directory.CreateDirectory(dir);
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
@@ -56,6 +58,7 @@ public static class BuildScript
             targetGroup = BuildTargetGroup.Standalone,
             options = BuildOptions.None,
         });
+        PlayerSettings.enableFrameTimingStats = timingWas;
         bool ok = report.summary.result == BuildResult.Succeeded;
         Debug.Log(ok ? $"BENCH BUILD SUCCEEDED: {report.summary.outputPath}" : $"BENCH BUILD FAILED: {report.summary.result}");
         if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);

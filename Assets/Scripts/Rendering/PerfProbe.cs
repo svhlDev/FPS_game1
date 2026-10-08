@@ -7,6 +7,8 @@ using UnityEngine;
 //   Bench.exe -perfprobe -perflabel before -screen-fullscreen 0 -screen-width 1920 -screen-height 1080
 // VSync off, a warm-up, then it records frame times while turning the player a full circle (so both
 // directions of the canyon are covered), writes perf_<label>.txt next to the executable and quits.
+// CPU main-thread, render-thread and GPU times come from FrameTimingManager (the player needs
+// Frame Timing Stats enabled; BuildScript.BuildBenchmark turns it on).
 public class PerfProbe : MonoBehaviour
 {
     public string label = "run";
@@ -15,6 +17,8 @@ public class PerfProbe : MonoBehaviour
     public bool quitWhenDone = true;
 
     readonly List<float> frames = new List<float>(4096);
+    readonly List<float> cpuMain = new List<float>(4096), cpuRender = new List<float>(4096), gpu = new List<float>(4096);
+    readonly FrameTiming[] timing = new FrameTiming[1];
     float clock;
     Transform player;
 
@@ -46,14 +50,32 @@ public class PerfProbe : MonoBehaviour
     {
         float dt = Time.unscaledDeltaTime;
         clock += dt;
+        FrameTimingManager.CaptureFrameTimings();
         if (clock < warmup) return;
         if (player != null) player.Rotate(0f, 360f / duration * dt, 0f);
         frames.Add(dt * 1000f);
+        if (FrameTimingManager.GetLatestTimings(1, timing) > 0)
+        {
+            if (timing[0].cpuMainThreadFrameTime > 0) cpuMain.Add((float)timing[0].cpuMainThreadFrameTime);
+            if (timing[0].cpuRenderThreadFrameTime > 0) cpuRender.Add((float)timing[0].cpuRenderThreadFrameTime);
+            if (timing[0].gpuFrameTime > 0) gpu.Add((float)timing[0].gpuFrameTime);
+        }
         if (clock < warmup + duration) return;
 
         Write();
         enabled = false;
         if (quitWhenDone) Application.Quit();
+    }
+
+    // "avg / p95" of a timing series, or n/a when the platform doesn't report it.
+    static string Stat(List<float> v)
+    {
+        if (v.Count == 0) return "n/a";
+        var s = new List<float>(v);
+        s.Sort();
+        float sum = 0f;
+        foreach (var x in v) sum += x;
+        return $"avg {sum / v.Count:0.00}, median {s[s.Count / 2]:0.00}, p95 {s[Mathf.Min(s.Count - 1, Mathf.RoundToInt(0.95f * (s.Count - 1)))]:0.00}";
     }
 
     void Write()
@@ -73,6 +95,10 @@ public class PerfProbe : MonoBehaviour
         sb.AppendLine($"p95 ms: {P(0.95f):0.00}");
         sb.AppendLine($"p99 ms: {P(0.99f):0.00}");
         sb.AppendLine($"max ms: {sorted[sorted.Count - 1]:0.00}");
+        sb.AppendLine($"cpu main thread ms: {Stat(cpuMain)}");
+        sb.AppendLine($"cpu render thread ms: {Stat(cpuRender)}");
+        sb.AppendLine($"gpu ms: {Stat(gpu)}");
+        sb.AppendLine($"traffic cars: {FlyingVehicle.Active.Count}");
         sb.AppendLine($"screen: {Screen.width}x{Screen.height}");
         sb.AppendLine($"gpu: {SystemInfo.graphicsDeviceName}");
         sb.AppendLine($"cpu: {SystemInfo.processorType}");
