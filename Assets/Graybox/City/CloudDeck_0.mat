@@ -25,11 +25,15 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
+    - _CameraFade: 30
     - _Coverage: 0.55
+    - _FadeEnd: 2400
+    - _FadeStart: 1800
     - _GlowWidth: 250
     - _Opacity: 0.85
     - _Scale: 900
     - _Seed: 11
+    - _SoftDepth: 40
     - _Softness: 0.2
     m_Colors:
     - _CanyonGlowColor: {r: 1, g: 0.45, b: 0.25, a: 1}
