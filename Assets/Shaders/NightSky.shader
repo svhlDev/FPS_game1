@@ -26,6 +26,7 @@ Shader "FPS/NightSky"
             #pragma fragment frag
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "HashPCG.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _TopColor;
@@ -47,12 +48,6 @@ Shader "FPS/NightSky"
                 return o;
             }
 
-            float Hash31(float3 p)
-            {
-                p = frac(p * 0.3183099 + 0.1);
-                p *= 17.0;
-                return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
-            }
 
             half4 frag(Varyings i) : SV_Target
             {
@@ -63,15 +58,17 @@ Shader "FPS/NightSky"
 
                 // Stars: one candidate per cell on a direction grid, only above the horizon.
                 float3 g = d * 300.0;
-                float3 cell = floor(g);
-                float present = step(1.0 - _StarDensity, Hash31(cell));
-                float3 starPos = 0.25 + 0.5 * float3(Hash31(cell + 1.3), Hash31(cell + 2.9), Hash31(cell + 4.1));
+                int3 cell = (int3)floor(g);
+                uint3 r = HashInt3(cell);
+                uint3 r2 = Pcg3d(r);
+                float present = step(1.0 - _StarDensity, U01(r.x));
+                float3 starPos = 0.25 + 0.5 * float3(U01(r.y), U01(r.z), U01(r2.x));
                 float dist = length(frac(g) - starPos);
                 float px = length(fwidth(g));
                 float radius = 0.08 + px;                       // at least about a pixel wide
                 float soft = 1.0 - smoothstep(0.0, radius, dist);
                 float energy = saturate(0.08 / radius);         // dimmer when smeared over more pixels
-                col += present * soft * energy * _StarBrightness * (0.4 + 0.6 * Hash31(cell + 3.7)) * saturate(d.y * 4.0);
+                col += present * soft * energy * _StarBrightness * (0.4 + 0.6 * U01(r2.y)) * saturate(d.y * 4.0);
                 return half4(col, 1.0);
             }
             ENDHLSL

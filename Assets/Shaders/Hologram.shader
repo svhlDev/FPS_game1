@@ -38,6 +38,7 @@ Shader "FPS/Hologram"
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "HashPCG.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _ColorA;
@@ -56,19 +57,8 @@ Shader "FPS/Hologram"
             struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; UNITY_VERTEX_INPUT_INSTANCE_ID };
             struct Varyings { float4 positionCS : SV_POSITION; float2 uv : TEXCOORD0; float fogFactor : TEXCOORD1; float3 positionWS : TEXCOORD2; };
 
-            // Integer hashes: stable at any input size (sin-based hashes break down with large inputs).
-            uint HashU(uint x)
-            {
-                x ^= x >> 16; x *= 0x7feb352dU;
-                x ^= x >> 15; x *= 0x846ca68bU;
-                x ^= x >> 16;
-                return x;
-            }
-            float Hash(int a, int b, int c)
-            {
-                uint h = HashU((uint)a * 1597334677U ^ HashU((uint)b * 3812015801U ^ HashU((uint)c)));
-                return h * (1.0 / 4294967295.0);
-            }
+            // Integer coordinates in, [0, 1) out (PCG3D).
+            float Hash(int a, int b, int c) { return U01(HashInt3(int3(a, b, c)).x); }
 
             Varyings vert(Attributes v)
             {

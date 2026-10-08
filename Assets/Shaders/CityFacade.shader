@@ -63,6 +63,7 @@ Shader "FPS/CityFacade"
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "HashPCG.hlsl"
 
             struct Attributes
             {
@@ -77,7 +78,7 @@ Shader "FPS/CityFacade"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
-                float4 color : COLOR;
+                nointerpolation float4 color : COLOR; // per-mesh constant: never interpolate the seed
                 float fogFactor : TEXCOORD2;
             };
 
@@ -94,12 +95,6 @@ Shader "FPS/CityFacade"
                 return o;
             }
 
-            float Hash21(float2 p)
-            {
-                p = frac(p * float2(123.34, 456.21));
-                p += dot(p, p + 45.32);
-                return frac(p.x * p.y);
-            }
 
             half4 frag(Varyings i) : SV_Target
             {
@@ -133,11 +128,13 @@ Shader "FPS/CityFacade"
                     float2 w2 = smoothstep(margin - aa, margin + aa, f) * (1.0 - smoothstep(1.0 - margin - aa, 1.0 - margin + aa, f));
                     float win = w2.x * w2.y;
 
-                    // Per-window randomness: cell + which face + this building.
-                    float faceId = facesX ? (n.x > 0 ? 1.0 : 2.0) : (n.z > 0 ? 3.0 : 4.0);
-                    float2 key = cell + float2(faceId * 37.1, i.color.a * 911.0);
-                    float h = Hash21(key);
-                    float h2 = Hash21(key * 1.73 + 5.11);
+                    // Per-window randomness, integers only: cell + which face + this building's seed.
+                    uint faceId = facesX ? (n.x > 0 ? 1u : 2u) : (n.z > 0 ? 3u : 4u);
+                    uint seed = (uint)round(i.color.a * 255.0);
+                    int2 c = (int2)cell;
+                    uint3 r = Pcg3d(uint3(c.x + 32768, c.y + 32768, faceId * 256u + seed));
+                    float h = U01(r.x);
+                    float h2 = U01(r.y);
 
                     float y = i.positionWS.y;
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
