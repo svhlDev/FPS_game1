@@ -24,7 +24,8 @@ public static class SkyAvenueBuilder
     const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 15;
     const int TallTowerLayers = 54;                        // towers this tall get a blinking aircraft light
     const float HologramChance = 0.25f;
-    const float BridgeChance = 0.35f;
+    const float BridgeChance = 0.35f;        // per LedgeAlley
+    const float ClimbAlleyChance = 0.5f;     // alleys kept perfectly flat for wall running / bouncing
     static readonly float[] HazeHeights = { 15f, 35f, 60f };
     static readonly Color[] WallTints =
     {
@@ -127,12 +128,11 @@ public static class SkyAvenueBuilder
         var westTowers = new List<Vector2>(); // (centre z, half length) for picking the deck tower
         var rows = new List<List<CityDressing.Tower>> { new List<CityDressing.Tower>(), new List<CityDressing.Tower>() };
         float halfL = CanyonLength * 0.5f, halfW = CanyonWidth * 0.5f;
+        // Pass 1: footprints (same draws from `rng` as always, so layout and traffic don't change).
+        var plots = new List<(int side, Vector3 center, Vector2 footprint, int layers, Color tint)>();
         for (int side = -1; side <= 1; side += 2)
         {
-            var row = new GameObject(side < 0 ? "WestRow" : "EastRow").transform;
-            row.SetParent(cityRoot, false);
             float z = -halfL;
-            int i = 0;
             while (z < halfL)
             {
                 float len = Mathf.Min(Mathf.Lerp(FootprintMin, FootprintMax, (float)rng.NextDouble()), halfL - z);
@@ -141,13 +141,29 @@ public static class SkyAvenueBuilder
                 float h = Snap(Mathf.Lerp(HeightMin, HeightMax, (float)rng.NextDouble()));
                 float cx = side * (halfW + depth * 0.5f);
                 var tint = Pick(WallTints, rng);
-                var tower = CityDressing.BuildTower(row, $"Tower_{i++:00}", new Vector3(cx, 0f, z + len * 0.5f), new Vector2(depth, len),
-                                                    Mathf.RoundToInt(h / LayerSpacing), new Vector3(-side, 0f, 0f), tint, decoRng, kit);
-                tower.tall = tower.heightLayers >= TallTowerLayers;
-                rows[side < 0 ? 0 : 1].Add(tower);
+                plots.Add((side, new Vector3(cx, 0f, z + len * 0.5f), new Vector2(depth, len), Mathf.RoundToInt(h / LayerSpacing), tint));
                 if (side < 0) westTowers.Add(new Vector2(z + len * 0.5f, len * 0.5f));
                 z += len + AlleyWidth;
             }
+        }
+        // The deck hangs off the west tower nearest mid-length: keep that one a plain slab (no slot, no recess).
+        int deckPlot = -1;
+        for (int p = 0; p < plots.Count; p++)
+            if (plots[p].side < 0 && (deckPlot < 0 || Mathf.Abs(plots[p].center.z) < Mathf.Abs(plots[deckPlot].center.z))) deckPlot = p;
+
+        // Pass 2: towers from archetypes.
+        var rowRoots = new[] { new GameObject("WestRow").transform, new GameObject("EastRow").transform };
+        foreach (var r in rowRoots) r.SetParent(cityRoot, false);
+        for (int p = 0; p < plots.Count; p++)
+        {
+            var plot = plots[p];
+            int r = plot.side < 0 ? 0 : 1;
+            bool deckTower = p == deckPlot;
+            var tower = CityDressing.BuildTower(rowRoots[r], $"Tower_{rows[r].Count:00}", plot.center, plot.footprint, plot.layers,
+                                                new Vector3(-plot.side, 0f, 0f), plot.tint, decoRng, kit,
+                                                deckTower ? CityDressing.Archetype.Slab : (CityDressing.Archetype?)null, allowRecess: !deckTower);
+            tower.tall = tower.heightLayers >= TallTowerLayers;
+            rows[r].Add(tower);
         }
 
         // Traffic loops: both clockwise from above, which makes the east loop's canyon side run north
@@ -244,13 +260,30 @@ public static class SkyAvenueBuilder
             // West row faces the southbound loop (magenta), east row the northbound one (cyan).
             var guide = r == 0 ? kit.laneSouth : kit.laneNorth;
             var row = rows[r];
+
+            // Tag each alley: ClimbAlley (both walls flat) or LedgeAlley (bays, balconies, bridges allowed).
+            var climb = new bool[Mathf.Max(0, row.Count - 1)];
+            for (int a = 0; a < climb.Length; a++)
+            {
+                climb[a] = decoRng.NextDouble() < ClimbAlleyChance;
+                row[a].climbPlus = climb[a];
+                row[a + 1].climbMinus = climb[a];
+            }
+
             for (int i = 0; i < row.Count; i++)
             {
+                CityDressing.AddBays(row[i], decoRng, kit);
+                CityDressing.AddBalconies(row[i], decoRng, kit);
+                CityDressing.AddTwinBridges(row[i], decoRng, kit);
                 CityDressing.DressTower(row[i], decoRng, kit, rideHeights, guide);
                 CityDressing.AddLedges(row[i], decoRng, kit);
                 if (decoRng.NextDouble() < HologramChance) CityDressing.AddHologram(row[i], decoRng, kit);
-                if (i + 1 < row.Count && decoRng.NextDouble() < BridgeChance)
-                    CityDressing.AddBridge(row[i].root, row[i], row[i + 1], Vector3.forward, decoRng, kit);
+            }
+            for (int a = 0; a < climb.Length; a++)
+            {
+                if (!climb[a] && decoRng.NextDouble() < BridgeChance)
+                    CityDressing.AddBridge(row[a].root, row[a], row[a + 1], Vector3.forward, decoRng, kit);
+                CityDressing.AddCables(row[a].root, row[a], row[a + 1], decoRng, kit);
             }
         }
         CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, 2400f, HazeHeights, kit);

@@ -1,7 +1,11 @@
 // Procedural skyscraper facade for URP. One material for every building mass (SRP Batcher compatible).
 // Windows come from WORLD-space position (triplanar on the side faces), so they tile on any box size.
-//   - Cell _WindowSize.xy (2.5 m x 3.33 m = three floors per 10 m layer), opening _WindowSize.zw of the cell.
-//   - Per-window hash: lit or dark (_LitFraction, scaled per altitude band), warm or cool tint.
+//   - Facade STYLE per mass from uv2.x (integer, not interpolated): window cell, opening, lit fraction,
+//     tint bias and reflection come from a small table (see kStyleCell / kStyleLook). Cell heights divide
+//     10 m, so floors line up with the layer grid. In the underworld band most buildings switch to the
+//     industrial style (by building seed).
+//       0 grid office 2.5 x 3.33 | 1 ribbon 10 x 3.33 | 2 curtain wall 1.6 x 3.33 | 3 residential 3.33 x 3.33 | 4 industrial 5 x 5
+//   - Per-window integer hash: lit or dark (_LitFraction x band x style), warm or cool tint.
 //   - Vertex colour: rgb = this building's wall tint, a = building seed (set by the builder, so per-building
 //     variation survives static batching without MaterialPropertyBlocks).
 //   - Roofs (up-facing) get no windows.
@@ -14,7 +18,6 @@ Shader "FPS/CityFacade"
     {
         _WallColor ("Wall Color (multiplies vertex colour)", Color) = (1, 1, 1, 1)
         _RoofColor ("Roof Color", Color) = (0.07, 0.07, 0.08, 1)
-        _WindowSize ("Window Cell (w, h) and Opening (x, y)", Vector) = (2.5, 3.3333, 0.7, 0.7)
         _LitFraction ("Lit Fraction", Range(0, 1)) = 0.15
         _EmissionStrength ("Emission Strength", Float) = 1.6
         [HDR] _WarmColor ("Warm Window", Color) = (1, 0.72, 0.42, 1)
@@ -36,7 +39,6 @@ Shader "FPS/CityFacade"
         CBUFFER_START(UnityPerMaterial)
             float4 _WallColor;
             float4 _RoofColor;
-            float4 _WindowSize;
             float _LitFraction;
             float _EmissionStrength;
             float4 _WarmColor;
@@ -70,6 +72,7 @@ Shader "FPS/CityFacade"
                 float4 positionOS : POSITION;
                 float3 normalOS : NORMAL;
                 float4 color : COLOR;
+                float2 uv2 : TEXCOORD1;     // x = facade style id
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -80,6 +83,26 @@ Shader "FPS/CityFacade"
                 float3 normalWS : TEXCOORD1;
                 nointerpolation float4 color : COLOR; // per-mesh constant: never interpolate the seed
                 float fogFactor : TEXCOORD2;
+                nointerpolation float style : TEXCOORD3;
+            };
+
+            // Per style: cell (w, h) in metres, opening (w, h) as a fraction of the cell.
+            static const float4 kStyleCell[5] =
+            {
+                float4(2.5, 10.0 / 3.0, 0.70, 0.70),        // 0 grid office
+                float4(10.0, 10.0 / 3.0, 0.97, 0.55),       // 1 ribbon: continuous glass bands per floor
+                float4(1.6, 10.0 / 3.0, 0.92, 0.92),        // 2 curtain wall: nearly all glass
+                float4(10.0 / 3.0, 10.0 / 3.0, 0.45, 0.55), // 3 residential: small punched windows
+                float4(5.0, 5.0, 0.30, 0.25),               // 4 industrial: sparse slits
+            };
+            // Per style: lit-fraction multiplier, warm bias, sodium bias, glass reflection multiplier.
+            static const float4 kStyleLook[5] =
+            {
+                float4(1.0, 0.0, 0.00, 1.0),
+                float4(1.0, 0.0, 0.00, 1.2),
+                float4(0.5, 0.0, 0.00, 2.2),
+                float4(1.8, 0.6, 0.00, 0.8),
+                float4(0.4, 0.0, 0.85, 0.6),
             };
 
             Varyings vert(Attributes v)
@@ -91,6 +114,7 @@ Shader "FPS/CityFacade"
                 o.positionWS = p.positionWS;
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
                 o.color = v.color;
+                o.style = v.uv2.x;
                 o.fogFactor = ComputeFogFactor(p.positionCS.z);
                 return o;
             }
@@ -115,34 +139,41 @@ Shader "FPS/CityFacade"
                 }
                 else
                 {
+                    float y = i.positionWS.y;
+                    uint seed = (uint)round(i.color.a * 255.0);
+                    uint style = min((uint)round(i.style), 4u);
+                    if (y < _BandHeights.x && (seed & 3u) != 0u) style = 4u;   // industrial dominates the underworld
+                    float4 cellDef = kStyleCell[style];
+                    float4 look = kStyleLook[style];
+
                     // Side face: project onto the face's plane (Z-Y for X-facing, X-Y for Z-facing).
                     bool facesX = abs(n.x) > abs(n.z);
                     float2 uv = facesX ? i.positionWS.zy : i.positionWS.xy;
-                    float2 g = uv / _WindowSize.xy;
+                    float2 g = uv / cellDef.xy;
                     float2 cell = floor(g);
                     float2 f = frac(g);
 
                     // Anti-aliased window rectangle inside the cell (thin mullions between).
-                    float2 margin = (1.0 - _WindowSize.zw) * 0.5;
+                    float2 margin = (1.0 - cellDef.zw) * 0.5;
                     float2 aa = max(fwidth(g), 1e-4);
                     float2 w2 = smoothstep(margin - aa, margin + aa, f) * (1.0 - smoothstep(1.0 - margin - aa, 1.0 - margin + aa, f));
                     float win = w2.x * w2.y;
 
                     // Per-window randomness, integers only: cell + which face + this building's seed.
                     uint faceId = facesX ? (n.x > 0 ? 1u : 2u) : (n.z > 0 ? 3u : 4u);
-                    uint seed = (uint)round(i.color.a * 255.0);
                     int2 c = (int2)cell;
                     uint3 r = Pcg3d(uint3(c.x + 32768, c.y + 32768, faceId * 256u + seed));
                     float h = U01(r.x);
                     float h2 = U01(r.y);
 
-                    float y = i.positionWS.y;
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
-                    float litFraction = saturate(_LitFraction * bandMul);
+                    float litFraction = saturate(_LitFraction * bandMul * look.x);
                     float isLit = step(h, litFraction);
 
                     float3 tint = lerp(_WarmColor.rgb, _CoolColor.rgb, step(0.5, h2));
                     float3 avgTint = 0.5 * (_WarmColor.rgb + _CoolColor.rgb);
+                    tint = lerp(lerp(tint, _WarmColor.rgb, look.y), _SodiumColor.rgb, look.z);
+                    avgTint = lerp(lerp(avgTint, _WarmColor.rgb, look.y), _SodiumColor.rgb, look.z);
                     if (y < _BandHeights.x)                                                   // sodium underworld
                     {
                         tint = lerp(tint, _SodiumColor.rgb, 0.75);
@@ -156,15 +187,16 @@ Shader "FPS/CityFacade"
 
                     // Most lit windows are dim, a few are bright.
                     float brightness = lerp(0.15, 1.0, pow(h2, 2.5));
-                    float3 glass = _GlassColor.rgb * light + _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
+                    float3 glass = _GlassColor.rgb * light + look.w * _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
                     float3 window = isLit > 0.5 ? tint * _EmissionStrength * brightness : glass;
                     float3 nearColor = lerp(wall * light, window, win);
 
-                    // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average.
+                    // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average
+                    // (this style's opening area and lit fraction).
                     // Mean brightness of lerp(0.15, 1, h^2.5) over uniform h is 0.15 + 0.85 / 3.5.
                     float px = max(fwidth(g).x, fwidth(g).y);
                     float3 avgWindow = avgTint * _EmissionStrength * (0.15 + 0.85 / 3.5) * litFraction + glass * (1.0 - litFraction);
-                    float3 farColor = lerp(wall * light, avgWindow, _WindowSize.z * _WindowSize.w);
+                    float3 farColor = lerp(wall * light, avgWindow, cellDef.z * cellDef.w);
                     color = lerp(nearColor, farColor, smoothstep(0.25, 0.6, px));
                 }
 

@@ -13,7 +13,8 @@ using static FlightGrayboxBuilder;
 // grid) and DECORATION (neon, signs, AC units, pipes, roof machinery, antennas, holograms: no
 // colliders, never changes what you can stand on or run along). Light comes from emissive materials
 // picked up by Bloom, never from Light components.
-public static class CityDressing
+// Tower archetypes, bays, recessed floors, balconies and the extra decoration live in CityVariation.cs.
+public static partial class CityDressing
 {
     const string Folder = "Assets/Graybox/City";
     const float LaneClearance = 6f;   // nothing within this of any lane centre line
@@ -25,7 +26,7 @@ public static class CityDressing
     {
         public float spacing;                 // grid layer height
         public float trafficMin, trafficMax;  // world heights of the traffic band
-        public Material facade, decoDark, aircraftRed, laneNorth, laneSouth, haze, bridge, sodium;
+        public Material facade, decoDark, aircraftRed, laneNorth, laneSouth, haze, bridge, sodium, padPaint;
         public Material[] neon, holograms, flickerHolograms; // flicker variants: ~1 in 10 holograms
         public Clearance clearance;
         public readonly List<Bounds> keepOut = new List<Bounds>();
@@ -39,10 +40,40 @@ public static class CityDressing
     public class Tower
     {
         public Transform root;
-        public readonly List<Bounds> masses = new List<Bounds>();
+        public readonly List<Bounds> masses = new List<Bounds>();   // gameplay boxes with the facade (incl. bays)
+        public readonly List<int> massStyle = new List<int>();      // facade style per mass
+        public readonly List<bool> massRecessed = new List<bool>(); // the inner box of a recessed floor
+        public readonly List<Bounds> features = new List<Bounds>(); // balconies, columns, bridges: for overlap checks
         public Vector3 canyonNormal;  // horizontal unit vector from the tower toward the canyon
         public int heightLayers;
         public bool tall;             // gets a blinking aircraft light
+        public Archetype archetype;
+        public int style;             // main facade style
+        public bool climbMinus, climbPlus; // alley on that side (along the canyon axis) is a ClimbAlley
+
+        // Tower-local frame: s = depth in from the canyon face, l = along the canyon from the centre.
+        public bool depthAlongX;
+        public float canyonFace, dirSign, lengthCenter;
+        public Color tint;
+        public float seed;
+        public Vector2 twinGapL;      // twin shafts: the slot between them (l range) ...
+        public Vector2Int twinGapY;   // ... and its layer range (podium top to the lower shaft top)
+        public float twinGapDepth;
+        public bool hasTwinGap;
+
+        public Vector3 Along => depthAlongX ? Vector3.forward : Vector3.right;
+        public Vector3 Across => depthAlongX ? Vector3.right : Vector3.forward;
+
+        public Bounds Frame(float s0, float s1, float l0, float l1, float y0, float y1)
+        {
+            float a = canyonFace - dirSign * s0, b = canyonFace - dirSign * s1;
+            float dMin = Mathf.Min(a, b), dMax = Mathf.Max(a, b);
+            float lMin = lengthCenter + l0, lMax = lengthCenter + l1;
+            var bounds = new Bounds();
+            bounds.SetMinMax(depthAlongX ? new Vector3(dMin, y0, lMin) : new Vector3(lMin, y0, dMin),
+                             depthAlongX ? new Vector3(dMax, y1, lMax) : new Vector3(lMax, y1, dMax));
+            return bounds;
+        }
     }
 
     public static Kit CreateKit(float spacing, int trafficMinLayer, int trafficMaxLayer)
@@ -59,6 +90,7 @@ public static class CityDressing
         });
         kit.decoDark = LitMaterial("DecoDark", new Color(0.12f, 0.12f, 0.13f));
         kit.bridge = LitMaterial("BridgeDeck", new Color(0.2f, 0.21f, 0.24f));
+        kit.padPaint = LitMaterial("LandingPadPaint", new Color(0.26f, 0.27f, 0.3f));
         kit.neon = new[]
         {
             Neon("NeonCyan", new Color(0.2f, 0.9f, 1f), 4f),
@@ -118,60 +150,44 @@ public static class CityDressing
 
     // ---------- towers ----------
 
-    // Gameplay masses only: a base block plus 1-3 setbacks, each 10-25% narrower, every top on the
-    // grid. Setbacks keep the canyon face flush (they step back from the alleys and the rear), so the
-    // canyon wall stays continuous and decks stay attached. Each mass is its own mesh with a vertex
-    // colour (rgb = wall tint, a = building seed) for per-building variation that survives batching.
+    // Gameplay masses only, from one of the archetypes (CityVariation.cs): slab with setbacks,
+    // podium + shaft, twin shafts, notched, stepped pyramid; plus optional recessed floors. Every top is on
+    // the grid, and the canyon face stays flush in every archetype (shapes step back from the alleys and
+    // the rear), so the canyon wall stays continuous and decks stay attached. Each mass is its own mesh:
+    // vertex colour = wall tint + building seed, uv2.x = facade style, so per-building variation survives
+    // static batching.
     public static Tower BuildTower(Transform parent, string name, Vector3 baseCenter, Vector2 footprint, int heightLayers,
-                                   Vector3 canyonNormal, Color wallTint, System.Random rng, Kit kit)
+                                   Vector3 canyonNormal, Color wallTint, System.Random rng, Kit kit,
+                                   Archetype? archetype = null, bool allowRecess = true)
     {
-        var t = new Tower { canyonNormal = canyonNormal, heightLayers = heightLayers };
+        var t = new Tower { canyonNormal = canyonNormal, heightLayers = heightLayers, tint = wallTint };
         t.root = new GameObject(name).transform;
         t.root.SetParent(parent, false);
 
-        bool depthAlongX = Mathf.Abs(canyonNormal.x) > 0.5f;
+        t.depthAlongX = Mathf.Abs(canyonNormal.x) > 0.5f;
         float depth = footprint.x, length = footprint.y;     // depth = across the canyon axis
-        float canyonFace = (depthAlongX ? baseCenter.x : baseCenter.z) + (depthAlongX ? canyonNormal.x : canyonNormal.z) * depth * 0.5f;
-        float lengthCenter = depthAlongX ? baseCenter.z : baseCenter.x;
-        float dirSign = depthAlongX ? canyonNormal.x : canyonNormal.z;
+        t.dirSign = t.depthAlongX ? canyonNormal.x : canyonNormal.z;
+        t.canyonFace = (t.depthAlongX ? baseCenter.x : baseCenter.z) + t.dirSign * depth * 0.5f;
+        t.lengthCenter = t.depthAlongX ? baseCenter.z : baseCenter.x;
+        t.seed = (float)rng.NextDouble();
 
-        int setbacks = 1 + rng.Next(3);
-        int baseTop = Mathf.Clamp(Mathf.RoundToInt(heightLayers * Mathf.Lerp(0.35f, 0.6f, (float)rng.NextDouble())), 3, heightLayers - setbacks);
-        var tops = new List<int> { baseTop };
-        for (int s = 1; s <= setbacks; s++)
-        {
-            int remaining = heightLayers - tops[tops.Count - 1];
-            int step = s == setbacks ? remaining : Mathf.Max(1, Mathf.RoundToInt(remaining * Mathf.Lerp(0.3f, 0.6f, (float)rng.NextDouble())));
-            tops.Add(tops[tops.Count - 1] + step);
-        }
-
-        float seed = (float)rng.NextDouble();
-        int bottom = 0;
-        for (int k = 0; k < tops.Count; k++)
-        {
-            if (k > 0)
-            {
-                depth *= Mathf.Lerp(0.75f, 0.9f, (float)rng.NextDouble());
-                length *= Mathf.Lerp(0.75f, 0.9f, (float)rng.NextDouble());
-            }
-            float y0 = bottom * kit.spacing, y1 = tops[k] * kit.spacing;
-            float depthCenter = canyonFace - dirSign * depth * 0.5f;
-            var center = depthAlongX ? new Vector3(depthCenter, (y0 + y1) * 0.5f, lengthCenter)
-                                     : new Vector3(lengthCenter, (y0 + y1) * 0.5f, depthCenter);
-            var size = depthAlongX ? new Vector3(depth, y1 - y0, length) : new Vector3(length, y1 - y0, depth);
-
-            var go = new GameObject(k == 0 ? "Base" : $"Setback_{k}");
-            go.transform.SetParent(t.root, false);
-            go.transform.position = center;
-            go.transform.localScale = size;
-            go.AddComponent<MeshFilter>().sharedMesh = ColoredCube(new Color(wallTint.r, wallTint.g, wallTint.b, seed));
-            go.AddComponent<MeshRenderer>().sharedMaterial = kit.facade;
-            go.AddComponent<BoxCollider>();
-            MarkStatic(go, true);
-            t.masses.Add(new Bounds(center, size));
-            bottom = tops[k];
-        }
+        BuildArchetype(t, archetype ?? PickArchetype(rng), depth, length, heightLayers, allowRecess, rng, kit);
         return t;
+    }
+
+    static void AddMass(Tower t, Bounds b, int style, string name, bool recessed, Kit kit)
+    {
+        var go = new GameObject(name);
+        go.transform.SetParent(t.root, false);
+        go.transform.position = b.center;
+        go.transform.localScale = b.size;
+        go.AddComponent<MeshFilter>().sharedMesh = ColoredCube(new Color(t.tint.r, t.tint.g, t.tint.b, t.seed), style);
+        go.AddComponent<MeshRenderer>().sharedMaterial = kit.facade;
+        go.AddComponent<BoxCollider>();
+        MarkStatic(go, true);
+        t.masses.Add(b);
+        t.massStyle.Add(style);
+        t.massRecessed.Add(recessed);
     }
 
     // Decoration (collider-free) plus canyon-face ledges and lane guide strips for one tower.
@@ -182,17 +198,20 @@ public static class CityDressing
         Vector3 n = t.canyonNormal;
         Vector3 along = new Vector3(Mathf.Abs(n.z), 0f, Mathf.Abs(n.x)); // horizontal axis along the canyon face
 
-        for (int k = 0; k < t.masses.Count; k++)
+        int massCount = t.masses.Count;
+        for (int k = 0; k < massCount; k++)
         {
             var b = t.masses[k];
-            bool top = k == t.masses.Count - 1;
+            bool recessed = t.massRecessed[k];
+            bool flush = IsFlush(t, b) && !recessed;                      // on the continuous canyon wall
+            bool top = !MassAbove(t, b);
             Vector3 face = b.center + Vector3.Scale(n, b.extents);        // point on the canyon face
             float faceLen = Vector3.Dot(b.size, along);
 
             // Vertical neon strips at the two canyon-side corners.
             for (int s = -1; s <= 1; s += 2)
             {
-                if (rng.NextDouble() > 0.45) continue;
+                if (!flush || rng.NextDouble() > 0.45) continue;
                 float h = b.size.y * Mathf.Lerp(0.5f, 1f, (float)rng.NextDouble());
                 var c = new Vector3(0f, b.min.y + h * 0.5f, 0f) + Flat(face) + along * (s * faceLen * 0.5f) + n * 0.1f;
                 Box(deco, "NeonCorner", c, new Vector3(0.3f, h, 0.3f), NeonFor(c.y, rng, kit), kit);
@@ -213,9 +232,11 @@ public static class CityDressing
                     Box(deco, "NeonBand", mid + along * (s * (faceLen * 0.5f + 0.12f)), across * depthLen + along * 0.25f + thin, mat, kit);
             }
 
-            // Alley walls (the two faces along the canyon axis): AC units and pipe runs, flat to the wall.
+            // Alley walls (the two faces along the canyon axis). ClimbAlley walls (and the slot between twin
+            // shafts) get nothing that sticks out; LedgeAlley walls get AC units, pipes and pipe bundles.
             for (int s = -1; s <= 1; s += 2)
             {
+                if (recessed || IsClimbFace(t, b, s)) continue;
                 Vector3 wn = along * s;
                 Vector3 wallCenter = b.center + Vector3.Scale(wn, b.extents);
                 Vector3 across = new Vector3(Mathf.Abs(n.x), 0f, Mathf.Abs(n.z));
@@ -236,29 +257,21 @@ public static class CityDressing
                     var c = new Vector3(wallCenter.x, y0 + len * 0.5f, wallCenter.z) + across * Mathf.Lerp(-wallW * 0.45f, wallW * 0.45f, (float)rng.NextDouble()) + wn * 0.14f;
                     Cylinder(deco, "Pipe", c, new Vector3(0.24f, len * 0.5f, 0.24f), kit.decoDark, kit);
                 }
+                if (rng.NextDouble() < 0.3) PipeBundle(deco, b, wn, across, rng, kit);
             }
 
-            // Roof machinery, kept off the part of the roof covered by the next mass.
-            Bounds? above = top ? (Bounds?)null : t.masses[k + 1];
-            int machines = 1 + rng.Next(3);
-            for (int m = 0; m < machines; m++)
-            {
-                var p = new Vector3(Mathf.Lerp(b.min.x + 3f, b.max.x - 3f, (float)rng.NextDouble()), b.max.y,
-                                    Mathf.Lerp(b.min.z + 3f, b.max.z - 3f, (float)rng.NextDouble()));
-                if (above.HasValue && p.x > above.Value.min.x - 2f && p.x < above.Value.max.x + 2f && p.z > above.Value.min.z - 2f && p.z < above.Value.max.z + 2f) continue;
-                if (rng.NextDouble() < 0.6) Box(deco, "Vent", p + Vector3.up * 0.6f, new Vector3(2f, 1.2f, 2f), kit.decoDark, kit);
-                else Cylinder(deco, "Tank", p + Vector3.up * 1.25f, new Vector3(2.4f, 1.25f, 2.4f), kit.decoDark, kit);
-            }
+            // Roof props (tanks, cooling units, masts, dishes, shacks, landing pads), off covered parts.
+            if (!recessed) RoofDressing(t, b, deco, rng, kit);
 
             // Lane guide strips on the canyon face at each traffic level's ride height.
-            if (laneGuide != null)
+            if (laneGuide != null && flush)
                 foreach (float y in laneRideHeights)
                     if (y >= b.min.y && y < b.max.y)
                         Box(deco, "LaneGuide", new Vector3(face.x, y, face.z) + n * 0.06f,
                             Vector3.Scale(along, b.size) + new Vector3(Mathf.Abs(n.x), 0f, Mathf.Abs(n.z)) * 0.12f + Vector3.up * 0.25f, laneGuide, kit);
 
             // Blade signs sticking out of the canyon face, mostly in the traffic band.
-            int signs = rng.Next(3);
+            int signs = flush ? rng.Next(3) : 0;
             for (int s = 0; s < signs; s++)
             {
                 float h = Mathf.Lerp(8f, 14f, (float)rng.NextDouble());
@@ -270,8 +283,9 @@ public static class CityDressing
             }
         }
 
-        // Crown on the top mass: a spire or an antenna cluster; aircraft light on the tallest.
-        var crownBase = t.masses[t.masses.Count - 1];
+        // Crown on the highest mass: a spire or an antenna cluster; aircraft light on the tallest.
+        var crownBase = t.masses[0];
+        foreach (var m in t.masses) if (m.max.y > crownBase.max.y) crownBase = m;
         Vector3 roof = new Vector3(crownBase.center.x, crownBase.max.y, crownBase.center.z);
         float tipY;
         if (rng.NextDouble() < 0.5)
@@ -316,7 +330,9 @@ public static class CityDressing
         int count = rng.Next(3);
         for (int i = 0; i < count; i++)
         {
-            var b = t.masses[rng.Next(t.masses.Count)];
+            int mi = rng.Next(t.masses.Count);
+            var b = t.masses[mi];
+            if (t.massRecessed[mi] || !IsFlush(t, b)) continue; // only on the continuous canyon wall
             int lo = Mathf.CeilToInt(b.min.y / kit.spacing) + 1, hi = Mathf.FloorToInt(b.max.y / kit.spacing) - 1;
             if (hi < lo) continue;
             float top = rng.Next(lo, hi + 1) * kit.spacing;
@@ -346,7 +362,11 @@ public static class CityDressing
         float h = Mathf.Lerp(16f, 28f, (float)rng.NextDouble());
         float y = Mathf.Lerp(kit.trafficMin + h * 0.5f, kit.trafficMax + 30f, (float)rng.NextDouble());
         Bounds? host = null;
-        foreach (var b in t.masses) if (y - h * 0.5f >= b.min.y && y + h * 0.5f <= b.max.y) host = b;
+        for (int i = 0; i < t.masses.Count; i++)
+        {
+            var b = t.masses[i];
+            if (!t.massRecessed[i] && IsFlush(t, b) && y - h * 0.5f >= b.min.y && y + h * 0.5f <= b.max.y) host = b;
+        }
         if (!host.HasValue) return;
         var m = host.Value;
         float faceLen = Vector3.Dot(m.size, along);
@@ -401,6 +421,9 @@ public static class CityDressing
         var deckSize = Abs(alleyAxis) * span + across * 4f + Vector3.up * 0.5f;
         var bounds = new Bounds(mid + Vector3.up * 1f, deckSize + Vector3.up * 2f);
         if (!kit.clearance.IsClear(bounds, LaneClearance) || Blocked(bounds, kit)) return false;
+        if (HitsFeature(a, bounds) || HitsFeature(b, bounds)) return false;
+        a.features.Add(bounds);
+        b.features.Add(bounds);
 
         var root = new GameObject("Bridge").transform;
         root.SetParent(parent, false);
@@ -564,8 +587,8 @@ public static class CityDressing
 
     static bool MassAt(Tower t, float y, out Bounds mass)
     {
-        foreach (var b in t.masses)
-            if (y >= b.min.y && y < b.max.y) { mass = b; return true; }
+        for (int i = 0; i < t.masses.Count; i++)
+            if (!t.massRecessed[i] && y >= t.masses[i].min.y && y < t.masses[i].max.y && IsFlush(t, t.masses[i])) { mass = t.masses[i]; return true; }
         mass = default;
         return false;
     }
@@ -613,8 +636,9 @@ public static class CityDressing
 
     static Mesh baseCube;
 
-    // Unit cube with every vertex coloured (per-building tint and seed for the facade shader).
-    static Mesh ColoredCube(Color c)
+    // Unit cube with every vertex coloured (per-building tint and seed for the facade shader) and the
+    // facade style id in uv2.x.
+    static Mesh ColoredCube(Color c, int style = 0)
     {
         if (baseCube == null)
         {
@@ -627,6 +651,9 @@ public static class CityDressing
         var colors = new Color[mesh.vertexCount];
         for (int i = 0; i < colors.Length; i++) colors[i] = c;
         mesh.colors = colors;
+        var uv2 = new Vector2[mesh.vertexCount];
+        for (int i = 0; i < uv2.Length; i++) uv2[i] = new Vector2(style, 0f);
+        mesh.uv2 = uv2;
         return mesh;
     }
 
