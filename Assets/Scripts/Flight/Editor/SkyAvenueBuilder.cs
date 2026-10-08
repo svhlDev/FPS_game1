@@ -13,9 +13,25 @@ using static FlightGrayboxBuilder;
 // Each loop has 2 concentric lanes, each with 5 stacked levels (layers 10-14, ride 100.5-140.5 m):
 // 20 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
+// Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
+// ledges, lane guide strips, underworld haze, fog, bloom). Same CitySeed = same city.
 public static class SkyAvenueBuilder
 {
     const string ScenePath = "Assets/Scenes/SkyAvenue.unity";
+    const int CitySeed = 23;
+
+    // Altitude bands for the look: underworld below layer 9, traffic band 9-15, upper city 16+.
+    const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 15;
+    const int TallTowerLayers = 54;                        // towers this tall get a blinking aircraft light
+    const float HologramChance = 0.25f;
+    const float BridgeChance = 0.35f;
+    static readonly float[] HazeHeights = { 15f, 35f, 60f };
+    static readonly Color[] WallTints =
+    {
+        new Color(0.2f, 0.21f, 0.23f),   // dark concrete
+        new Color(0.17f, 0.2f, 0.25f),   // blue-grey
+        new Color(0.24f, 0.23f, 0.22f),  // warm concrete
+    };
 
     // Grid
     const float LayerSpacing = 10f;
@@ -70,28 +86,14 @@ public static class SkyAvenueBuilder
         var mainCam = Camera.main;
         mainCam.farClipPlane = 3000f;
 
-        var fogColor = new Color(0.62f, 0.66f, 0.72f);
-        RenderSettings.fog = true;
-        RenderSettings.fogMode = FogMode.Linear;
-        RenderSettings.fogColor = fogColor;
-        RenderSettings.fogStartDistance = 250f;
-        RenderSettings.fogEndDistance = 1300f;
-        mainCam.clearFlags = CameraClearFlags.SolidColor;
-        mainCam.backgroundColor = fogColor;
-
         // Authority first: lanes read the 10 m grid from it while being built.
         var ta = new GameObject("TrafficAuthority").AddComponent<TrafficAuthority>();
         ta.layerSpacing = LayerSpacing;
         ta.hoverHeight = 0.5f;
         ta.maxLayer = 70;
 
-        var groundMat = GetMaterial("Ground", new Color(0.3f, 0.32f, 0.3f));
-        var towerMats = new[]
-        {
-            GetMaterial("TowerA", new Color(0.62f, 0.62f, 0.65f)),
-            GetMaterial("TowerB", new Color(0.5f, 0.52f, 0.56f)),
-            GetMaterial("TowerC", new Color(0.7f, 0.68f, 0.64f)),
-        };
+        var groundMat = GetMaterial("UnderworldGround", new Color(0.05f, 0.05f, 0.06f));
+        var kit = CityDressing.CreateKit(LayerSpacing, TrafficBandMinLayer, TrafficBandMaxLayer);
         var platformMat = GetMaterial("Platform", new Color(0.42f, 0.44f, 0.48f));
         var propMat = GetMaterial("Prop", new Color(0.75f, 0.6f, 0.3f));
         var parkedMats = new[]
@@ -110,7 +112,10 @@ public static class SkyAvenueBuilder
         var policeMat = GetMaterial("Police", new Color(0.1f, 0.3f, 1f));
         var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
 
-        var rng = new System.Random(23);
+        // Layout + traffic use `rng` (same sequence as before the look pass); setbacks and decoration
+        // use their own stream, so both are deterministic per seed.
+        var rng = new System.Random(CitySeed);
+        var decoRng = new System.Random(CitySeed * 7919 + 1);
 
         var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
         ground.name = "Ground";
@@ -120,6 +125,7 @@ public static class SkyAvenueBuilder
         // Building rows. Each tower's canyon face is flush with the canyon edge.
         var cityRoot = new GameObject("City").transform;
         var westTowers = new List<Vector2>(); // (centre z, half length) for picking the deck tower
+        var rows = new List<List<CityDressing.Tower>> { new List<CityDressing.Tower>(), new List<CityDressing.Tower>() };
         float halfL = CanyonLength * 0.5f, halfW = CanyonWidth * 0.5f;
         for (int side = -1; side <= 1; side += 2)
         {
@@ -134,7 +140,11 @@ public static class SkyAvenueBuilder
                 float depth = Mathf.Lerp(FootprintMin, FootprintMax, (float)rng.NextDouble());
                 float h = Snap(Mathf.Lerp(HeightMin, HeightMax, (float)rng.NextDouble()));
                 float cx = side * (halfW + depth * 0.5f);
-                Box(row, $"Tower_{i++:00}", new Vector3(cx, 0f, z + len * 0.5f), new Vector3(depth, h, len), Pick(towerMats, rng));
+                var tint = Pick(WallTints, rng);
+                var tower = CityDressing.BuildTower(row, $"Tower_{i++:00}", new Vector3(cx, 0f, z + len * 0.5f), new Vector2(depth, len),
+                                                    Mathf.RoundToInt(h / LayerSpacing), new Vector3(-side, 0f, 0f), tint, decoRng, kit);
+                tower.tall = tower.heightLayers >= TallTowerLayers;
+                rows[side < 0 ? 0 : 1].Add(tower);
                 if (side < 0) westTowers.Add(new Vector2(z + len * 0.5f, len * 0.5f));
                 z += len + AlleyWidth;
             }
@@ -223,6 +233,28 @@ public static class SkyAvenueBuilder
         // Player at the doorway, facing the canyon. Spawn = respawn point.
         var fpc = CreatePlayer(new Vector3(face + 3f, deckTop, deckZ), Quaternion.LookRotation(Vector3.right), mainCam, playerMat);
         fpc.fallRespawnGround = ground.GetComponent<Collider>();
+
+        // ---------- look pass: decoration, ledges, bridges, holograms, atmosphere ----------
+        kit.clearance = new CityDressing.Clearance(lanes);
+        kit.keepOut.Add(new Bounds(new Vector3(deckMidX, deckTop, deckZ), new Vector3(deckLen + 6f, 30f, DeckWidth + 6f)));
+        var rideHeights = new float[LaneLevels.Length];
+        for (int i = 0; i < LaneLevels.Length; i++) rideHeights[i] = Ride(BaseLayer + LaneLevels[i]);
+        for (int r = 0; r < rows.Count; r++)
+        {
+            // West row faces the southbound loop (magenta), east row the northbound one (cyan).
+            var guide = r == 0 ? kit.laneSouth : kit.laneNorth;
+            var row = rows[r];
+            for (int i = 0; i < row.Count; i++)
+            {
+                CityDressing.DressTower(row[i], decoRng, kit, rideHeights, guide);
+                CityDressing.AddLedges(row[i], decoRng, kit);
+                if (decoRng.NextDouble() < HologramChance) CityDressing.AddHologram(row[i], decoRng, kit);
+                if (i + 1 < row.Count && decoRng.NextDouble() < BridgeChance)
+                    CityDressing.AddBridge(row[i].root, row[i], row[i + 1], Vector3.forward, decoRng, kit);
+            }
+        }
+        CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, 2400f, HazeHeights, kit);
+        CityDressing.SetupAtmosphere(mainCam, "SkyAvenue_Post");
 
         // Police hovering over the median.
         var policeRoot = new GameObject("Police").transform;
