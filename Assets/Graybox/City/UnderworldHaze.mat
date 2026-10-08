@@ -27,7 +27,7 @@ Material:
     m_Floats:
     - _EdgeFade: 0.3
     - _FlickerRate: 0
-    - _Intensity: 0.05
+    - _Intensity: 0.08
     - _Pattern: 0
     - _ScanlineDensity: 120
     - _ScanlineStrength: 0
