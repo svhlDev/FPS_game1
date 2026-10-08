@@ -28,6 +28,7 @@ public static partial class CityDressing
         public float trafficMin, trafficMax;  // world heights of the traffic band
         public Material facade, decoDark, aircraftRed, laneNorth, laneSouth, haze, bridge, sodium, padPaint;
         public Material[] neon, holograms, flickerHolograms; // flicker variants: ~1 in 10 holograms
+        public int detailLayer;               // decoration: culled at the camera's Detail distance
         public Clearance clearance;
         public readonly List<Bounds> keepOut = new List<Bounds>();
 
@@ -80,6 +81,7 @@ public static partial class CityDressing
     {
         Directory.CreateDirectory(Folder);
         var kit = new Kit { spacing = spacing, trafficMin = trafficMinLayer * spacing, trafficMax = (trafficMaxLayer + 1) * spacing };
+        kit.detailLayer = Mathf.Max(0, EnsureLayer("Detail"));
 
         kit.facade = ShaderMaterial("CityFacade", "FPS/CityFacade", m =>
         {
@@ -322,6 +324,8 @@ public static partial class CityDressing
             light.transform.position = new Vector3(roof.x, tipY + 0.5f, roof.z);
             light.transform.localScale = Vector3.one * 1.2f * Mathf.Sqrt(crownScale);
             light.GetComponent<Renderer>().sharedMaterial = kit.aircraftRed;
+            light.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
+            light.layer = kit.detailLayer;
             light.AddComponent<AircraftLight>().phase = (float)rng.NextDouble();
             // Not static: it toggles its renderer.
         }
@@ -393,6 +397,7 @@ public static partial class CityDressing
         r.sharedMaterial = set[rng.Next(set.Length)];
         r.shadowCastingMode = ShadowCastingMode.Off;
         r.receiveShadows = false;
+        quad.layer = kit.detailLayer;
         MarkStatic(quad, false);
     }
 
@@ -479,7 +484,9 @@ public static partial class CityDressing
         RenderSettings.skybox = sky;
         cam.clearFlags = CameraClearFlags.Skybox;
         cam.allowHDR = true;
-        cam.farClipPlane = 7000f;
+        cam.farClipPlane = 2500f; // the smog hides the cutoff
+        var cull = cam.GetComponent<CameraCullDistances>();
+        if (cull == null) cull = cam.gameObject.AddComponent<CameraCullDistances>(); // Detail 700 m, Traffic 1000 m
         cam.allowMSAA = false;
         var camData = cam.GetUniversalAdditionalCameraData();
         camData.renderPostProcessing = true;
@@ -500,7 +507,7 @@ public static partial class CityDressing
             l.name = "Moon";
             l.color = new Color(0.6f, 0.7f, 1f);
             l.intensity = 0.3f;
-            l.shadows = LightShadows.Soft;
+            l.shadows = LightShadows.None;
             l.transform.rotation = Quaternion.Euler(40f, 160f, 0f);
         }
 
@@ -717,7 +724,8 @@ public static partial class CityDressing
         go.transform.localScale = scale;
         var r = go.GetComponent<Renderer>();
         r.sharedMaterial = mat;
-        if (mat != kit.decoDark) r.shadowCastingMode = ShadowCastingMode.Off;
+        r.shadowCastingMode = ShadowCastingMode.Off;
+        go.layer = kit.detailLayer;
         MarkStatic(go, false);
     }
 

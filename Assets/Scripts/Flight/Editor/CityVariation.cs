@@ -620,6 +620,7 @@ public static partial class CityDressing
         var r = go.GetComponent<Renderer>();
         r.sharedMaterial = mat;
         r.shadowCastingMode = ShadowCastingMode.Off;
+        go.layer = kit.detailLayer;
         MarkStatic(go, false);
     }
 }

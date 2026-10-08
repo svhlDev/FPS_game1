@@ -40,6 +40,27 @@ public static class BuildScript
         if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
     }
 
+    // Sky Avenue only, for PerfProbe frame-time runs (Builds/Bench/Bench.exe -perfprobe -perflabel X).
+    //   Batch mode: Unity.exe -batchmode -quit -projectPath <repo> -executeMethod BuildScript.BuildBenchmark -logFile Builds/bench_build.log
+    [MenuItem("Tools/Build Benchmark (Sky Avenue)")]
+    public static void BuildBenchmark()
+    {
+        const string dir = "Builds/Bench";
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        Directory.CreateDirectory(dir);
+        var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+        {
+            scenes = new[] { "Assets/Scenes/SkyAvenue.unity" },
+            locationPathName = Path.Combine(dir, "Bench.exe"),
+            target = BuildTarget.StandaloneWindows64,
+            targetGroup = BuildTargetGroup.Standalone,
+            options = BuildOptions.None,
+        });
+        bool ok = report.summary.result == BuildResult.Succeeded;
+        Debug.Log(ok ? $"BENCH BUILD SUCCEEDED: {report.summary.outputPath}" : $"BENCH BUILD FAILED: {report.summary.result}");
+        if (Application.isBatchMode) EditorApplication.Exit(ok ? 0 : 1);
+    }
+
     [MenuItem("Tools/Build Windows")]
     public static void BuildWindows()
     {

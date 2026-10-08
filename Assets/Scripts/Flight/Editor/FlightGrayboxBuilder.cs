@@ -474,6 +474,7 @@ public static class FlightGrayboxBuilder
         body.name = "Body";
         body.transform.SetParent(root.transform, false);
         body.transform.localScale = new Vector3(3f, 1.5f, 6f);
+        body.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
         SetMat(body, mat);
 
         var cockpit = new GameObject("Cockpit").transform;
@@ -484,7 +485,17 @@ public static class FlightGrayboxBuilder
         var v = root.AddComponent<FlyingVehicle>();
         v.cockpitAnchor = cockpit;
         AddCarLights(root);
+        SetLayerRecursive(root, TrafficLayer());
         return v;
+    }
+
+    // All cars (traffic and parked) live on the Traffic layer: the camera culls them beyond its Traffic distance.
+    internal static int TrafficLayer() => Mathf.Max(0, EnsureLayer("Traffic"));
+
+    internal static void SetLayerRecursive(GameObject go, int layer)
+    {
+        go.layer = layer;
+        foreach (Transform child in go.transform) SetLayerRecursive(child.gameObject, layer);
     }
 
     // Two warm headlights (just over the bloom threshold) and two dim red tail lights (under it) at the
@@ -569,6 +580,8 @@ public static class FlightGrayboxBuilder
     {
         var rack = Slab(v.transform, "RearRack", Vector3.zero, Vector3.one, mat);
         Object.DestroyImmediate(rack.GetComponent<Collider>());
+        rack.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
+        rack.gameObject.layer = v.gameObject.layer;
         rack.localPosition = new Vector3(0f, 0.55f, -3.35f);
         rack.localRotation = Quaternion.identity;
         rack.localScale = new Vector3(1.6f, 0.3f, 0.7f); // narrower than the car so the tail lights show from above
@@ -577,6 +590,7 @@ public static class FlightGrayboxBuilder
         grab.SetParent(v.transform, false);
         grab.localPosition = new Vector3(0f, 0.7f, -3.7f);
         grab.gameObject.AddComponent<VehicleGrabPoint>();
+        grab.gameObject.layer = v.gameObject.layer;
     }
 
     internal static void SetMat(GameObject go, Material m) => go.GetComponent<Renderer>().sharedMaterial = m;
