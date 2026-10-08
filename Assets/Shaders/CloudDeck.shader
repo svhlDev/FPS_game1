@@ -2,6 +2,9 @@
 // slowly scrolling, soft alpha. Seen from below it is lit by the city: an orange/magenta glow, strongest
 // over the canyon (a band along _GlowAxis through _GlowCenter). Seen from above it is a dim moonlit grey.
 // Octaves fade out as they get smaller than a pixel, so distant cloud doesn't shimmer.
+// Soft everywhere it could show a hard line: it thins out over _SoftDepth m where it meets scene geometry
+// (a tower piercing the deck), when the camera is within _CameraFade m of its height (flying through
+// it), and between _FadeStart and _FadeEnd from the camera (its far edge).
 Shader "FPS/CloudDeck"
 {
     Properties
@@ -18,6 +21,10 @@ Shader "FPS/CloudDeck"
         _GlowCenter ("Canyon Line (x, z)", Vector) = (0, 0, 0, 0)
         _GlowAxis ("Canyon Direction (x, z)", Vector) = (0, 1, 0, 0)
         _GlowWidth ("Canyon Glow Width (m)", Float) = 250
+        _SoftDepth ("Soft Intersection Depth (m)", Float) = 40
+        _CameraFade ("Camera Height Fade (m)", Float) = 30
+        _FadeStart ("Distance Fade Start (m)", Float) = 1800
+        _FadeEnd ("Distance Fade End (m)", Float) = 2400
     }
 
     SubShader
@@ -39,6 +46,7 @@ Shader "FPS/CloudDeck"
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
             #include "HashPCG.hlsl"
 
             CBUFFER_START(UnityPerMaterial)
@@ -54,6 +62,10 @@ Shader "FPS/CloudDeck"
                 float4 _GlowCenter;
                 float4 _GlowAxis;
                 float _GlowWidth;
+                float _SoftDepth;
+                float _CameraFade;
+                float _FadeStart;
+                float _FadeEnd;
             CBUFFER_END
 
             struct Attributes { float4 positionOS : POSITION; UNITY_VERTEX_INPUT_INSTANCE_ID };
@@ -116,6 +128,19 @@ Shader "FPS/CloudDeck"
                 float canyon = exp(-across / max(_GlowWidth, 1.0));
                 float3 under = _UnderColor.rgb + _CanyonGlowColor.rgb * canyon;
                 float3 col = fromBelow ? under * (0.6 + 0.4 * n) : _TopColor.rgb * (0.7 + 0.3 * n) + under * 0.08;
+
+                // Soft intersection: thin out where scene geometry is just behind the cloud surface.
+                float2 screenUV = i.positionCS.xy / _ScaledScreenParams.xy;
+                float sceneDepth = LinearEyeDepth(SampleSceneDepth(screenUV), _ZBufferParams);
+                float cloudDepth = LinearEyeDepth(i.positionCS.z, _ZBufferParams);
+                alpha *= saturate((sceneDepth - cloudDepth) / max(_SoftDepth, 0.01));
+
+                // Never seen edge-on: fade as the camera reaches the deck's height.
+                alpha *= saturate(abs(_WorldSpaceCameraPos.y - i.positionWS.y) / max(_CameraFade, 0.01));
+
+                // Far edge: gone before the camera's far clip (2.5 km) can cut it.
+                float dist = distance(_WorldSpaceCameraPos, i.positionWS);
+                alpha *= 1.0 - smoothstep(_FadeStart, _FadeEnd, dist);
 
                 // Fade into the distance fog (towards transparent, so it never shows as a hard sheet).
                 alpha *= ComputeFogIntensity(i.fogFactor);

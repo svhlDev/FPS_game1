@@ -15,7 +15,7 @@ using static FlightGrayboxBuilder;
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
 // Towers 250-600 m (1 in 5 a giant through the cloud deck), smog layer and cloud deck above.
 // Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
-// ledges, lane guide strips, underworld haze, fog, bloom). Same CitySeed = same city.
+// ledges, underworld haze, fog, bloom). Same CitySeed = same city.
 public static class SkyAvenueBuilder
 {
     const string ScenePath = "Assets/Scenes/SkyAvenue.unity";
@@ -273,12 +273,8 @@ public static class SkyAvenueBuilder
         // ---------- look pass: decoration, ledges, bridges, holograms, atmosphere ----------
         kit.clearance = new CityDressing.Clearance(lanes);
         kit.keepOut.Add(new Bounds(new Vector3(deckMidX, deckTop, deckZ), new Vector3(deckLen + 6f, 30f, DeckWidth + 6f)));
-        var rideHeights = new float[LaneLevels.Length];
-        for (int i = 0; i < LaneLevels.Length; i++) rideHeights[i] = Ride(BaseLayer + LaneLevels[i]);
         for (int r = 0; r < rows.Count; r++)
         {
-            // West row faces the southbound loop (magenta), east row the northbound one (cyan).
-            var guide = r == 0 ? kit.laneSouth : kit.laneNorth;
             var row = rows[r];
 
             // Tag each alley: ClimbAlley (both walls flat) or LedgeAlley (bays, balconies, bridges allowed).
@@ -295,7 +291,7 @@ public static class SkyAvenueBuilder
                 CityDressing.AddBays(row[i], decoRng, kit);
                 CityDressing.AddBalconies(row[i], decoRng, kit);
                 CityDressing.AddTwinBridges(row[i], decoRng, kit);
-                CityDressing.DressTower(row[i], decoRng, kit, rideHeights, guide);
+                CityDressing.DressTower(row[i], decoRng, kit);
                 CityDressing.AddLedges(row[i], decoRng, kit);
                 if (decoRng.NextDouble() < HologramChance) CityDressing.AddHologram(row[i], decoRng, kit);
             }

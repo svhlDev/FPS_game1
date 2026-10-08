@@ -52,14 +52,18 @@ Shader "Hidden/FPS/HeightFog"
                 return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
             }
 
-            // Integral of exp(-(y - top) / falloff) along y(t) = y0 + dy * t for t in [t0, t1], all above the top.
+            // Integral of exp(-(y - top) / falloff) along y(t) = y0 + dy * t for t in [t0, t1], all above the top:
+            //   exp(-a) * f/dy * (1 - exp(-k)),  a = (y(t0) - top) / f,  k = dy (t1 - t0) / f.
+            // Written without subtracting two nearly equal exponentials; for tiny |k| (nearly horizontal
+            // rays) the series (t1 - t0)(1 - k/2) takes over, so there is no cancellation and no divide by ~0.
             float AboveIntegral(float y0, float dy, float t0, float t1, float top, float falloff)
             {
-                if (t1 <= t0) return 0.0;
-                float ya = y0 + dy * t0, yb = y0 + dy * t1;
-                if (abs(dy) < 1e-3) // nearly horizontal: midpoint rule
-                    return (t1 - t0) * exp(-(0.5 * (ya + yb) - top) / falloff);
-                return falloff / dy * (exp(-(ya - top) / falloff) - exp(-(yb - top) / falloff));
+                float len = t1 - t0;
+                if (len <= 0.0) return 0.0;
+                float a = (y0 + dy * t0 - top) / falloff;
+                float k = dy * len / falloff;
+                float term = abs(k) < 1e-3 ? len * (1.0 - 0.5 * k) : falloff / dy * (1.0 - exp(-k));
+                return exp(-a) * term;
             }
 
             // Optical depth along the ray (in units of _SmogDensity) for one falloff.
@@ -67,10 +71,10 @@ Shader "Hidden/FPS/HeightFog"
             // above-then-below (either part may be empty once tc is clamped to the ray).
             float OpticalDepth(float y0, float dy, float dist, float top, float falloff)
             {
-                if (abs(dy) < 1e-5)
-                    return y0 <= top ? dist : AboveIntegral(y0, 0.0, 0.0, dist, top, falloff);
-                float tc = clamp((top - y0) / dy, 0.0, dist);
-                if (dy > 0.0) return tc + AboveIntegral(y0, dy, tc, dist, top, falloff);
+                // Where the ray crosses the top (a horizontal ray never does: tc lands on 0 or dist).
+                float dySafe = abs(dy) < 1e-6 ? (dy < 0.0 ? -1e-6 : 1e-6) : dy;
+                float tc = clamp((top - y0) / dySafe, 0.0, dist);
+                if (dySafe > 0.0) return tc + AboveIntegral(y0, dy, tc, dist, top, falloff);
                 return AboveIntegral(y0, dy, 0.0, tc, top, falloff) + (dist - tc);
             }
 

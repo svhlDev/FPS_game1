@@ -26,7 +26,7 @@ public static partial class CityDressing
     {
         public float spacing;                 // grid layer height
         public float trafficMin, trafficMax;  // world heights of the traffic band
-        public Material facade, decoDark, aircraftRed, laneNorth, laneSouth, haze, bridge, sodium, padPaint;
+        public Material facade, decoDark, aircraftRed, haze, bridge, sodium, padPaint;
         public Material[] neon, holograms, flickerHolograms; // flicker variants: ~1 in 10 holograms
         public int detailLayer;               // decoration: culled at the camera's Detail distance
         public Clearance clearance;
@@ -103,8 +103,6 @@ public static partial class CityDressing
         };
         kit.sodium = Neon("NeonSodium", new Color(1f, 0.5f, 0.12f), 3f);
         kit.aircraftRed = Neon("AircraftRed", new Color(1f, 0.08f, 0.05f), 6f);
-        kit.laneNorth = Neon("LaneGuideNorth", new Color(0.2f, 0.9f, 1f), 0.8f);   // faint: below the bloom threshold
-        kit.laneSouth = Neon("LaneGuideSouth", new Color(1f, 0.2f, 0.75f), 0.8f);
 
         var palettes = new (string name, Color a, Color b)[]
         {
@@ -192,8 +190,8 @@ public static partial class CityDressing
         t.massRecessed.Add(recessed);
     }
 
-    // Decoration (collider-free) plus canyon-face ledges and lane guide strips for one tower.
-    public static void DressTower(Tower t, System.Random rng, Kit kit, float[] laneRideHeights, Material laneGuide)
+    // Decoration (collider-free) for one tower.
+    public static void DressTower(Tower t, System.Random rng, Kit kit)
     {
         var deco = new GameObject("Decoration").transform;
         deco.SetParent(t.root, false);
@@ -239,13 +237,6 @@ public static partial class CityDressing
 
             // Roof props (tanks, cooling units, masts, dishes, shacks, landing pads), off covered parts.
             if (!recessed) RoofDressing(t, b, deco, rng, kit);
-
-            // Lane guide strips on the canyon face at each traffic level's ride height.
-            if (laneGuide != null && flush)
-                foreach (float y in laneRideHeights)
-                    if (y >= b.min.y && y < b.max.y)
-                        Box(deco, "LaneGuide", new Vector3(face.x, y, face.z) + n * 0.06f,
-                            Vector3.Scale(along, b.size) + new Vector3(Mathf.Abs(n.x), 0f, Mathf.Abs(n.z)) * 0.12f + Vector3.up * 0.25f, laneGuide, kit);
 
             // Blade signs sticking out of the canyon face, mostly in the traffic band.
             int signs = flush ? rng.Next(3) : 0;
