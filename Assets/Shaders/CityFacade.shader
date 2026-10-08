@@ -5,7 +5,9 @@
 //     10 m, so floors line up with the layer grid. In the underworld band most buildings switch to the
 //     industrial style (by building seed).
 //       0 grid office 2.5 x 3.33 | 1 ribbon 10 x 3.33 | 2 curtain wall 1.6 x 3.33 | 3 residential 3.33 x 3.33 | 4 industrial 5 x 5
-//   - Per-window integer hash: lit or dark (_LitFraction x band x style), warm or cool tint.
+//   - Per-window integer hash: lit or dark, warm or cool tint. Lit fraction = style's base value x band x
+//     per-building occupancy (0.2-1, skewed low, from the seed) x _LitFraction (global scale). Big-opening
+//     styles (ribbon, curtain wall) glow at half emission.
 //   - Vertex colour: rgb = this building's wall tint, a = building seed (set by the builder, so per-building
 //     variation survives static batching without MaterialPropertyBlocks).
 //   - Roofs (up-facing) get no windows.
@@ -18,7 +20,7 @@ Shader "FPS/CityFacade"
     {
         _WallColor ("Wall Color (multiplies vertex colour)", Color) = (1, 1, 1, 1)
         _RoofColor ("Roof Color", Color) = (0.07, 0.07, 0.08, 1)
-        _LitFraction ("Lit Fraction", Range(0, 1)) = 0.15
+        _LitFraction ("Lit Fraction Scale", Range(0, 2)) = 1
         _EmissionStrength ("Emission Strength", Float) = 1.6
         [HDR] _WarmColor ("Warm Window", Color) = (1, 0.72, 0.42, 1)
         [HDR] _CoolColor ("Cool Window", Color) = (0.6, 0.78, 1, 1)
@@ -95,15 +97,17 @@ Shader "FPS/CityFacade"
                 float4(10.0 / 3.0, 10.0 / 3.0, 0.45, 0.55), // 3 residential: small punched windows
                 float4(5.0, 5.0, 0.30, 0.25),               // 4 industrial: sparse slits
             };
-            // Per style: lit-fraction multiplier, warm bias, sodium bias, glass reflection multiplier.
+            // Per style: base lit fraction, warm bias, sodium bias, glass reflection multiplier.
             static const float4 kStyleLook[5] =
             {
-                float4(1.0, 0.0, 0.00, 1.0),
-                float4(1.0, 0.0, 0.00, 1.2),
-                float4(0.5, 0.0, 0.00, 2.2),
-                float4(1.8, 0.6, 0.00, 0.8),
-                float4(0.4, 0.0, 0.85, 0.6),
+                float4(0.15, 0.0, 0.00, 1.0),
+                float4(0.06, 0.0, 0.00, 1.2),
+                float4(0.05, 0.0, 0.00, 2.2),
+                float4(0.18, 0.6, 0.00, 0.8),
+                float4(0.05, 0.0, 0.85, 0.6),
             };
+            // Per style: emission multiplier (panorama windows glow rather than blaze).
+            static const float kStyleEmission[5] = { 1.0, 0.5, 0.5, 1.0, 1.0 };
 
             Varyings vert(Attributes v)
             {
@@ -167,7 +171,10 @@ Shader "FPS/CityFacade"
                     float h2 = U01(r.y);
 
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
-                    float litFraction = saturate(_LitFraction * bandMul * look.x);
+                    // Per-building occupancy, skewed low: some towers are nearly dark.
+                    float occupancy = lerp(0.2, 1.0, pow(U01(Pcg3d(uint3(seed, 9u, 41u)).x), 1.5));
+                    float litFraction = saturate(look.x * _LitFraction * bandMul * occupancy);
+                    float emission = _EmissionStrength * kStyleEmission[style];
                     float isLit = step(h, litFraction);
 
                     float3 tint = lerp(_WarmColor.rgb, _CoolColor.rgb, step(0.5, h2));
@@ -188,14 +195,14 @@ Shader "FPS/CityFacade"
                     // Most lit windows are dim, a few are bright.
                     float brightness = lerp(0.15, 1.0, pow(h2, 2.5));
                     float3 glass = _GlassColor.rgb * light + look.w * _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
-                    float3 window = isLit > 0.5 ? tint * _EmissionStrength * brightness : glass;
+                    float3 window = isLit > 0.5 ? tint * emission * brightness : glass;
                     float3 nearColor = lerp(wall * light, window, win);
 
                     // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average
                     // (this style's opening area and lit fraction).
                     // Mean brightness of lerp(0.15, 1, h^2.5) over uniform h is 0.15 + 0.85 / 3.5.
                     float px = max(fwidth(g).x, fwidth(g).y);
-                    float3 avgWindow = avgTint * _EmissionStrength * (0.15 + 0.85 / 3.5) * litFraction + glass * (1.0 - litFraction);
+                    float3 avgWindow = avgTint * emission * (0.15 + 0.85 / 3.5) * litFraction + glass * (1.0 - litFraction);
                     float3 farColor = lerp(wall * light, avgWindow, cellDef.z * cellDef.w);
                     color = lerp(nearColor, farColor, smoothstep(0.25, 0.6, px));
                 }

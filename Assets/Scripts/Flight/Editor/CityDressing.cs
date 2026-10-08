@@ -84,7 +84,7 @@ public static partial class CityDressing
         kit.facade = ShaderMaterial("CityFacade", "FPS/CityFacade", m =>
         {
             m.SetVector("_BandHeights", new Vector4(kit.trafficMin, kit.trafficMax, 0f, 0f));
-            m.SetFloat("_LitFraction", 0.15f);
+            m.SetFloat("_LitFraction", 1f); // global scale; base lit fraction comes per facade style
             m.SetFloat("_EmissionStrength", 1.6f);
             m.SetVector("_BandLit", new Vector4(0.5f, 1.2f, 0.7f, 0f));
         });
@@ -139,7 +139,7 @@ public static partial class CityDressing
         {
             m.SetColor("_ColorA", new Color(1f, 0.45f, 0.15f));
             m.SetColor("_ColorB", new Color(0.8f, 0.3f, 0.2f));
-            m.SetFloat("_Intensity", 0.05f);
+            m.SetFloat("_Intensity", 0.08f); // a bit denser: the canyon floor fades into glow
             m.SetFloat("_Pattern", 0f);
             m.SetFloat("_ScanlineStrength", 0f);
             m.SetFloat("_FlickerRate", 0f);
@@ -461,10 +461,12 @@ public static partial class CityDressing
     // light), low ambient, and a global post volume (Bloom, ACES, split toning, vignette).
     public static void SetupAtmosphere(Camera cam, string profileName)
     {
-        var fogColor = new Color(0.07f, 0.055f, 0.12f);
+        // Lighter and bluer than the towers so it reads against them. Opaque shaders fog toward this colour;
+        // additive ones (holograms, haze) fade to black, so neon doesn't cut through.
+        var fogColor = new Color(0.10f, 0.08f, 0.17f);
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.Exponential;
-        RenderSettings.fogDensity = 0.0035f; // ~10% visible at 600 m, ~80% across the canyon
+        RenderSettings.fogDensity = 0.006f; // ~70% visible across the canyon, ~3% at 600 m
         RenderSettings.fogColor = fogColor;
 
         var sky = ShaderMaterial("NightSky", "FPS/NightSky", m => m.SetColor("_HorizonColor", fogColor * 1.4f));

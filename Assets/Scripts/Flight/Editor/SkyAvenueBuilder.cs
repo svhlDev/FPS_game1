@@ -10,8 +10,8 @@ using static FlightGrayboxBuilder;
 // building row with its canyon straight inside the canyon:
 //   east loop (around the east row) runs north through the canyon,
 //   west loop (around the west row) runs south.
-// Each loop has 2 concentric lanes, each with 5 stacked levels (layers 10-14, ride 100.5-140.5 m):
-// 20 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
+// Each loop has 2 concentric lanes, each with 10 stacked levels in two streams (layers 10-14 and 19-23):
+// 40 lanes in all. A 10 m median separates the two directions in the canyon. The start deck sticks
 // out of a west-row tower at layer 16, 20 m above the top traffic level.
 // Look: night city from CityDressing (procedural facade windows, setbacks, neon, holograms, bridges,
 // ledges, lane guide strips, underworld haze, fog, bloom). Same CitySeed = same city.
@@ -21,7 +21,7 @@ public static class SkyAvenueBuilder
     const int CitySeed = 23;
 
     // Altitude bands for the look: underworld below layer 9, traffic band 9-15, upper city 16+.
-    const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 15;
+    const int TrafficBandMinLayer = 9, TrafficBandMaxLayer = 23;   // both streams get the bright treatment (90-240 m)
     const int TallTowerLayers = 54;                        // towers this tall get a blinking aircraft light
     const float HologramChance = 0.25f;
     const float BridgeChance = 0.35f;        // per LedgeAlley
@@ -37,7 +37,9 @@ public static class SkyAvenueBuilder
     // Grid
     const float LayerSpacing = 10f;
     const int BaseLayer = 12;                              // middle level rides at 120.5 m
-    static readonly int[] LaneLevels = { -2, -1, 0, 1, 2 }; // ride heights 100.5 .. 140.5
+    // Two streams on the same loops: layers 10-14 (100.5-140.5 m) and 19-23 (190.5-230.5 m), with the deck
+    // (layer 16) in the 50 m gap between them. Space from layer 14 goes straight to 19.
+    static readonly int[] LaneLevels = { -2, -1, 0, 1, 2, 7, 8, 9, 10, 11 };
     const int DeckLayer = 16;                              // deck top 160 m
     const int PoliceLayer = 15;
 
@@ -55,7 +57,7 @@ public static class SkyAvenueBuilder
     const float MedianGap = 10f;                           // between car edges of the two directions
     const float EndClearance = 20f;                        // inner semicircle radius = row half-depth + this
     const float WaypointSpacing = 12f;
-    const int CarsPerLane = 25;
+    const int CarsPerLane = 20;
     const float SpeedMin = 18f, SpeedMax = 20f;
     const float SpacingJitter = 0.1f;
     const float MinSpawnGap = 15f;

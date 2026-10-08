@@ -483,7 +483,72 @@ public static class FlightGrayboxBuilder
         AddKinematicBody(root);
         var v = root.AddComponent<FlyingVehicle>();
         v.cockpitAnchor = cockpit;
+        AddCarLights(root);
         return v;
+    }
+
+    // Two warm headlights (just over the bloom threshold) and two dim red tail lights (under it) at the
+    // body's corners. Emissive boxes only: no Light components, no colliders. CarLights swaps the tails to
+    // the brake material while decelerating and everything to "off" while parked.
+    static Material headOnMat, tailOnMat, brakeMat, lightsOffMat;
+
+    static void AddCarLights(GameObject root)
+    {
+        if (headOnMat == null) headOnMat = GetUnlitMaterial("CarHeadlight", new Color(1f, 0.92f, 0.78f), 3f);
+        if (tailOnMat == null) tailOnMat = GetUnlitMaterial("CarTaillight", new Color(1f, 0.08f, 0.05f), 0.8f);
+        if (brakeMat == null) brakeMat = GetUnlitMaterial("CarBrakeLight", new Color(1f, 0.08f, 0.05f), 2.5f);
+        if (lightsOffMat == null) lightsOffMat = GetUnlitMaterial("CarLightOff", new Color(0.08f, 0.08f, 0.09f), 1f);
+
+        // Body is 3 x 1.5 x 6, centred on the root.
+        var heads = new Renderer[2];
+        var tails = new Renderer[2];
+        for (int i = 0; i < 2; i++)
+        {
+            float x = i == 0 ? -1.1f : 1.1f;
+            heads[i] = LightBox(root, "Headlight", new Vector3(x, 0.15f, 3.025f), new Vector3(0.35f, 0.2f, 0.05f), headOnMat);
+            tails[i] = LightBox(root, "Taillight", new Vector3(x, 0.15f, -3.025f), new Vector3(0.4f, 0.15f, 0.05f), tailOnMat);
+        }
+        var lights = root.AddComponent<CarLights>();
+        lights.headlights = heads;
+        lights.taillights = tails;
+        lights.headOn = headOnMat;
+        lights.tailOn = tailOnMat;
+        lights.brakeOn = brakeMat;
+        lights.off = lightsOffMat;
+    }
+
+    static Renderer LightBox(GameObject root, string name, Vector3 localPos, Vector3 size, Material mat)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        go.name = name;
+        Object.DestroyImmediate(go.GetComponent<Collider>());
+        go.transform.SetParent(root.transform, false);
+        go.transform.localPosition = localPos;
+        go.transform.localScale = size;
+        var r = go.GetComponent<Renderer>();
+        r.sharedMaterial = mat;
+        r.shadowCastingMode = ShadowCastingMode.Off;
+        r.receiveShadows = false;
+        return r;
+    }
+
+    // URP Unlit colour times intensity (> 1 blooms), GPU instancing on.
+    internal static Material GetUnlitMaterial(string name, Color color, float intensity)
+    {
+        string assetPath = $"{MaterialFolder}/{name}.mat";
+        var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (mat == null)
+        {
+            mat = new Material(shader);
+            Directory.CreateDirectory(MaterialFolder);
+            AssetDatabase.CreateAsset(mat, assetPath);
+        }
+        else if (shader != null) mat.shader = shader;
+        mat.SetColor("_BaseColor", new Color(color.r * intensity, color.g * intensity, color.b * intensity, 1f));
+        mat.enableInstancing = true;
+        EditorUtility.SetDirty(mat);
+        return mat;
     }
 
     // Moving colliders need a kinematic Rigidbody so physics doesn't treat them as static geometry.

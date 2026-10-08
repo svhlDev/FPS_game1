@@ -112,6 +112,8 @@ public class FlyingVehicle : MonoBehaviour
     public float roofExitHoldTime = 0.35f;
 
     public bool IsOccupied => driver != null;
+    // Resting on a surface until someone gets in (CarLights keeps its lights off).
+    public bool IsParked => parked;
     public Vector3 Velocity => velocity;
     // Frame a rider stands in: yaw only, so banking and pitch never fling them.
     public Vector3 PlatformPosition => transform.position;
