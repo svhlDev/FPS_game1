@@ -21,7 +21,7 @@ public class NpcBody : MonoBehaviour
     public bool Grounded { get; private set; }
 
     CharacterController cc;
-    Transform body;
+    FigureAnimator anim;
     Vector3 velocity;
     float peakY;
     bool unconscious;
@@ -37,45 +37,27 @@ public class NpcBody : MonoBehaviour
         Vector3 right = rot * Vector3.right;
         Vector3 pos = car.transform.position + right * side * (car.BodyHalfExtents.x + 0.7f) + rot * Vector3.forward * 0.4f;
         pos.y = car.transform.position.y - 0.6f;
-        var npc = Spawn(pos, rot, kind == FlyingVehicle.DriverKind.Officer ? new Color(0.05f, 0.08f, 0.25f) : new Color(0.55f, 0.5f, 0.45f));
+        var npc = Spawn(pos, rot, kind == FlyingVehicle.DriverKind.Officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian);
         npc.velocity = car.Velocity + right * side * 3f;
         npc.unconscious = unconscious;
-        if (unconscious) npc.transform.rotation = rot * Quaternion.Euler(0f, 0f, 80f * side);
         return npc;
     }
 
-    static NpcBody Spawn(Vector3 pos, Quaternion rot, Color color)
+    // The full shared figure (police blue or civilian colours), posed by FigureAnimator.
+    static NpcBody Spawn(Vector3 pos, Quaternion rot, CharacterFigure.Role role)
     {
         var go = new GameObject("NpcBody");
         go.transform.SetPositionAndRotation(pos, Quaternion.Euler(0f, rot.eulerAngles.y, 0f));
         int layer = LayerMask.NameToLayer("Player");
         if (layer >= 0) go.layer = layer;
         var cc = go.AddComponent<CharacterController>();
-        cc.height = 1.8f; cc.radius = 0.35f; cc.center = new Vector3(0f, 0.9f, 0f);
+        float h = CharacterFigure.DefaultHeight;
+        cc.height = h; cc.radius = 0.2f; cc.center = new Vector3(0f, h * 0.5f, 0f);
         cc.minMoveDistance = 0f;
-
-        var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        body.name = "Body";
-        Destroy(body.GetComponent<Collider>());
-        body.transform.SetParent(go.transform, false);
-        body.transform.localPosition = new Vector3(0f, 0.9f, 0f);
-        body.transform.localScale = new Vector3(0.7f, 0.9f, 0.7f);
-        var visor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        visor.name = "Visor";
-        Destroy(visor.GetComponent<Collider>());
-        visor.transform.SetParent(body.transform, false);
-        visor.transform.localPosition = new Vector3(0f, 0.6f, 0.45f);
-        visor.transform.localScale = new Vector3(0.7f, 0.15f, 0.2f);
-        if (layer >= 0) { body.layer = layer; visor.layer = layer; }
-
-        var rend = body.GetComponent<Renderer>();
-        var m = new Material(rend.sharedMaterial);
-        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", color); else m.color = color;
-        rend.sharedMaterial = m;
-
+        var fig = CharacterFigure.Build(go.transform, role);
         var npc = go.AddComponent<NpcBody>();
-        npc.body = body.transform;
-        npc.bodyRend = rend;
+        npc.anim = go.AddComponent<FigureAnimator>();
+        npc.bodyRend = fig.Renderers[0];
         return npc;
     }
 
@@ -117,7 +99,6 @@ public class NpcBody : MonoBehaviour
                 transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(away), 360f * dt);
                 move = transform.forward * fleeSpeed;
             }
-            body.localPosition = new Vector3(0f, 0.9f + Mathf.Abs(Mathf.Sin(Time.time * 8f)) * 0.05f, 0f);
 
             bool seen = bodyRend.isVisible;
             if (seen) outOfViewSince = Time.time;
@@ -141,6 +122,12 @@ public class NpcBody : MonoBehaviour
         else if (!Grounded && was) { platform = null; peakY = transform.position.y; }
         if (platform != null)
             platformLocal = Quaternion.Inverse(platform.PlatformRotation) * (transform.position - platform.PlatformPosition);
+
+        // Pose: limp when knocked out, flailing in the air, running away on the ground.
+        anim.Velocity = Grounded ? move : velocity;
+        anim.Grounded = Grounded;
+        anim.LookYaw = transform.eulerAngles.y;
+        anim.CurrentPose = unconscious ? FigureAnimator.Pose.Fallen : !Grounded ? FigureAnimator.Pose.Air : FigureAnimator.Pose.Normal;
     }
 
     void Landed()
@@ -156,8 +143,8 @@ public class NpcBody : MonoBehaviour
         if (peakY - transform.position.y >= deadlyFall || unconscious)
         {
             Dead = true;
-            body.localPosition = new Vector3(0f, 0.3f, 0f);
-            body.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            anim.CurrentPose = FigureAnimator.Pose.Fallen;
+            anim.Velocity = Vector3.zero;
             transform.rotation = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
             despawnAt = Time.time + corpseLifetime;
             cc.enabled = false;

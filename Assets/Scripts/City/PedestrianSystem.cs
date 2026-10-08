@@ -5,11 +5,13 @@ using UnityEngine;
 // building entrance or a taxi pad in its part of the graph), paths there with A*, walks at 1.2-1.6 m/s
 // with its own small lane offset, waits at crosswalks for the walk phase, and disappears into the
 // building (or a taxi) at the end; a new one then appears at an entrance out of view.
-//   Near tier (within nearRadius of the player): a capsule + visor GameObject with a CharacterController
+//   Near tier (within nearRadius of the player): the shared jointed figure (CharacterFigure, varied
+//     muted colours, posed by FigureAnimator) with a CharacterController
 //     on the Player layer (cars never push them), separation from neighbours, reactions:
 //       danger (gunfire, a crash) within dangerRadius -> flee; an officer within 2 m -> step aside;
 //       the player on a car roof within 40 m -> stop and look up for a moment.
-//   Far tier: no GameObject, positions advanced along the path, drawn with RenderMeshInstanced.
+//   Far tier: no GameObject, positions advanced along the path, drawn as one combined slab-and-head
+//     mesh with RenderMeshInstanced (one batch).
 //   Promotion at nearRadius, demotion at farRadius (hysteresis).
 // The near tier is the crowd for blending in (NearAgents).
 [DefaultExecutionOrder(120)]
@@ -25,7 +27,7 @@ public class PedestrianSystem : MonoBehaviour
     public float gravity = -25f;
     public int pathsPerFrame = 6;
     public Material bodyMaterial;
-    public Material visorMaterial;
+    [HideInInspector] public Material visorMaterial; // unused since the shared figure (kept for old scenes)
 
     public static PedestrianSystem Instance { get; private set; }
 
@@ -44,7 +46,7 @@ public class PedestrianSystem : MonoBehaviour
         internal Vector3 fleeFrom;
         public Transform near;
         internal CharacterController cc;
-        internal Transform body;
+        internal FigureAnimator anim;
         internal float bob, vy, lastStare;
         public bool IsNear => near != null;
     }
@@ -56,9 +58,9 @@ public class PedestrianSystem : MonoBehaviour
 
     readonly Queue<Ped> needPath = new Queue<Ped>();
     readonly Stack<Transform> pool = new Stack<Transform>();
-    readonly List<Matrix4x4> bodyMatrices = new List<Matrix4x4>(1024), visorMatrices = new List<Matrix4x4>(1024);
+    readonly List<Matrix4x4> bodyMatrices = new List<Matrix4x4>(1024);
+    Mesh farMesh;
     readonly Dictionary<long, List<Ped>> grid = new Dictionary<long, List<Ped>>();
-    Mesh capsule, cube;
     WalkGraph graph;
     int[] component;
     List<List<int>> componentGoals, componentEntrances;
@@ -91,12 +93,6 @@ public class PedestrianSystem : MonoBehaviour
         graph = WalkGraph.Instance != null ? WalkGraph.Instance : FindAnyObjectByType<WalkGraph>();
         if (graph == null || graph.Count == 0) { enabled = false; return; }
         playerLayer = LayerMask.NameToLayer("Player");
-        var tmp = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        capsule = tmp.GetComponent<MeshFilter>().sharedMesh;
-        Destroy(tmp);
-        tmp = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        cube = tmp.GetComponent<MeshFilter>().sharedMesh;
-        Destroy(tmp);
         BuildComponents();
         // Walk nodes in parts of the graph with at least two goals (initial placement).
         for (int i = 0; i < graph.Count; i++)
@@ -241,7 +237,7 @@ public class PedestrianSystem : MonoBehaviour
         t.SetPositionAndRotation(p.pos, Quaternion.Euler(0f, p.yaw, 0f));
         p.near = t;
         p.cc = t.GetComponent<CharacterController>();
-        p.body = t.GetChild(0);
+        p.anim = t.GetComponent<FigureAnimator>();
         p.vy = 0f;
         nearList.Add(p);
     }
@@ -251,7 +247,7 @@ public class PedestrianSystem : MonoBehaviour
         if (p.near == null) return;
         p.near.gameObject.SetActive(false);
         pool.Push(p.near);
-        p.near = null; p.cc = null; p.body = null;
+        p.near = null; p.cc = null; p.anim = null;
         nearList.Remove(p);
     }
 
@@ -260,28 +256,13 @@ public class PedestrianSystem : MonoBehaviour
         var go = new GameObject("Pedestrian");
         if (playerLayer >= 0) go.layer = playerLayer;
         var cc = go.AddComponent<CharacterController>();
-        cc.height = 1.75f; cc.radius = 0.3f; cc.center = new Vector3(0f, 0.875f, 0f);
+        float h = CharacterFigure.DefaultHeight;
+        cc.height = h; cc.radius = 0.2f; cc.center = new Vector3(0f, h * 0.5f, 0f);
         cc.minMoveDistance = 0f;
-        cc.stepOffset = 0.4f;
-        var body = new GameObject("Body").transform;
-        body.SetParent(go.transform, false);
-        body.localPosition = new Vector3(0f, 0.875f, 0f);
-        var b = new GameObject("Capsule");
-        b.transform.SetParent(body, false);
-        b.transform.localScale = new Vector3(0.6f, 0.875f, 0.6f);
-        b.AddComponent<MeshFilter>().sharedMesh = capsule;
-        var br = b.AddComponent<MeshRenderer>();
-        br.sharedMaterial = bodyMaterial;
-        br.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        var v = new GameObject("Visor");
-        v.transform.SetParent(body, false);
-        v.transform.localPosition = new Vector3(0f, 0.55f, 0.27f);
-        v.transform.localScale = new Vector3(0.5f, 0.12f, 0.12f);
-        v.AddComponent<MeshFilter>().sharedMesh = cube;
-        var vr = v.AddComponent<MeshRenderer>();
-        vr.sharedMaterial = visorMaterial;
-        vr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        if (playerLayer >= 0) { body.gameObject.layer = playerLayer; b.layer = playerLayer; v.layer = playerLayer; }
+        cc.stepOffset = 0.35f;
+        // Near pedestrians have no per-part hit colliders (cost); their CharacterController is the hit surface.
+        CharacterFigure.Build(go.transform, CharacterFigure.Role.Civilian, rand, h, false, false);
+        go.AddComponent<FigureAnimator>();
         return go.transform;
     }
 
@@ -323,7 +304,7 @@ public class PedestrianSystem : MonoBehaviour
         var fpc = FirstPersonController.Instance;
         bool roofRider = fpc != null && fpc.isActiveAndEnabled && fpc.Platform != null;
         float near2 = nearRadius * nearRadius, far2 = farRadius * farRadius;
-        bodyMatrices.Clear(); visorMatrices.Clear();
+        bodyMatrices.Clear();
         // Far tier visibility (frustum + baked occlusion) from last frame's camera culling.
         var cam = Camera.main;
         bool useGroup = TrafficSystem.OcclusionEnabled && cam != null && cam.useOcclusionCulling;
@@ -360,8 +341,7 @@ public class PedestrianSystem : MonoBehaviour
                 }
                 if (want.sqrMagnitude > 0.01f) p.yaw = Mathf.Atan2(want.x, want.z) * Mathf.Rad2Deg;
                 var rot = Quaternion.Euler(0f, p.yaw, 0f);
-                bodyMatrices.Add(Matrix4x4.TRS(p.pos + Vector3.up * 0.875f, rot, new Vector3(0.6f, 0.875f, 0.6f)));
-                visorMatrices.Add(Matrix4x4.TRS(p.pos + Vector3.up * 1.425f + rot * new Vector3(0f, 0f, 0.27f), rot, new Vector3(0.5f, 0.12f, 0.12f)));
+                bodyMatrices.Add(Matrix4x4.TRS(p.pos, rot, Vector3.one));
             }
         }
     }
@@ -462,9 +442,15 @@ public class PedestrianSystem : MonoBehaviour
         p.cc.Move((vel + Vector3.up * p.vy) * dt);
         p.near.rotation = Quaternion.Euler(0f, p.yaw, 0f);
         p.pos = p.near.position;
-        // Placeholder walk bob.
-        p.bob += dt * vel.magnitude * 2.5f;
-        p.body.localPosition = new Vector3(0f, 0.875f + (vel.sqrMagnitude > 0.1f ? Mathf.Abs(Mathf.Sin(p.bob)) * 0.05f : 0f), 0f);
+        // Pose: walking at its own pace, stopping and looking up at a roof rider.
+        if (p.anim != null)
+        {
+            p.anim.Velocity = vel;
+            p.anim.Grounded = p.cc.isGrounded;
+            p.anim.LookYaw = p.yaw;
+            p.anim.LookPitch = p.state == State.Staring ? -35f : 0f;
+            p.anim.CurrentPose = FigureAnimator.Pose.Normal;
+        }
         // Fell off something: back to the nearest node.
         if (p.pos.y < -5f) Despawn(p);
     }
@@ -482,12 +468,8 @@ public class PedestrianSystem : MonoBehaviour
         if (cam.cameraType == CameraType.Preview || cam.cameraType == CameraType.Reflection) return;
         var rp = new RenderParams(bodyMaterial) { camera = cam, shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
                                                    worldBounds = new Bounds(Vector3.zero, Vector3.one * 100000f) };
+        if (farMesh == null) farMesh = CharacterFigure.FarMesh();
         for (int s = 0; s < bodyMatrices.Count; s += 1023)
-            Graphics.RenderMeshInstanced(rp, capsule, 0, bodyMatrices, Mathf.Min(1023, bodyMatrices.Count - s), s);
-        if (visorMaterial == null) return;
-        var rv = new RenderParams(visorMaterial) { camera = cam, shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off, receiveShadows = false,
-                                                    worldBounds = rp.worldBounds };
-        for (int s = 0; s < visorMatrices.Count; s += 1023)
-            Graphics.RenderMeshInstanced(rv, cube, 0, visorMatrices, Mathf.Min(1023, visorMatrices.Count - s), s);
+            Graphics.RenderMeshInstanced(rp, farMesh, 0, bodyMatrices, Mathf.Min(1023, bodyMatrices.Count - s), s);
     }
 }

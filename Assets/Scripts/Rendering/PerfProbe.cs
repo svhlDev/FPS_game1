@@ -58,6 +58,7 @@ public class PerfProbe : MonoBehaviour
             if (args[i] == "-perflabel" && i + 1 < args.Length) label = args[i + 1];
         }
         if (!on) return;
+        Application.runInBackground = true; // keep measuring when the window loses focus
         // -noocclusion: occlusion culling off (comparison runs). TrafficSystem / pedestrians read it too.
         if (System.Array.Exists(args, a => a == "-noocclusion"))
             foreach (var c in Camera.allCameras) c.useOcclusionCulling = false;

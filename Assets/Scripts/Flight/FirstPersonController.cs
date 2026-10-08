@@ -10,8 +10,10 @@ using UnityEngine.InputSystem;
 // everything): you hang off the back and mash Space to climb up.
 // Boot thrusters: one extra jump in the air, and holding Space while falling glides.
 // Falling has no limit: you land on the street. A hard landing (no glide) staggers you for a moment.
-// Scroll zooms from first person out to a third-person shoulder boom (same feel as the car);
-// the body always faces the camera's yaw (strafe style). A blob shadow marks where you'll land.
+// Scroll zooms from first person out to a third-person shoulder boom (same feel as the car).
+// The player is a real body (CharacterFigure, posed by FigureAnimator): the camera sits in its head
+// (the head itself hidden from that view), looking turns the head first and the body follows, and
+// looking down shows your own body. A blob shadow marks where you'll land.
 // Runs after the vehicles so it carries with this frame's car motion.
 [DefaultExecutionOrder(100)]
 [RequireComponent(typeof(CharacterController))]
@@ -103,6 +105,10 @@ public class FirstPersonController : MonoBehaviour
     public float staggerTime = 1f;
     public float staggerDip = 0.5f;
 
+    [Header("Body")]
+    [Tooltip("Sole to top of head; the collision capsule matches it.")]
+    public float figureHeight = CharacterFigure.DefaultHeight;
+
     [Header("Camera")]
     [Tooltip("Same zoom behaviour as the car camera; on-foot zoom is remembered separately.")]
     public CameraZoom zoom = new CameraZoom();
@@ -125,6 +131,8 @@ public class FirstPersonController : MonoBehaviour
 
     public float SpawnTime { get; private set; }
     public bool IsHanging => hang != null;
+    public CharacterFigure Figure { get; private set; }
+    public FigureAnimator Animator { get; private set; }
     // The player (on foot or not). Set in Awake, so it exists while driving too.
     public static FirstPersonController Instance { get; private set; }
     // No movement or interaction input (yanking a driver out). Gravity still applies.
@@ -174,6 +182,8 @@ public class FirstPersonController : MonoBehaviour
     Vector3 spawnPos;
     Quaternion spawnRot;
     float staggerUntil = -1f;
+    Vector3 animVel;
+    float lastDragTime = -10f;
     float stunUntil = -1f, stunTime = 1f;
     float lastHurt = -100f;
     Vector3 pendingDrag;
@@ -193,7 +203,18 @@ public class FirstPersonController : MonoBehaviour
         fists = GetComponent<PlayerFists>();
         cc.minMoveDistance = 0f; // small carry/slide moves must not be dropped
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
-        if (bodyRenderers == null || bodyRenderers.Length == 0) bodyRenderers = GetComponentsInChildren<Renderer>(true);
+        // Older scenes carry a capsule + visor body: hide it, the figure replaces it.
+        if (bodyRenderers != null) foreach (var r in bodyRenderers) if (r != null) r.enabled = false;
+        cc.height = figureHeight;
+        cc.radius = 0.2f * figureHeight / CharacterFigure.DefaultHeight;
+        cc.center = new Vector3(0f, figureHeight * 0.5f, 0f);
+        Figure = CharacterFigure.Build(transform, CharacterFigure.Role.Player, null, figureHeight, shadows: true);
+        Animator = gameObject.AddComponent<FigureAnimator>();
+        Animator.FollowLook = true;
+        // First person hides only the head (the camera is inside it); everything else stays visible.
+        bodyRenderers = new[] { Figure.HeadRenderer };
+        bodyShown = true;
+        playerCamera.nearClipPlane = 0.05f;
         int playerLayer = LayerMask.NameToLayer("Player");
         playerLayerMask = playerLayer >= 0 ? 1 << playerLayer : 0;
         CreateBlob();
@@ -253,7 +274,7 @@ public class FirstPersonController : MonoBehaviour
         pitch = Mathf.Clamp(pitch - look.y, -85f, 85f);
         cameraRoot.localRotation = Quaternion.Euler(pitch, 0f, 0f);
 
-        if (hang != null) { UpdateHanging(kb, dt); return; }
+        if (hang != null) { animVel = Vector3.zero; UpdateHanging(kb, dt); return; }
 
         Vector3 carVel = platform != null ? Carry(dt) : Vector3.zero;
 
@@ -301,6 +322,8 @@ public class FirstPersonController : MonoBehaviour
 
         groundCollider = null;
         float fallSpeed = -verticalVelocity;
+        animVel = (grounded ? move + (platform != null ? slipVel : Vector3.zero) : horizontal) + Vector3.up * verticalVelocity;
+        if (pendingDrag.sqrMagnitude > 1e-6f) { lastDragTime = Time.time; animVel += pendingDrag / Mathf.Max(dt, 1e-4f); }
         var flags = cc.Move((horizontal + Vector3.up * verticalVelocity) * dt + pendingDrag);
         pendingDrag = Vector3.zero;
         bool wasGrounded = grounded;
@@ -361,6 +384,11 @@ public class FirstPersonController : MonoBehaviour
     {
         zoom.HandleScroll(Mouse.current);
         float z = zoom.Tick(Time.deltaTime);
+        PoseBody();
+        // The eyes: just in front of the head's centre, wherever the posed head is now.
+        if (Figure != null)
+            cameraRoot.position = Figure.Head.position + Quaternion.Euler(0f, transform.eulerAngles.y, 0f) * Vector3.forward * Figure.EyeForward
+                                  + Vector3.up * (0.01f * Figure.Scale);
 
         var cam = playerCamera.transform;
         if (cam.parent == cameraRoot)
@@ -378,18 +406,34 @@ public class FirstPersonController : MonoBehaviour
                 local += Random.insideUnitSphere * camShake * catchShake;
                 camShake = Mathf.MoveTowards(camShake, 0f, 2f * Time.deltaTime);
             }
-            // Hard landing: the view dips and comes back up over the stagger.
-            float stagger = Mathf.Clamp01((staggerUntil - Time.time) / Mathf.Max(staggerTime, 0.01f));
-            local += Vector3.down * staggerDip * Mathf.Sin(stagger * Mathf.PI);
-            // Stunned: down on the ground, view tilted, for the length of the stun.
+            // Hard landings and stuns move the head itself (the body crouches / falls); stunned also
+            // tilts the view.
             float down = Stunned ? Mathf.Clamp01(Mathf.Min((stunUntil - Time.time) * 4f, (Time.time - (stunUntil - stunTime)) * 4f)) : 0f;
-            local += Vector3.down * 1.1f * down;
             cam.localPosition = local;
             cam.localRotation = Quaternion.Euler(0f, 0f, 70f * down);
             SetBodyVisible(dist > showBodyDistance);
         }
         UpdateBlob();
         SetThrusters(hang == null && (gliding || Time.time < thrusterGlowUntil));
+    }
+
+    // Inputs for the body's pose (the animator runs before this, so they apply from the next frame).
+    void PoseBody()
+    {
+        if (Animator == null) return;
+        Animator.LookYaw = transform.eulerAngles.y;
+        Animator.LookPitch = pitch;
+        Animator.Velocity = animVel;
+        Animator.Grounded = grounded || hang != null;
+        FigureAnimator.Pose pose;
+        if (hang != null) pose = FigureAnimator.Pose.Hang;
+        else if (Stunned) pose = FigureAnimator.Pose.Stunned;
+        else if (Restrained) pose = Time.time - lastDragTime < 0.2f ? FigureAnimator.Pose.Dragged : FigureAnimator.Pose.Cuffed;
+        else if (Time.time < staggerUntil) pose = FigureAnimator.Pose.Landing;
+        else if (gliding) pose = FigureAnimator.Pose.Glide;
+        else if (!grounded) pose = FigureAnimator.Pose.Air;
+        else pose = FigureAnimator.Pose.Normal;
+        Animator.CurrentPose = pose;
     }
 
     void SetThrusters(bool on)
@@ -796,6 +840,14 @@ public class FirstPersonController : MonoBehaviour
     }
 
     public void Heal() => Health = maxHealth;
+
+    // Test hooks (ScenarioTest): set the look pitch / yaw directly.
+    public void DebugLook(float pitchDeg, float? yawDeg = null)
+    {
+        pitch = pitchDeg;
+        cameraRoot.localRotation = Quaternion.Euler(pitch, 0f, 0f);
+        if (yawDeg.HasValue) transform.rotation = Quaternion.Euler(0f, yawDeg.Value, 0f);
+    }
 
     // Moved by someone else this frame (an officer dragging you).
     public void Drag(Vector3 delta) => pendingDrag += delta;

@@ -8,7 +8,9 @@ using UnityEngine;
 //             then hops off (the scooter stays parked) and continues on foot.
 //   Foot    : CharacterController with gravity. Runs to the goal, slows to a walk inside walkRange,
 //             stops at the goal's stop distance facing its look target. Keeps apart from other officers
-//             and steps round obstacles with a forward probe. Body bobs while walking.
+//             and steps round obstacles with a forward probe.
+// Body: the shared CharacterFigure in police blue, posed by FigureAnimator (walk / run, riding the
+// scooter, guard when force is authorised, reaching out to cuff, one arm on the player when dragging).
 //   Return  : back on the scooter to its unit; removed on arrival.
 // Stands on moving cars like the player does (carried by the car it's standing on).
 // Lives on the Player layer: cars never push it; the player's fists hit it.
@@ -45,11 +47,15 @@ public class OfficerAgent : MonoBehaviour
     public static IReadOnlyList<OfficerAgent> All => all;
 
     CharacterController cc;
-    Transform body, scooter;
+    Transform scooter;
+    FigureAnimator anim;
+    Vector3 lastPos;
+    // Set by PoliceDispatch: what the hands are doing, and whether force is authorised (guard up).
+    public FigureAnimator.Pose ActionPose { get; set; }
+    public bool Armed { get; set; }
     float verticalVelocity;
     float staggerUntil;
     Vector3 knock;
-    float bobPhase;
     FlyingVehicle platform; Vector3 platformLocal; float platformYaw;
     Collider groundCollider;
     int probeMask;
@@ -85,37 +91,24 @@ public class OfficerAgent : MonoBehaviour
         int layer = LayerMask.NameToLayer("Player");
         if (layer >= 0) go.layer = layer;
         var cc = go.AddComponent<CharacterController>();
-        cc.height = 1.8f; cc.radius = 0.35f; cc.center = new Vector3(0f, 0.9f, 0f);
+        float h = CharacterFigure.DefaultHeight;
+        cc.height = h; cc.radius = 0.2f; cc.center = new Vector3(0f, h * 0.5f, 0f);
         cc.minMoveDistance = 0f;
 
-        Material mat = null;
-        var homeRend = home != null ? home.GetComponentInChildren<MeshRenderer>(true) : null;
-        if (homeRend != null) mat = homeRend.sharedMaterial;
-
-        var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        body.name = "Body";
-        body.transform.SetParent(go.transform, false);
-        body.transform.localPosition = new Vector3(0f, 0.9f, 0f);
-        body.transform.localScale = new Vector3(0.7f, 0.9f, 0.7f);
-        // The CharacterController (a collider on the Player layer) is what the player's punches hit.
-        Object.Destroy(body.GetComponent<Collider>());
-        var visor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        visor.name = "Visor";
-        Object.Destroy(visor.GetComponent<Collider>());
-        visor.transform.SetParent(body.transform, false);
-        visor.transform.localPosition = new Vector3(0f, 0.6f, 0.45f);
-        visor.transform.localScale = new Vector3(0.7f, 0.15f, 0.2f);
+        // The figure's hit colliders (BodyPart triggers on the Player layer) are what punches hit.
+        var fig = CharacterFigure.Build(go.transform, CharacterFigure.Role.Police);
+        go.AddComponent<FigureAnimator>();
         var board = GameObject.CreatePrimitive(PrimitiveType.Cube);
         board.name = "Scooter";
         Object.Destroy(board.GetComponent<Collider>());
         board.transform.SetParent(go.transform, false);
-        board.transform.localPosition = new Vector3(0f, -0.1f, 0f);
-        board.transform.localScale = new Vector3(0.6f, 0.08f, 1.3f);
-        if (mat != null) body.GetComponent<Renderer>().sharedMaterial = mat;
-        if (layer >= 0) { body.layer = layer; visor.layer = layer; board.layer = layer; }
+        board.transform.localPosition = new Vector3(0f, -0.05f, 0f);
+        board.transform.localScale = new Vector3(0.45f, 0.06f, 1.1f);
+        board.GetComponent<Renderer>().sharedMaterial = CharacterFigure.Mat(new Color(0.08f, 0.09f, 0.12f));
+        if (layer >= 0) board.layer = layer;
 
         var o = go.AddComponent<OfficerAgent>();
-        o.body = body.transform;
+        o.anim = go.GetComponent<FigureAnimator>();
         o.scooter = board.transform;
         o.Home = home;
         o.Goal = pos;
@@ -187,6 +180,25 @@ public class OfficerAgent : MonoBehaviour
             default: UpdateReturn(dt); break;
         }
         if (tracer != null && tracer.enabled && Time.time > tracerUntil) tracer.enabled = false;
+        Pose(dt);
+    }
+
+    // Body pose from what the officer is doing (velocity measured, so carried-on-a-car looks right
+    // only in relative terms; fine for a placeholder).
+    void Pose(float dt)
+    {
+        if (anim == null) return;
+        Vector3 v = dt > 0f ? (transform.position - lastPos) / dt : Vector3.zero;
+        lastPos = transform.position;
+        if (platform != null) v -= platform.Velocity;
+        anim.Velocity = v;
+        anim.Grounded = State != Phase.Foot || Grounded;
+        anim.LookYaw = transform.eulerAngles.y;
+        anim.CurrentPose = State != Phase.Foot ? FigureAnimator.Pose.Scooter
+                         : Staggered ? FigureAnimator.Pose.Staggered
+                         : !Grounded ? FigureAnimator.Pose.Air
+                         : ActionPose;
+        anim.ArmMode = Armed && ActionPose == FigureAnimator.Pose.Normal ? FigureAnimator.Arms.Guard : FigureAnimator.Arms.Lowered;
     }
 
     void UpdateScooter(float dt)
@@ -272,7 +284,6 @@ public class OfficerAgent : MonoBehaviour
 
                 move = dir * Mathf.Min(speed, d / Mathf.Max(dt, 1e-4f));
                 Face(dir, dt);
-                bobPhase += dt * speed * 2.2f;
             }
             else
             {
@@ -283,9 +294,6 @@ public class OfficerAgent : MonoBehaviour
             }
         }
 
-        // Placeholder walk animation.
-        float bob = move.sqrMagnitude > 0.1f ? Mathf.Abs(Mathf.Sin(bobPhase)) * 0.06f : 0f;
-        body.localPosition = new Vector3(0f, 0.9f + bob, 0f);
 
         verticalVelocity = Grounded ? -2f : verticalVelocity + gravity * dt;
         groundCollider = null;

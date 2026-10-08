@@ -287,33 +287,18 @@ public static class FlightGrayboxBuilder
 
     // ---------- player ----------
 
-    // CharacterController + FirstPersonController, Head at 1.6 m with the camera under it.
-    // Visible body: 1.8 m capsule plus a visor block showing facing (hidden in first person).
+    // CharacterController + FirstPersonController, Head (eye) pivot with the camera under it.
+    // The player: CharacterController, head pivot, boot thrusters; the jointed body is added at runtime.
     // On the Player layer so traffic and the camera ignore it.
     internal static FirstPersonController CreatePlayer(Vector3 pos, Quaternion rot, Camera cam, Material mat)
     {
         var player = new GameObject("Player");
         player.transform.SetPositionAndRotation(pos, rot);
         var cc = player.AddComponent<CharacterController>();
-        cc.height = 2f; cc.radius = 0.5f; cc.center = new Vector3(0f, 1f, 0f);
-
-        var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        body.name = "Body";
-        Object.DestroyImmediate(body.GetComponent<Collider>());
-        body.transform.SetParent(player.transform, false);
-        body.transform.localPosition = new Vector3(0f, 0.9f, 0f);
-        body.transform.localScale = new Vector3(1f, 0.9f, 1f); // 1.8 m tall
-        body.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.ShadowsOnly;
-        SetMat(body, mat);
-
-        var visor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        visor.name = "Visor";
-        Object.DestroyImmediate(visor.GetComponent<Collider>());
-        visor.transform.SetParent(player.transform, false);
-        visor.transform.localPosition = new Vector3(0f, 1.55f, 0.45f);
-        visor.transform.localScale = new Vector3(0.6f, 0.15f, 0.15f);
-        visor.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.ShadowsOnly;
-        SetMat(visor, GetMaterial("Visor", new Color(0.1f, 0.12f, 0.15f)));
+        // The body itself (CharacterFigure) is built at runtime by FirstPersonController; the capsule
+        // matches it: 1.5 m, radius 0.2.
+        float h = CharacterFigure.DefaultHeight;
+        cc.height = h; cc.radius = 0.2f; cc.center = new Vector3(0f, h * 0.5f, 0f);
 
         // Boot thrusters: small emissive blocks under the feet, shown only while thrusting.
         var thrusterMat = GetMaterial("Thruster", new Color(0.3f, 0.9f, 1f));
@@ -336,7 +321,7 @@ public static class FlightGrayboxBuilder
 
         var head = new GameObject("Head").transform;
         head.SetParent(player.transform, false);
-        head.localPosition = new Vector3(0f, 1.6f, 0f);
+        head.localPosition = new Vector3(0f, 1.4f, 0f); // eye height; follows the posed head at runtime
         cam.transform.SetParent(head, false);
         cam.transform.localPosition = Vector3.zero;
         cam.transform.localRotation = Quaternion.identity;
@@ -344,7 +329,7 @@ public static class FlightGrayboxBuilder
         var fpc = player.AddComponent<FirstPersonController>();
         fpc.playerCamera = cam;
         fpc.cameraRoot = head;
-        fpc.bodyRenderers = new[] { body.GetComponent<Renderer>(), visor.GetComponent<Renderer>() };
+        fpc.bodyRenderers = new Renderer[0];
         fpc.thrusterRenderers = thrusters;
         fpc.blobShadowMaterial = GetBlobShadowMaterial();
         player.AddComponent<PlayerFists>();
@@ -353,8 +338,6 @@ public static class FlightGrayboxBuilder
         if (layer >= 0)
         {
             player.layer = layer;
-            body.layer = layer;
-            visor.layer = layer;
             foreach (var t in thrusters) t.gameObject.layer = layer;
             head.gameObject.layer = layer;
         }

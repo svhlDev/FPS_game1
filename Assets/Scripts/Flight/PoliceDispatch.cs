@@ -474,6 +474,13 @@ public class PoliceDispatch : MonoBehaviour
         for (int i = dockers.Count - 1; i >= 0; i--)
             if (dockers[i] == null || !pursuing.Contains(dockers[i])) { UndockUnit(dockers[i]); dockers.RemoveAt(i); }
         officers.RemoveAll(o => o == null || o.State == OfficerAgent.Phase.Return);
+        foreach (var o in officers)
+        {
+            o.ActionPose = o != cuffer ? FigureAnimator.Pose.Normal
+                         : arrest == Arrest.Cuffing ? FigureAnimator.Pose.Cuffing
+                         : arrest == Arrest.Dragging ? FigureAnimator.Pose.Dragging : FigureAnimator.Pose.Normal;
+            o.Armed = ForceLevel != Force.None;
+        }
 
         var car = FlyingVehicle.Driven;
         var fpc = FirstPersonController.Instance;

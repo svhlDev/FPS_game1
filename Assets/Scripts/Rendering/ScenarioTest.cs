@@ -47,6 +47,7 @@ public class ScenarioTest : MonoBehaviour
             case "district": yield return District(); break;
             case "shots": yield return Shots(); break;
             case "peds": yield return Peds(); break;
+            case "figures": yield return Figures(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -268,6 +269,88 @@ public class ScenarioTest : MonoBehaviour
         Log(waitingSeen > 0 ? "PASS pedestrians wait at crosswalks" : "WARN no crosswalk waits seen");
         Log(fallen == 0 ? "PASS nobody fell through" : "FAIL pedestrians fell");
         Log(around > 0 && fled == around ? "PASS pedestrians flee danger" : "FAIL flee reaction");
+    }
+
+    // ---------- character figures ----------
+
+    // Screenshots of the bodies: first person looking down, guard up, third person, the crowd, officers.
+    IEnumerator Figures()
+    {
+        var fpc = FirstPersonController.Instance;
+        if (fpc == null || fpc.Figure == null) { Log("FAIL no player figure"); yield break; }
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        IEnumerator Shot(string name)
+        {
+            yield return new WaitForSeconds(0.6f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"fig_{name}.png"));
+            yield return null; yield return null;
+            Log($"shot {name}");
+        }
+        var fists = fpc.GetComponent<PlayerFists>();
+        Log($"player figure height {fpc.Figure.Height}, eye {fpc.Figure.EyeHeight:0.00}, capsule {fpc.GetComponent<CharacterController>().height}");
+
+        fpc.DebugLook(80f, 90f);
+        yield return Shot("fp_down");
+        fpc.DebugLook(0f, 90f);
+        yield return Shot("fp_ahead");
+        fists.DebugRaise();
+        yield return Shot("fp_guard");
+        fpc.Animator.Punch(1);
+        yield return new WaitForSeconds(0.08f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "fig_fp_punch.png"));
+        yield return null;
+        fpc.zoom.Snap(1f);
+        fpc.DebugLook(15f, 120f);
+        fists.DebugRaise();
+        yield return Shot("tp_guard");
+
+        // Street: the crowd up close.
+        fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.Euler(0f, 180f, 0f));
+        fpc.DebugLook(10f, 180f);
+        yield return new WaitForSeconds(4f);
+        yield return Shot("tp_street");
+        var ps = PedestrianSystem.Instance;
+        if (ps != null && ps.NearAgents.Count > 0)
+        {
+            var p = ps.NearAgents[0];
+            fpc.PlaceAt(p.pos + new Vector3(3f, 0.2f, 3f), Quaternion.identity);
+            Vector3 to = p.pos - fpc.transform.position;
+            fpc.DebugLook(12f, Mathf.Atan2(to.x, to.z) * Mathf.Rad2Deg);
+            yield return Shot("tp_pedestrian");
+        }
+
+        // Officers: wanted, wait for one on foot nearby.
+        fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.Euler(0f, 180f, 0f));
+        PoliceDispatch.Ensure().DebugStartPursuit(1);
+        float wait = 0f;
+        OfficerAgent near = null;
+        while (wait < 40f && near == null)
+        {
+            yield return new WaitForSeconds(0.25f); wait += 0.25f;
+            foreach (var o in OfficerAgent.All)
+                if (o.State == OfficerAgent.Phase.Foot && Vector3.Distance(o.transform.position, fpc.transform.position) < 2f) near = o;
+        }
+        if (near != null)
+        {
+            Vector3 to = near.transform.position - fpc.transform.position;
+            fpc.DebugLook(10f, Mathf.Atan2(to.x, to.z) * Mathf.Rad2Deg);
+            yield return Shot("tp_officer");
+            // Punch the officer (aim at its chest): the hit must land on its body-part colliders.
+            Vector3 chest = near.transform.position + Vector3.up * 1f - fpc.playerCamera.transform.position;
+            fpc.DebugLook(Mathf.Clamp(-Mathf.Atan2(chest.y, new Vector2(chest.x, chest.z).magnitude) * Mathf.Rad2Deg, -80f, 80f),
+                          Mathf.Atan2(chest.x, chest.z) * Mathf.Rad2Deg);
+            int before = PlayerFists.HitsLanded;
+            yield return null;
+            fists.DebugPunch(1);
+            yield return new WaitForSeconds(0.4f);
+            Log($"punch at {Vector3.Distance(near.transform.position, fpc.transform.position):0.0} m: hits {PlayerFists.HitsLanded - before}, force {PoliceDispatch.Instance.ForceLevel}");
+            Log(PlayerFists.HitsLanded > before && PoliceDispatch.Instance.ForceLevel == PoliceDispatch.Force.Lethal
+                ? "PASS punch landed on the officer (lethal force)" : "FAIL punch did not land");
+            fpc.zoom.Snap(0f);
+            yield return new WaitForSeconds(2.5f);
+            yield return Shot("fp_cuffed");
+        }
+        else Log("WARN no officer reached the player in 40 s");
     }
 
     // ---------- screenshots ----------
