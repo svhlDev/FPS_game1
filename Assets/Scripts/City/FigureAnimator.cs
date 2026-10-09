@@ -46,7 +46,8 @@ public class FigureAnimator : MonoBehaviour
 
     float bodyYaw, phase, idle;
     bool aimTurning;
-    float walkAmount;                 // 0 standing .. 1 walking (eases the gait in and out)
+    float walkAmount;
+    float curlL, curlR;               // hands: 0 open .. 1 fist                 // 0 standing .. 1 walking (eases the gait in and out)
     Transform legFor; float legLength; // leg length (hip to ankle), measured once per figure
     float glanceUntil = -1f, nextGlance, glanceYaw, noiseSeed;
     Quaternion[] extraShoulder, extraElbow;
@@ -239,7 +240,25 @@ public class FigureAnimator : MonoBehaviour
         Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, -wide), kLeg);
 
         ExtraArms(f, s, swing, k);
+        HandCurl(f, armMode, dt);
         if (jit > 0f) JitterLayer(f, jit, dt, mr);
+    }
+
+    // Hands: fists for the guard, punches and the gun hand; otherwise a relaxed half-curl.
+    void HandCurl(CharacterFigure f, Arms armMode, float dt)
+    {
+        if (f.Digits.Count == 0) return;
+        var hr = BodyRules.Default.hands;
+        float tL = hr.relaxedCurl, tR = hr.relaxedCurl;
+        if (armMode == Arms.Guard) tL = tR = 1f;
+        if (ArmMode == Arms.Aim) tR = 1f;
+        if (CurrentPose == Pose.Dragging) tR = 1f;
+        if (PunchAmount(0) > 0f) tL = 1f;
+        if (PunchAmount(1) > 0f) tR = 1f;
+        curlL = Mathf.MoveTowards(curlL, tL, hr.curlSpeed * dt);
+        curlR = Mathf.MoveTowards(curlR, tR, hr.curlSpeed * dt);
+        foreach (var (joint, hand, fist) in f.Digits)
+            if (joint != null) joint.localRotation = Quaternion.SlerpUnclamped(Quaternion.identity, fist, hand == 0 ? curlL : curlR);
     }
 
     // Hip angle (deg, negative = forward) of a leg at gait phase p, swing amplitude A. Stance (from

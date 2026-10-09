@@ -46,6 +46,65 @@ public class SdfRules
     public Vector3 eyePosition = new Vector3(0.38f, 0.06f, 0.86f);
 }
 
+// Sausage hands: a rounded palm block, 4 finger capsules along its front (lower) edge and a thumb on
+// its front-inner side; one bone per digit (a sausage bends at the knuckle only). The hand hangs with
+// the palm facing the body's midline and the thumb forward.
+[Serializable]
+public class HandRules
+{
+    [Header("Palm (the hand's length and mid radius, after the house style)")]
+    [Tooltip("Palm length x hand length (fingers make up the rest).")]
+    public float palmLength = 0.53f;
+    [Tooltip("Palm width (front to back) and thickness x the hand's mid outer radius.")]
+    public float palmWidth = 2.8f, palmThickness = 1.3f;
+    [Tooltip("Corner radius x the palm's thickness.")]
+    public float palmCorner = 0.35f;
+
+    [Header("Fingers")]
+    [Tooltip("Finger length x palm length.")]
+    public float fingerLength = 0.9f;
+    [Tooltip("Finger radius x palm width (4 fingers at a quarter width each: 0.125 would touch).")]
+    public float fingerRadius = 0.1f;
+    [Tooltip("Length of the index, middle, ring and little finger (x fingerLength).")]
+    public Vector4 fingerScale = new Vector4(0.95f, 1.05f, 0.97f, 0.8f);
+    [Tooltip("Seed noise on each finger's length.")]
+    public float fingerNoise = 0.05f;
+    [Tooltip("Fat thickens the fingers by this x the hand's fat (capped so they stay apart).")]
+    public float fingerFat = 0.5f;
+    [Tooltip("Thumb length x the middle finger's; radius x a finger's.")]
+    public float thumbLength = 0.72f, thumbRadius = 1.15f;
+    [Tooltip("Thumb base along the palm (x palm length from the wrist).")]
+    public float thumbBase = 0.3f;
+    [Tooltip("Thumb direction (in, down, forward) in the hand's space.")]
+    public Vector3 thumbDir = new Vector3(0.35f, 0.6f, 0.55f);
+    [Tooltip("Knuckle pivot: this x the finger's radius toward the palm side.")]
+    public float knucklePivot = 0.6f;
+    [Tooltip("Fingers onto the palm (m): small, so the sausages stay readable.")]
+    public float fingerBlend = 0.004f;
+
+    [Header("Poses")]
+    [Tooltip("Fist: fingers curl this many degrees toward the palm (one segment each: well past 90, or a fist reads as a flat L).")]
+    public float fistCurl = 150f;
+    [Tooltip("Fist: the thumb folds across the fingers, toward (in, down, back) in the hand's space.")]
+    public Vector3 thumbFold = new Vector3(0.2f, 0.75f, 0.55f);
+    [Tooltip("Relaxed hands (lowered, hanging): this much of the fist.")]
+    public float relaxedCurl = 0.35f;
+    [Tooltip("Curl blend speed (per second).")]
+    public float curlSpeed = 12f;
+
+    [Header("Mesh and skin")]
+    [Tooltip("Each hand is meshed on its own finer grid (m), joined to the body just above the wrist.")]
+    public float cell = 0.002f;
+    [Tooltip("Triangle budget per hand.")]
+    public int triangles = 1400;
+    [Tooltip("The hand's mesh starts this far up the forearm (m); the body's ends a fifth of it above the wrist.")]
+    public float cutOverlap = 0.015f;
+    [Tooltip("Over the overlap each mesh shrinks this much (m) under the other, so neither shows through.")]
+    public float cutShrink = 0.0015f;
+    [Tooltip("Skin weights: a digit blends into the palm over this x its radius either side of the knuckle.")]
+    public float knuckleBlend = 2f;
+}
+
 [Serializable]
 public class MeshRules
 {

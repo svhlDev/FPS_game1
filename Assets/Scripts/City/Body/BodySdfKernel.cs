@@ -4,7 +4,11 @@ using UnityEngine;
 
 // The body SDF's evaluation as unmanaged data + code, so Burst jobs (BodyMesher) and the managed
 // BodySDF share one implementation. Built by BodySDF (see there for what each layer is).
-// Up to 31 bones (scratch is a FixedList128Bytes<float>): five arms need 26.
+// Up to 31 bones (scratch is a FixedList128Bytes<float>): five arms need 26. Digits (finger bones)
+// aren't kernel bones: they're capsules of their hand's core.
+// Cuts (cutMode), for meshing each hand on its own finer grid: 1 = the body without its hands (cut just
+// above each wrist), 2 + h = hand h alone (from a little further up the forearm). The two overlap over
+// a short stretch where each shrinks slightly under the other, so neither cap nor seam shows.
 public struct BodySdfKernel : IDisposable
 {
     public struct Bone
@@ -14,6 +18,23 @@ public struct BodySdfKernel : IDisposable
         public Vector3 girth, muscle, fat, outer;
         public float length, depthRatio, jointK;
         public int kind, parent, side;
+        public Vector3 palm;            // hands: palm half extents (thickness, length, width)
+        public float palmRound;
+    }
+
+    public struct Digit
+    {
+        public Vector3 a, b;            // capsule (bind pose)
+        public float r;
+        public int hand, bone;          // kernel index of the hand, plan / skin bone index of the digit
+    }
+
+    public struct HandCut
+    {
+        public Vector3 o, axis;         // the wrist, along the hand
+        public Vector3 centre;          // a sphere round the hand that bounds the cut
+        public float radius;
+        public int hand;
     }
 
     public struct Ellipsoid
@@ -34,6 +55,11 @@ public struct BodySdfKernel : IDisposable
 
     [ReadOnly] public NativeArray<Bone> bones;
     [ReadOnly] public NativeArray<Ellipsoid> blobs, features, breasts;
+    [ReadOnly] public NativeArray<Digit> digits;
+    [ReadOnly] public NativeArray<HandCut> cuts;
+    public float fingerBlend;
+    public int cutMode;                 // 0 whole body, 1 body without hands, 2 + h hand h
+    public float cutBody, cutHand, cutShrink;  // cut positions along the hand (m from the wrist), shrink (m)
     public Ellipsoid skull;
     public int headIndex;
     public Vector3 eyeL, eyeR;
@@ -54,6 +80,8 @@ public struct BodySdfKernel : IDisposable
         if (blobs.IsCreated) blobs.Dispose();
         if (features.IsCreated) features.Dispose();
         if (breasts.IsCreated) breasts.Dispose();
+        if (digits.IsCreated) digits.Dispose();
+        if (cuts.IsCreated) cuts.Dispose();
     }
 
     // ---------- primitives ----------
@@ -129,13 +157,17 @@ public struct BodySdfKernel : IDisposable
         Vector3 q = new Vector3(Vector3.Dot(d0, b.x), Vector3.Dot(d0, b.y), Vector3.Dot(d0, b.z));
         if (b.kind == KHand)
         {
-            // Mitten: palm + closed fingers as one rounded box, a thumb capsule on the front-inner side.
-            float L = b.length, w = b.girth.y + b.fat.y;
-            float palm = RoundBox(q - new Vector3(0f, L * 0.48f, 0f), new Vector3(w * 1.25f, L * 0.48f, w * 0.6f), w * 0.5f);
-            float inner = b.side < 0 ? 1f : -1f; // towards the body's midline (x = the body's right)
-            Vector3 t0 = b.o + b.y * L * 0.15f + b.z * w * 0.4f + b.x * inner * w * 0.9f;
-            Vector3 t1 = b.o + b.y * L * 0.55f + b.z * w * 0.9f + b.x * inner * w * 1.1f;
-            return SMin(palm, Capsule(p, t0, t1, w * 0.42f), 0.008f);
+            // Sausage hand: a palm block (rounded box), the digits' capsules blended on with a small
+            // radius (never with each other). Far away, a bounding sphere (a lower bound) is enough.
+            float L = b.length;
+            Vector3 c = b.o + b.y * (L * 0.5f);
+            float bound = (p - c).magnitude - L * 0.75f;
+            if (bound > 0.04f) return bound;
+            float palm = RoundBox(q - new Vector3(0f, b.palm.y, 0f), b.palm, b.palmRound);
+            float fingers = float.MaxValue;
+            for (int j = 0; j < digits.Length; j++)
+                if (digits[j].hand == i) fingers = Mathf.Min(fingers, Capsule(p, digits[j].a, digits[j].b, digits[j].r));
+            return fingers < float.MaxValue ? SMin(palm, fingers, fingerBlend) : palm;
         }
         if (b.kind == KFoot)
         {
@@ -219,8 +251,18 @@ public struct BodySdfKernel : IDisposable
             wSum += w; fSum += w * FatAt(p, i);
         }
         float fat = wSum > 0f ? fSum / wSum : 0f;
+        // Hands carry their fat in the palm and finger sizes: a fat offset (and its wide blend) past the
+        // wrist would fuse the fingers into a mitten.
+        float handMask = 1f;
+        if (bones[nearest].kind == KHand)
+        {
+            var hb = bones[nearest];
+            float t = Vector3.Dot(p - hb.o, hb.y) / Mathf.Max(1e-4f, hb.palm.y * 2f);
+            handMask = 1f - Mathf.SmoothStep(0f, 1f, t / 0.35f);
+        }
+        fat *= handMask;
         // Capped: polynomial smooth-min chained over many blobs with a huge radius piles up bulges.
-        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, fatBlendMax);
+        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, fatBlendMax) * handMask;
         // Core: each bone smooth-unions with its parent only; the soft (fat) version blends wider.
         float core = float.MaxValue, soft = float.MaxValue;
         for (int i = 0; i < n; i++)
@@ -256,7 +298,32 @@ public struct BodySdfKernel : IDisposable
             skin = SMax(skin, -((p - eyeL).magnitude - eyeRadius), eyeCarveBlend);
             skin = SMax(skin, -((p - eyeR).magnitude - eyeRadius), eyeCarveBlend);
         }
+        if (cutMode > 0) skin = Cut(p, skin);
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
+    }
+
+    // The meshing cuts (see the top). s = distance along the hand from the wrist.
+    float Cut(Vector3 p, float skin)
+    {
+        float span = Mathf.Max(1e-4f, cutBody - cutHand);
+        if (cutMode == 1)
+        {
+            for (int h = 0; h < cuts.Length; h++)
+            {
+                var c = cuts[h];
+                float sphere = (p - c.centre).magnitude - c.radius;
+                if (sphere > 0.02f) continue;
+                float s = Vector3.Dot(p - c.o, c.axis);
+                // Shrinks under the hand's skin toward the cut, removed past it (inside the sphere).
+                skin += cutShrink * Mathf.Clamp01((s - cutHand) / span) * Mathf.Clamp01(-sphere / 0.02f);
+                skin = Mathf.Max(skin, -Mathf.Max(cutBody - s, sphere));
+            }
+            return skin;
+        }
+        var k = cuts[cutMode - 2];
+        float sk = Vector3.Dot(p - k.o, k.axis);
+        skin += cutShrink * Mathf.Clamp01((cutBody - sk) / span);
+        return Mathf.Max(skin, Mathf.Max(cutHand - sk, (p - k.centre).magnitude - k.radius));
     }
 
     public float Skin(Vector3 p) => Eval(p).skin;

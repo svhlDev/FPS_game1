@@ -25,10 +25,11 @@ public class BodyAsset
 // Phase 8: generating a body without stalling the frame. A staged state machine, advanced by Step()
 // once per frame by whoever owns it (BodyPool):
 //   Start    (main, ~1 ms)  plan + SDF, schedule the sampling jobs
-//   Sampling (Burst jobs)    coarse + narrow-band fine grid
-//   Extract  (worker task)   surface nets + Laplacian smoothing
+//   Sampling (Burst jobs)    coarse + narrow-band fine grid: the body (hands cut off), and each hand
+//                            on its own finer grid (BodyRules.hands.cell; fingers are ~1 cm thick)
+//   Extract  (worker task)   surface nets + Laplacian smoothing, per piece
 //   Project  (Burst jobs)    re-project onto the SDF + regions (for decimation importance)
-//   Decimate (worker task)   quadric decimation to the triangle budget
+//   Decimate (worker task)   quadric decimation to the triangle budget (body; each hand its own)
 //   Final    (Burst jobs)    re-project, normals, regions/layers, skin weights
 //   Split    (worker task)   body (4 clothing-region submeshes) and head vertex/index arrays
 //   Upload   (main)          Mesh objects
@@ -53,13 +54,21 @@ public class BodyBuild
     readonly System.Diagnostics.Stopwatch wall = new System.Diagnostics.Stopwatch();
     double mainMs;
 
-    // Grid
-    Vector3 min; int nx, ny, nz, mx, my, mz;
-    NativeArray<float> coarse, fine;
-    NativeArray<byte> evaluated;
-    // Vertices through the stages
-    List<Vector3> verts; List<int> tris; float[] importance;
-    NativeArray<Vector3> pos, nrm; NativeArray<Vector2> reg, lay; NativeArray<BoneWeight> wts;
+    // Grids: one per piece (the body, then each hand). mode = the kernel's cutMode for the piece.
+    class Piece
+    {
+        public byte mode; public float cell; public int target;
+        public Vector3 min; public int nx, ny, nz, mx, my, mz;
+        public NativeArray<float> coarse, fine; public NativeArray<byte> evaluated;
+        public float[] grid;
+        public List<Vector3> v; public List<int> t;
+        public void Dispose() { if (coarse.IsCreated) coarse.Dispose(); if (fine.IsCreated) fine.Dispose(); if (evaluated.IsCreated) evaluated.Dispose(); }
+    }
+    readonly List<Piece> pieces = new List<Piece>();
+    float handCell;
+    // Vertices through the stages (all pieces, concatenated; vertPiece = each vertex's piece mode)
+    List<Vector3> verts; List<int> tris; float[] importance; byte[] vertPiece;
+    NativeArray<Vector3> pos, nrm; NativeArray<Vector2> reg, lay; NativeArray<BoneWeight> wts; NativeArray<byte> pieceN;
     Parts bodyParts, headParts;
     Matrix4x4[] bindposes;
 
@@ -130,49 +139,83 @@ public class BodyBuild
         SurfaceNets.Init();
         plan = BodyPlanner.Generate(sheet, null, template);
         sdf = new BodySDF(plan);
-        float cell = ms.cell;
-        Bounds b = sdf.bounds;
-        min = b.min - Vector3.one * cell;
-        Vector3 size = b.size + Vector3.one * cell * 2f;
-        nx = Mathf.CeilToInt(size.x / cell) + 1; ny = Mathf.CeilToInt(size.y / cell) + 1; nz = Mathf.CeilToInt(size.z / cell) + 1;
-        int C = BodyMesher.CoarseStep;
-        mx = (nx - 1) / C + 2; my = (ny - 1) / C + 2; mz = (nz - 1) / C + 2;
-        coarse = new NativeArray<float>(mx * my * mz, Allocator.Persistent);
-        fine = new NativeArray<float>(nx * ny * nz, Allocator.Persistent);
-        evaluated = new NativeArray<byte>(nx * ny * nz, Allocator.Persistent);
-        var hc = new BodyMesher.CoarseJob { kernel = sdf.Kernel, min = min, step = cell * C, mx = mx, my = my, values = coarse }.Schedule(coarse.Length, 64);
-        handle = new BodyMesher.FineJob { kernel = sdf.Kernel, coarse = coarse, min = min, cell = cell, band = cell * C * 1.9f, nx = nx, ny = ny, mx = mx, my = my, values = fine, evaluated = evaluated }
-            .Schedule(fine.Length, 256, hc);
+        var hr = BodyRules.Default.hands;
+        handCell = hr.cell;
+        bool hands = sdf.HandCount > 0;
+        Piece Add(Bounds b, float cell, byte mode, int target)
+        {
+            var p = new Piece { mode = mode, cell = cell, target = target };
+            p.min = b.min - Vector3.one * cell;
+            Vector3 size = b.size + Vector3.one * cell * 2f;
+            p.nx = Mathf.CeilToInt(size.x / cell) + 1; p.ny = Mathf.CeilToInt(size.y / cell) + 1; p.nz = Mathf.CeilToInt(size.z / cell) + 1;
+            int C = BodyMesher.CoarseStep;
+            p.mx = (p.nx - 1) / C + 2; p.my = (p.ny - 1) / C + 2; p.mz = (p.nz - 1) / C + 2;
+            p.coarse = new NativeArray<float>(p.mx * p.my * p.mz, Allocator.Persistent);
+            p.fine = new NativeArray<float>(p.nx * p.ny * p.nz, Allocator.Persistent);
+            p.evaluated = new NativeArray<byte>(p.nx * p.ny * p.nz, Allocator.Persistent);
+            var k = sdf.Kernel; k.cutMode = mode;
+            var hc = new BodyMesher.CoarseJob { kernel = k, min = p.min, step = cell * C, mx = p.mx, my = p.my, values = p.coarse }.Schedule(p.coarse.Length, 64);
+            var hf = new BodyMesher.FineJob { kernel = k, coarse = p.coarse, min = p.min, cell = cell, band = cell * C * 1.9f, nx = p.nx, ny = p.ny, mx = p.mx, my = p.my, values = p.fine, evaluated = p.evaluated }
+                .Schedule(p.fine.Length, 256, hc);
+            handle = JobHandle.CombineDependencies(handle, hf);
+            pieces.Add(p);
+            return p;
+        }
+        handle = default;
+        Add(sdf.bounds, ms.cell, (byte)(hands ? 1 : 0), ms.targetTriangles);
+        for (int h = 0; h < sdf.HandCount; h++) Add(sdf.HandBounds[h], handCell, (byte)(2 + h), hr.triangles);
         JobHandle.ScheduleBatchedJobs();
         CurrentStage = Stage.Sampling;
     }
 
     void AfterSampling()
     {
-        var grid = fine.ToArray();
-        coarse.Dispose(); fine.Dispose(); evaluated.Dispose();
-        int gx = nx, gy = ny, gz = nz; Vector3 gmin = min; float cell = ms.cell;
         int iters = ms.smoothIterations; float strength = ms.smoothStrength;
+        // (The grids are copied out on the workers; their native arrays are freed after.)
         task = Task.Run(() =>
         {
-            var v = new List<Vector3>(); var t = new List<int>();
-            SurfaceNets.Extract(grid, gx, gy, gz, gmin, cell, v, t);
-            BodyMesher.Smooth(v, t, iters, strength);
-            verts = v; tris = t;
+            // (One worker per body, pieces in turn: the pool runs bodies side by side, and more threads
+            // per body only crowd the frame.)
+            foreach (var p in pieces)
+            {
+                p.grid = p.fine.ToArray();
+                var v = new List<Vector3>(); var t = new List<int>();
+                SurfaceNets.Extract(p.grid, p.nx, p.ny, p.nz, p.min, p.cell, v, t);
+                BodyMesher.Smooth(v, t, iters, strength);
+                p.v = v; p.t = t; p.grid = null;
+            }
+            Concat();
         });
         CurrentStage = Stage.Extract;
     }
 
+    // All pieces' vertices and triangles in one list (vertPiece: each vertex's piece mode).
+    void Concat()
+    {
+        verts = new List<Vector3>(); tris = new List<int>();
+        var vp = new List<byte>();
+        foreach (var p in pieces)
+        {
+            int o = verts.Count;
+            verts.AddRange(p.v);
+            foreach (int i in p.t) tris.Add(i + o);
+            for (int i = 0; i < p.v.Count; i++) vp.Add(p.mode);
+        }
+        vertPiece = vp.ToArray();
+    }
+
     void AfterExtract()
     {
+        foreach (var p in pieces) p.Dispose();
         int n = verts.Count;
         pos = new NativeArray<Vector3>(verts.ToArray(), Allocator.Persistent);
         nrm = new NativeArray<Vector3>(n, Allocator.Persistent);
         reg = new NativeArray<Vector2>(n, Allocator.Persistent);
         lay = new NativeArray<Vector2>(n, Allocator.Persistent);
+        pieceN = new NativeArray<byte>(vertPiece, Allocator.Persistent);
         float cell = ms.cell;
-        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, h = cell * 0.25f, maxStep = cell, steps = 3 }.Schedule(n, 64);
-        handle = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, h = ms.normalStep * cell, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
+        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, cell = cell, handCell = handCell, steps = 3 }.Schedule(n, 64);
+        handle = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, h = ms.normalStep * cell, hHand = ms.normalStep * handCell, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
         JobHandle.ScheduleBatchedJobs();
         CurrentStage = Stage.Project;
     }
@@ -181,16 +224,32 @@ public class BodyBuild
     {
         int n = pos.Length;
         importance = new float[n];
-        for (int i = 0; i < n; i++) { verts[i] = pos[i]; importance[i] = BodyMesher.Importance(ms, (BoneKind)(int)reg[i].x); }
+        for (int i = 0; i < n; i++) { verts[i] = pos[i]; importance[i] = vertPiece[i] >= 2 ? 1f : BodyMesher.Importance(ms, (BoneKind)(int)reg[i].x); }
         DisposeVertexArrays();
-        int target = ms.targetTriangles;
         task = Task.Run(() =>
         {
-            if (tris.Count / 3 > target)
+            // Back into pieces (projected), each decimated to its own budget.
+            int o = 0, to = 0;
+            foreach (var p in pieces)
             {
-                MeshDecimator.Run(verts, tris, importance, target, out var dv, out var dt, out _);
-                verts = dv; tris = dt;
+                int nv = p.v.Count, nt = p.t.Count;
+                for (int i = 0; i < nv; i++) p.v[i] = verts[o + i];
+                o += nv; to += nt;
             }
+            o = 0;
+            var imp = importance;
+            var offsets = new int[pieces.Count];
+            for (int k = 0; k < pieces.Count; k++) { offsets[k] = o; o += pieces[k].v.Count; }
+            for (int k = 0; k < pieces.Count; k++)
+            {
+                var p = pieces[k];
+                if (p.t.Count / 3 <= p.target) continue;
+                var pi = new float[p.v.Count];
+                System.Array.Copy(imp, offsets[k], pi, 0, pi.Length);
+                MeshDecimator.Run(p.v, p.t, pi, p.target, out var dv, out var dt, out _);
+                p.v = dv; p.t = dt;
+            }
+            Concat();
         });
         CurrentStage = Stage.Decimate;
     }
@@ -203,10 +262,12 @@ public class BodyBuild
         reg = new NativeArray<Vector2>(n, Allocator.Persistent);
         lay = new NativeArray<Vector2>(n, Allocator.Persistent);
         wts = new NativeArray<BoneWeight>(n, Allocator.Persistent);
+        pieceN = new NativeArray<byte>(vertPiece, Allocator.Persistent);
         float cell = ms.cell;
-        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, h = cell * 0.25f, maxStep = cell, steps = 3 }.Schedule(n, 64);
-        var ha = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, h = ms.normalStep * cell, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
-        var hw = new BodySkinner.WeightJob { kernel = sdf.Kernel, positions = pos, power = ss.falloffPower, softness = ss.softness, boost = ss.ownBoneBoost, reach = ss.jointReach, weights = wts }.Schedule(n, 64, hp);
+        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, cell = cell, handCell = handCell, steps = 3 }.Schedule(n, 64);
+        var ha = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, h = ms.normalStep * cell, hHand = ms.normalStep * handCell, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
+        var hw = new BodySkinner.WeightJob { kernel = sdf.Kernel, positions = pos, power = ss.falloffPower, softness = ss.softness, boost = ss.ownBoneBoost, reach = ss.jointReach,
+                                             knuckle = BodyRules.Default.hands.knuckleBlend, weights = wts }.Schedule(n, 64, hp);
         handle = JobHandle.CombineDependencies(ha, hw);
         JobHandle.ScheduleBatchedJobs();
         CurrentStage = Stage.Final;
@@ -310,14 +371,13 @@ public class BodyBuild
         if (nrm.IsCreated) nrm.Dispose();
         if (reg.IsCreated) reg.Dispose();
         if (lay.IsCreated) lay.Dispose();
+        if (pieceN.IsCreated) pieceN.Dispose();
     }
 
     void Cleanup()
     {
         try { handle.Complete(); } catch { }
-        if (coarse.IsCreated) coarse.Dispose();
-        if (fine.IsCreated) fine.Dispose();
-        if (evaluated.IsCreated) evaluated.Dispose();
+        foreach (var p in pieces) p.Dispose();
         DisposeVertexArrays();
         if (wts.IsCreated) wts.Dispose();
         sdf?.Dispose();

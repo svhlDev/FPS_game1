@@ -59,6 +59,9 @@ public class CharacterFigure : MonoBehaviour
     public readonly List<Renderer> FaceRenderers = new List<Renderer>();
     public Transform EyeL, EyeR;
     public readonly List<(Transform shoulder, Transform elbow, Transform wrist, int side)> ExtraArms = new List<(Transform, Transform, Transform, int)>();
+    // Generated bodies: finger and thumb joints (one bone each), with their fist rotation (the open hand is
+    // the rest pose). hand 0 = left, 1 = right (extra arms by their side). FigureAnimator blends a curl.
+    public readonly List<(Transform joint, int hand, Quaternion fist)> Digits = new List<(Transform, int, Quaternion)>();
 
     // Joints
     public Transform Hips, Spine, Neck, Head;
@@ -176,6 +179,21 @@ public class CharacterFigure : MonoBehaviour
             if (arm.girdle > 0 || arm.side == 0)
                 f.ExtraArms.Add((sk.Bones[arm.root].joint, sk.Bones[arm.mid].joint, sk.Bones[arm.end].joint, arm.side));
         int layer = root.gameObject.layer;
+        var hr = BodyRules.Default.hands;
+        foreach (var arm in plan.arms)
+        {
+            if (arm.digits == null) continue;
+            float inner = arm.side <= 0 ? 1f : -1f;   // towards the midline (palms face it)
+            for (int d = 0; d < arm.digits.Length; d++)
+            {
+                var spec = plan.bones[arm.digits[d]];
+                // Fingers curl toward the palm (about the hand's front axis); the thumb folds across them.
+                Quaternion fist = d == 0
+                    ? Quaternion.FromToRotation(spec.dir, new Vector3(inner * hr.thumbFold.x, -hr.thumbFold.y, -hr.thumbFold.z).normalized)
+                    : Quaternion.AngleAxis(inner * hr.fistCurl, Vector3.forward);
+                f.Digits.Add((sk.Bones[arm.digits[d]].joint, arm.side > 0 ? 1 : 0, fist));
+            }
+        }
 
         // Head centre (camera anchor), the eyes in front of it; the head isn't posed in the bind pose,
         // so rest positions apply.
@@ -244,6 +262,7 @@ public class CharacterFigure : MonoBehaviour
             for (int i = 0; i < plan.bones.Count; i++)
             {
                 var b = plan.bones[i];
+                if (b.kind == BoneKind.Finger) continue; // the hand's box covers its digits
                 var go = new GameObject("Hit" + b.name);
                 go.layer = layer;
                 go.transform.SetParent(sk.Bones[i].joint, false);
@@ -287,7 +306,7 @@ public class CharacterFigure : MonoBehaviour
         foreach (var r in Renderers)
             if (r != null && r.transform.parent == transform) DestroyImmediate(r.gameObject); // skinned renderers on the root
         if (Hips != null) DestroyImmediate(Hips.gameObject);
-        Renderers.Clear(); FaceRenderers.Clear(); ExtraArms.Clear();
+        Renderers.Clear(); FaceRenderers.Clear(); ExtraArms.Clear(); Digits.Clear();
         Hips = Spine = Chest = Neck = Head = HeadJoint = null;
         ShoulderL = ShoulderR = ElbowL = ElbowR = WristL = WristR = HandL = HandR = null;
         HipL = HipR = KneeL = KneeR = AnkleL = AnkleR = null;

@@ -13,11 +13,13 @@ using UnityEngine;
 //             girth profiles (radius at start, middle, end) for the three layers: core (bone and
 //             base bulk), muscle (thickness on top) and fat (thickness on top of that). Outer = skin.
 // Phase 2: lengths and layers come from BodyDNA (sex + sheet + seed), see BodyDNA.cs.
+//   Hands   : one bone per digit (thumb, index, middle, ring, little), children of the hand, added after
+//             every other bone (the SDF kernel takes the bones before them; digits are capsules of the hand).
 //   Sockets : named attach points on bones (grips, eyes, holster) for gear, clothing and cyberware later.
 // Joint rotations rest at identity in root space, exactly like CharacterFigure, so FigureAnimator's
 // convention holds: limbs hang along -Y, a negative X rotation swings them forward.
 // Species hook: ISpeciesTemplate (body plan rules + trait distributions); only HumanTemplate exists.
-public enum BoneKind { Pelvis, Lumbar, Chest, Neck, Head, UpperArm, Forearm, Hand, Thigh, Shin, Foot }
+public enum BoneKind { Pelvis, Lumbar, Chest, Neck, Head, UpperArm, Forearm, Hand, Thigh, Shin, Foot, Finger }
 public enum LegType { Plantigrade, Digitigrade }
 
 [Serializable]
@@ -36,6 +38,7 @@ public class BoneSpec
     public Vector3 muscle;           // muscle layer thickness at start, middle, end
     public Vector3 fat;              // fat layer thickness at start, middle, end
     public BodyPart.Location location;
+    public Vector3 shapeOffset;      // the shape's offset from the joint (digits: the knuckle pivot sits toward the palm)
     public Vector3 MuscleSurface => girth + muscle;
     public Vector3 Outer => girth + muscle + fat;
 }
@@ -46,6 +49,7 @@ public class LimbSpec
     public int side;                 // -1 / 0 / +1
     public int girdle;               // 0 = shoulders / hips, 1+ = extra girdles
     public int root, mid, end, tip;  // bone indices: upper, lower, hand/foot (tip = end bone)
+    public int[] digits;             // hands: thumb, index, middle, ring, little (bone indices; after every other bone)
 }
 
 [Serializable]
@@ -329,6 +333,45 @@ public class HumanTemplate : ISpeciesTemplate
             arm.end = arm.tip = plan.Add(handB);
             plan.arms.Add(arm);
             plan.sockets.Add(new Socket { name = "hand." + S + ".grip", bone = arm.end, localPos = Vector3.down * hand * 0.5f });
+        }
+
+        // ---------- digits (after every other bone) ----------
+        var hr = rules.hands;
+        foreach (var arm in plan.arms)
+        {
+            var hb = plan.bones[arm.end];
+            string S = hb.name.Substring("Wrist".Length);
+            float Lp = hb.length * hr.palmLength, R = hb.Outer.y;
+            float W = R * hr.palmWidth, Th = R * hr.palmThickness;
+            float inner = hb.side <= 0 ? 1f : -1f; // towards the midline (x = the body's right)
+            float r = Mathf.Min(W * hr.fingerRadius + hr.fingerFat * hb.fat.y, W * 0.105f); // gaps stay >= 4% of the width
+            float fl = Lp * hr.fingerLength;
+            arm.digits = new int[5];
+            string[] names = { "Thumb", "Index", "Middle", "Ring", "Little" };
+            for (int k = 0; k < 5; k++)
+            {
+                Vector3 pos, dir; float len, rad = r;
+                if (k == 0)
+                {
+                    pos = new Vector3(inner * Th * 0.25f, -Lp * hr.thumbBase, W * 0.42f);
+                    dir = new Vector3(inner * hr.thumbDir.x, -hr.thumbDir.y, hr.thumbDir.z).normalized;
+                    len = fl * hr.fingerScale.y * hr.thumbLength;
+                    rad = r * hr.thumbRadius;
+                }
+                else
+                {
+                    // Index at the front, little at the back, a quarter of the palm's width apart.
+                    pos = new Vector3(0f, -Lp + r, (2.5f - k) * W * 0.25f);
+                    dir = Vector3.down;
+                    len = fl * hr.fingerScale[k - 1];
+                }
+                len *= Noise("digit." + k, hr.fingerNoise, hb.side);
+                // Fingers pivot on the palm side of the sausage, so a fist folds them onto the palm.
+                Vector3 pivot = k == 0 ? Vector3.zero : new Vector3(inner * rad * hr.knucklePivot, 0f, 0f);
+                var d = new BoneSpec { name = names[k] + S, kind = BoneKind.Finger, parent = arm.end, side = hb.side, limb = hb.limb,
+                                       localPos = pos + pivot, shapeOffset = -pivot, dir = dir, length = len, girth = Vector3.one * rad, location = BodyPart.Location.Hand };
+                arm.digits[k] = plan.Add(d);
+            }
         }
 
         var hd = plan.bones[headB];

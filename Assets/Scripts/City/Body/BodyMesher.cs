@@ -5,7 +5,8 @@ using Unity.Jobs;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// Phase 4: the body SDF to a mesh.
+// Phase 4: the body SDF to a mesh. (Build here meshes the whole body on one grid, for debugging;
+// BodyBuild meshes the hands on their own finer grids.)
 //   1. Sample (Burst, parallel): a coarse grid every 4 cells, then the fine grid (cell, ~1.5 cm) only
 //      in the narrow band around the surface; elsewhere the coarse estimate (only its sign matters).
 //   2. Surface nets (SurfaceNets.Extract): one vertex per surface cell, quads across crossed edges.
@@ -92,41 +93,48 @@ public static class BodyMesher
         }
     }
 
-    // Newton steps onto the surface: p -= n * d.
+    // Newton steps onto the surface: p -= n * d. Each vertex onto its own piece's surface (piece = the
+    // kernel's cutMode: 0 whole, 1 body without hands, 2 + h hand h), at its grid's cell size.
     [BurstCompile]
     internal struct ProjectJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         public NativeArray<Vector3> positions;
-        public float h, maxStep;
+        [ReadOnly] public NativeArray<byte> piece;
+        public float cell, handCell;
         public int steps;
         public void Execute(int i)
         {
+            var k = kernel;
+            k.cutMode = piece[i];
+            float c = piece[i] >= 2 ? handCell : cell, h = c * 0.25f;
             Vector3 p = positions[i];
             for (int s = 0; s < steps; s++)
             {
-                float d = kernel.Skin(p);
+                float d = k.Skin(p);
                 if (Mathf.Abs(d) < 1e-5f) break;
-                Vector3 n = kernel.Normal(p, h);
-                p -= n * Mathf.Clamp(d, -maxStep, maxStep);
+                Vector3 n = k.Normal(p, h);
+                p -= n * Mathf.Clamp(d, -c, c);
             }
             positions[i] = p;
         }
     }
 
+    // Normals and layers from the uncut body (the cuts' shrink would tilt normals at the wrist).
     [BurstCompile]
     internal struct AttribJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<Vector3> positions;
-        public float h;
+        [ReadOnly] public NativeArray<byte> piece;
+        public float h, hHand;
         [WriteOnly] public NativeArray<Vector3> normals;
         [WriteOnly] public NativeArray<Vector2> region, layers;
         public void Execute(int i)
         {
             Vector3 p = positions[i];
             var s = kernel.Eval(p);
-            normals[i] = kernel.Normal(p, h);
+            normals[i] = kernel.Normal(p, piece[i] >= 2 ? hHand : h);
             region[i] = new Vector2(kernel.bones[s.nearest].kind, s.nearest);
             // At the skin: the muscle surface lies `muscle` below it (the fat layer), the core `core`
             // below (fat + muscle).
@@ -200,7 +208,9 @@ public static class BodyMesher
             var nrm = new NativeArray<Vector3>(verts.Count, Allocator.TempJob);
             var reg = new NativeArray<Vector2>(verts.Count, Allocator.TempJob);
             var lay = new NativeArray<Vector2>(verts.Count, Allocator.TempJob);
-            new AttribJob { kernel = kernel, positions = posN, h = settings.normalStep * cell, normals = nrm, region = reg, layers = lay }.Schedule(verts.Count, 64).Complete();
+            var pz = new NativeArray<byte>(verts.Count, Allocator.TempJob);
+            new AttribJob { kernel = kernel, positions = posN, piece = pz, h = settings.normalStep * cell, hHand = settings.normalStep * cell, normals = nrm, region = reg, layers = lay }.Schedule(verts.Count, 64).Complete();
+            pz.Dispose();
             for (int i = 0; i < verts.Count; i++)
             {
                 var k = (BoneKind)(int)reg[i].x;
@@ -221,7 +231,9 @@ public static class BodyMesher
         var normals = new NativeArray<Vector3>(dv.Count, Allocator.TempJob);
         var region = new NativeArray<Vector2>(dv.Count, Allocator.TempJob);
         var layers = new NativeArray<Vector2>(dv.Count, Allocator.TempJob);
-        new AttribJob { kernel = kernel, positions = positions, h = settings.normalStep * cell, normals = normals, region = region, layers = layers }.Schedule(dv.Count, 64).Complete();
+        var pieces = new NativeArray<byte>(dv.Count, Allocator.TempJob);
+        new AttribJob { kernel = kernel, positions = positions, piece = pieces, h = settings.normalStep * cell, hHand = settings.normalStep * cell, normals = normals, region = region, layers = layers }.Schedule(dv.Count, 64).Complete();
+        pieces.Dispose();
         var mesh = new Mesh { name = "Body " + sdf.Plan.sheet, indexFormat = dv.Count > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
         mesh.SetVertices(positions);
         mesh.SetNormals(normals);
@@ -243,9 +255,10 @@ public static class BodyMesher
     static void Project(BodySdfKernel kernel, List<Vector3> verts, float cell, int steps)
     {
         var p = new NativeArray<Vector3>(verts.ToArray(), Allocator.TempJob);
-        new ProjectJob { kernel = kernel, positions = p, h = cell * 0.25f, maxStep = cell, steps = steps }.Schedule(p.Length, 64).Complete();
+        var pz = new NativeArray<byte>(verts.Count, Allocator.TempJob);
+        new ProjectJob { kernel = kernel, positions = p, piece = pz, cell = cell, handCell = cell, steps = steps }.Schedule(p.Length, 64).Complete();
         for (int i = 0; i < verts.Count; i++) verts[i] = p[i];
-        p.Dispose();
+        p.Dispose(); pz.Dispose();
     }
 
     // Laplacian smoothing: each vertex moves toward its neighbours' average (re-project afterwards).

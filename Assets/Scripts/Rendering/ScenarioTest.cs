@@ -58,6 +58,7 @@ public class ScenarioTest : MonoBehaviour
             case "face": yield return FaceTest(); break;
             case "pool": yield return PoolTest(); break;
             case "feet": yield return FeetTest(); break;
+            case "hands": yield return HandsTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -465,6 +466,139 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- sausage hands ----------
+
+    IEnumerator HandsTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        var specs = new (string, CharacterSheet)[]
+        {
+            ("average man", new CharacterSheet(Sex.Male, 10, 10, 10, 1000)), ("STR 20", new CharacterSheet(Sex.Male, 20, 10, 10, 1001)),
+            ("heavy woman (DEX 1)", new CharacterSheet(Sex.Female, 10, 10, 1, 1002)), ("ripped (DEX 20)", new CharacterSheet(Sex.Male, 10, 10, 20, 1003)),
+        };
+        var figs = new List<(string name, CharacterFigure f, FigureAnimator a)>();
+        bool apart = true, closed = true; int worstHand = 0;
+        for (int i = 0; i < specs.Length; i++)
+        {
+            var (name, sh) = specs[i];
+            var go = new GameObject(name);
+            go.transform.position = origin + new Vector3(i * 1.0f, 0f, 0f);
+            go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false);
+            float ms = (float)sw.Elapsed.TotalMilliseconds;
+            var an = go.AddComponent<FigureAnimator>(); an.Grounded = true; an.LookYaw = 180f;
+            figs.Add((name, f, an));
+            var plan = f.Plan;
+            // Fingers apart: the SDF between neighbouring fingers (half way along) is outside the skin.
+            using (var sdf = new BodySDF(plan))
+            {
+                var arm = plan.arms[0];
+                float gapMin = float.MaxValue;
+                for (int d = 1; d < 4; d++)
+                {
+                    int d0 = arm.digits[d], d1 = arm.digits[d + 1];
+                    Vector3 m = ((sdf.start[d0] + sdf.end[d0]) * 0.5f + (sdf.start[d1] + sdf.end[d1]) * 0.5f) * 0.5f; m += sdf.bind[d0].MultiplyVector(plan.bones[d0].shapeOffset);
+                    gapMin = Mathf.Min(gapMin, sdf.Kernel.Skin(m));
+                }
+                if (gapMin <= 0f) apart = false;
+                var hb = plan.bones[arm.end]; var mid = plan.bones[arm.digits[2]];
+                // Hand triangles (both hands) and holes in the whole mesh.
+                // (Body and head welded by position: the split shares the vertices on the seam.)
+                var tris = new List<int>(); var weld = new Dictionary<Vector3, int>();
+                int handTris = 0;
+                foreach (var mesh in new[] { f.Asset.body, f.Asset.head })
+                {
+                    var uv1 = new List<Vector2>(); mesh.GetUVs(1, uv1);
+                    var vs = mesh.vertices;
+                    for (int sm = 0; sm < mesh.subMeshCount; sm++)
+                    {
+                        var t = mesh.GetTriangles(sm);
+                        foreach (int v in t)
+                        {
+                            if (!weld.TryGetValue(vs[v], out int id)) { id = weld.Count; weld[vs[v]] = id; }
+                            tris.Add(id);
+                        }
+                        for (int k = 0; k < t.Length; k += 3) if ((BoneKind)(int)uv1[t[k]].x == BoneKind.Hand) handTris++;
+                    }
+                }
+                BodyMesher.CountEdges(tris, out int holes, out int nonMan);
+                if (holes > 0) closed = false;
+                worstHand = Mathf.Max(worstHand, handTris);
+                Log($"{name}: {plan.bones.Count} bones ({plan.arms.Count * 5} digits), hand {hb.length * 100f:0.0} cm long, palm {hb.Outer.y * BodyRules.Default.hands.palmWidth * 100f:0.0} cm wide, " +
+                    $"middle finger {mid.length * 100f:0.0} x {mid.girth.x * 200f:0.0} cm, narrowest finger gap {gapMin * 1000f:0.0} mm; " +
+                    $"{f.Asset.triangles} tris ({handTris} hands), holes {holes}, non-manifold {nonMan}; generated in {ms:0} ms");
+            }
+            yield return null;
+        }
+        Log(apart ? "PASS fingers are separate sausages" : "FAIL fingers fused");
+        Log(closed ? "PASS body + hand meshes closed (no holes at the wrist cut)" : "FAIL holes in the mesh");
+
+        // Open (lowered: relaxed) vs fist (guard): fingertip distance from the wrist.
+        float TipReach(CharacterFigure f)
+        {
+            float sum = 0f; int n = 0;
+            foreach (var (joint, hand, _) in f.Digits)
+            {
+                if (hand != 0) continue;
+                var spec = f.Plan.bones[f.Plan.Index(joint.name)];
+                sum += (joint.TransformPoint(spec.dir * spec.length) - f.WristL.position).magnitude; n++;
+            }
+            return sum / Mathf.Max(1, n);
+        }
+        var f0 = figs[0].f; var a0 = figs[0].a;
+        a0.ArmMode = FigureAnimator.Arms.Lowered;
+        yield return new WaitForSeconds(0.5f);
+        float relaxed = TipReach(f0);
+        foreach (var (j, _, _) in f0.Digits) j.localRotation = Quaternion.identity;
+        float open = TipReach(f0);
+        a0.ArmMode = FigureAnimator.Arms.Guard;
+        yield return new WaitForSeconds(0.5f);
+        float fist = TipReach(f0);
+        Log($"fingertips from the wrist: open {open * 100f:0.0} cm, relaxed {relaxed * 100f:0.0} cm, fist {fist * 100f:0.0} cm");
+        Log(fist < open * 0.75f && relaxed < open && relaxed > fist ? "PASS hands curl: open > relaxed > fist" : "FAIL hand curl");
+
+        // Screenshots: lit close-ups of open, relaxed and fist hands, and the lineup.
+        var lights = new List<GameObject>();
+        var lg = new GameObject("HandKey"); var l = lg.AddComponent<Light>(); l.type = LightType.Directional; l.intensity = 1.2f;
+        lg.transform.rotation = Quaternion.LookRotation(new Vector3(0.3f, -0.5f, 1f)); lights.Add(lg);
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        FlyingVehicle.CameraOverride = true;
+        float fov = cam.fieldOfView;
+        IEnumerator Shot(string name, Vector3 at, Vector3 from, float fv)
+        {
+            cam.fieldOfView = fv;
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"hands_{name}.png"));
+            yield return null; yield return null;
+        }
+        foreach (var x in figs) x.a.ArmMode = FigureAnimator.Arms.Lowered;
+        yield return new WaitForSeconds(0.6f);
+        // Relaxed, then open (animator off, digits straight): the right hand from its outer front.
+        Vector3 View(CharacterFigure f) => f.transform.forward * 0.26f + f.transform.right * 0.16f + Vector3.up * 0.04f;
+        for (int i = 0; i < figs.Count; i++) { var f = figs[i].f; yield return Shot("relaxed" + i, f.HandR.position, f.HandR.position + View(f), 30f); }
+        foreach (var x in figs) { x.a.enabled = false; foreach (var (j, _, _) in x.f.Digits) j.localRotation = Quaternion.identity; }
+        yield return null;
+        for (int i = 0; i < figs.Count; i++) { var f = figs[i].f; yield return Shot("open" + i, f.HandR.position, f.HandR.position + View(f), 30f); }
+        { var f = figs[0].f; yield return Shot("open_out", f.HandR.position, f.HandR.position + f.transform.right * 0.3f, 30f); }
+        foreach (var x in figs) { x.a.enabled = true; x.a.ArmMode = FigureAnimator.Arms.Guard; }
+        yield return new WaitForSeconds(0.6f);
+        for (int i = 0; i < figs.Count; i++)
+        {
+            var f = figs[i].f; Vector3 h = f.HandR.position;
+            yield return Shot("fist" + i, h, h + f.transform.forward * 0.28f + f.transform.right * 0.12f + Vector3.up * 0.06f, 30f);
+        }
+        { var f = figs[0].f; Vector3 h = f.HandR.position; yield return Shot("fist_out", h, h + f.transform.right * 0.28f + Vector3.up * 0.05f, 30f); }
+        Vector3 row = origin + new Vector3(1.5f, 1.0f, 0f);
+        yield return Shot("lineup", row, row + new Vector3(0f, 0.1f, -3.4f), 50f);
+        cam.fieldOfView = fov;
+        foreach (var g in lights) Destroy(g);
+        FlyingVehicle.CameraOverride = false;
     }
 
     // ---------- foot planting: does the stance foot slide? ----------
@@ -930,15 +1064,23 @@ public class ScenarioTest : MonoBehaviour
             for (int i = 0; i < sk.Bones.Count; i++) sk.Bones[i].joint.localRotation = pose[i];
             yield return null;
             using var sdf = new BodySDF(f.Plan);
-            float worst = 0f, sum = 0f; int n = 0;
+            // (The hands' and body's caps at the wrist cut, and their slightly shrunk overlap, lie inside the
+            // surface by design: hidden vertices are counted, not measured.)
+            float worst = 0f, sum = 0f; int n = 0, hidden = 0;
+            float hide = BodyRules.Default.hands.cutShrink + 0.0005f;
             foreach (var r in f.Renderers)
             {
                 var m = new Mesh();
                 ((SkinnedMeshRenderer)r).BakeMesh(m, true);
-                foreach (var v in m.vertices) { float d = Mathf.Abs(sdf.Eval(v)); worst = Mathf.Max(worst, d); sum += d; n++; }
+                foreach (var v in m.vertices)
+                {
+                    float d = sdf.Eval(v);
+                    if (d < -hide) { hidden++; continue; }
+                    d = Mathf.Abs(d); worst = Mathf.Max(worst, d); sum += d; n++;
+                }
                 Destroy(m);
             }
-            Log($"bind check (A-pose): skinned vertices {sum / n * 1000f:0.00} mm from the SDF surface on average, worst {worst * 1000f:0.0} mm");
+            Log($"bind check (A-pose): skinned vertices {sum / n * 1000f:0.00} mm from the SDF surface on average, worst {worst * 1000f:0.0} mm ({hidden} hidden inside: wrist caps)");
             Log(worst < 0.004f ? "PASS bind poses reproduce the generated surface" : "FAIL skinned mesh doesn't match the bind pose");
             Destroy(go);
         }

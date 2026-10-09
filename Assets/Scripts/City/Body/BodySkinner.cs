@@ -13,6 +13,8 @@ using UnityEngine.Rendering;
 //   over jointReach x the joint's radius): a back vertex near the arm in the A-pose doesn't follow the
 //   arm, an armpit vertex does. The 4 strongest are kept and normalized. At a joint the two bones are
 //   about equally near, so elbows and knees split their weight and bend smoothly.
+//   Digits: a hand vertex on (or near) a finger or thumb sausage goes to that digit's bone, blending into
+//   the hand over knuckle x the digit's radius either side of the knuckle.
 //   Bind poses: each bone's transform in the pose the mesh was generated in (the A-pose), relative to the
 //   body root, so the mesh follows the skeleton from any pose.
 //   Renderers: body and head as two SkinnedMeshRenderers (first person hides only the head).
@@ -37,7 +39,7 @@ public static class BodySkinner
     {
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<Vector3> positions;
-        public float power, softness, boost, reach;
+        public float power, softness, boost, reach, knuckle;
         [WriteOnly] public NativeArray<BoneWeight> weights;
         public void Execute(int v)
         {
@@ -74,6 +76,35 @@ public static class BodySkinner
             }
             float sum = w0 + w1 + w2 + w3;
             if (sum <= 0f) { i0 = own; w0 = 1f; sum = 1f; }
+            // Digits: the nearest sausage of this hand takes its share (all of it past the knuckle).
+            if (ob.kind == (int)BoneKind.Hand && kernel.digits.IsCreated)
+            {
+                int dj = -1; float dd = float.MaxValue;
+                for (int j = 0; j < kernel.digits.Length; j++)
+                {
+                    var dg = kernel.digits[j];
+                    if (dg.hand != own) continue;
+                    Vector3 pa = p - dg.a, ba = dg.b - dg.a;
+                    float h = Mathf.Clamp01(Vector3.Dot(pa, ba) / Mathf.Max(1e-8f, ba.sqrMagnitude));
+                    float d = (pa - ba * h).magnitude - dg.r;
+                    if (d < dd) { dd = d; dj = j; }
+                }
+                if (dj >= 0)
+                {
+                    var dg = kernel.digits[dj];
+                    float t = Vector3.Dot(p - dg.a, (dg.b - dg.a).normalized);
+                    float blend = Mathf.Max(1e-4f, knuckle * dg.r);
+                    float share = Mathf.SmoothStep(0f, 1f, 0.5f + t / (2f * blend)) * Mathf.Clamp01(1.5f - Mathf.Max(0f, dd) / dg.r);
+                    if (share > 0f)
+                    {
+                        // Scale the others down; the digit replaces the weakest.
+                        float k = (1f - share) / sum;
+                        w0 *= k; w1 *= k; w2 *= k; w3 *= k;
+                        if (share >= w3) { i3 = dg.bone; w3 = share; }
+                        sum = w0 + w1 + w2 + w3;
+                    }
+                }
+            }
             weights[v] = new BoneWeight
             {
                 boneIndex0 = i0, weight0 = w0 / sum, boneIndex1 = i1, weight1 = w1 / sum,
@@ -88,7 +119,8 @@ public static class BodySkinner
         var kernel = sdf.BuildKernel(Allocator.TempJob);
         var pos = new NativeArray<Vector3>(mesh.vertices, Allocator.TempJob);
         var w = new NativeArray<BoneWeight>(pos.Length, Allocator.TempJob);
-        new WeightJob { kernel = kernel, positions = pos, power = s.falloffPower, softness = s.softness, boost = s.ownBoneBoost, reach = s.jointReach, weights = w }
+        new WeightJob { kernel = kernel, positions = pos, power = s.falloffPower, softness = s.softness, boost = s.ownBoneBoost, reach = s.jointReach,
+                        knuckle = BodyRules.Default.hands.knuckleBlend, weights = w }
             .Schedule(pos.Length, 64).Complete();
         var result = w.ToArray();
         pos.Dispose(); w.Dispose(); kernel.Dispose();

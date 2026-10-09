@@ -102,6 +102,7 @@ public class BodyRules : ScriptableObject
     public MeshRules mesh = new MeshRules();
     public SkinRules skinning = new SkinRules();
     public MotionRules motion = new MotionRules();
+    public HandRules hands = new HandRules();
     public List<MuscleBlobRule> muscleBlobs = MuscleBlobRule.Defaults();
     public List<FaceFeatureRule> faceFeatures = FaceFeatureRule.Defaults();
 

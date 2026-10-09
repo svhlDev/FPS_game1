@@ -17,7 +17,8 @@ using UnityEngine;
 //   Breasts: two ellipsoids on the chest (DNA size and droop), medium blend.
 //   Head   : an ellipsoid scaled and elongated (up and back) by INT, brow ridge, cheekbones, jaw, nose
 //            and chin blended in (seed sizes), eye sockets carved (smooth subtraction) at EyeL / EyeR.
-//   Hands  : mittens (rounded palm box + thumb capsule). Feet: rounded wedges.
+//   Hands  : sausage hands: a rounded palm block, finger and thumb capsules (the digit bones) blended on
+//            with a small radius, never with each other. Feet: rounded wedges.
 // Built in the bind pose (an A-pose: arms out, legs slightly apart, so limbs stay clear of the body).
 // All positions are in the body root's space.
 // Evaluation lives in BodySdfKernel (unmanaged, shared with the Burst mesher); this class builds it.
@@ -47,7 +48,11 @@ public class BodySDF : IDisposable
     public Bounds bounds;
     readonly float[] jointK;
     readonly int headIndex;
+    readonly int kernelBones;                      // bones before the digits (the kernel's)
     BodySdfKernel kernel;
+    // Hands: each meshed on its own grid (HandBounds), cut from the body (see BodySdfKernel).
+    public readonly List<Bounds> HandBounds = new List<Bounds>();
+    public int HandCount => HandBounds.Count;
 
     public BodyPlan Plan => plan;
     public BodySdfKernel Kernel => kernel;
@@ -77,7 +82,11 @@ public class BodySDF : IDisposable
         breastBlend = SR.breastBlend; featureBlend = SR.featureBlend; eyeCarveBlend = SR.eyeCarveBlend; muscleReach = SR.muscleReach;
         pose ??= APose(plan);
         int n = plan.bones.Count;
-        if (n > BodySdfKernel.MaxBones) throw new ArgumentException($"{n} bones (max {BodySdfKernel.MaxBones})");
+        kernelBones = 0;
+        while (kernelBones < n && plan.bones[kernelBones].kind != BoneKind.Finger) kernelBones++;
+        for (int i = kernelBones; i < n; i++)
+            if (plan.bones[i].kind != BoneKind.Finger) throw new ArgumentException("digits must come after every other bone");
+        if (kernelBones > BodySdfKernel.MaxBones) throw new ArgumentException($"{kernelBones} bones (max {BodySdfKernel.MaxBones})");
         start = new Vector3[n]; end = new Vector3[n]; frames = new Frame[n]; depthRatio = new float[n];
         jointK = new float[n];
         bind = new Matrix4x4[n];
@@ -123,6 +132,33 @@ public class BodySDF : IDisposable
             bounds.Encapsulate(new Bounds(end[i], Vector3.one * pad * 2f));
         }
         foreach (var br in breasts) bounds.Encapsulate(new Bounds(br.f.o, br.r * 2.4f));
+        // Hand grids: a box round the forearm's overlap stretch, the palm and the digits (much smaller than
+        // the cut's bounding sphere: the grid is fine).
+        var hr = BodyRules.Default.hands;
+        for (int i = 0; i < kernelBones; i++)
+            if (plan.bones[i].kind == BoneKind.Hand)
+            {
+                var b = plan.bones[i]; var f = frames[i];
+                const float pad = 0.004f;
+                float wristR = Mathf.Max(b.Outer.x, b.parent >= 0 ? plan.bones[b.parent].Outer.y : 0f) * 1.4f + pad;
+                Vector3 w0 = start[i] - f.y * hr.cutOverlap;
+                var hb = new Bounds(w0, Vector3.one * wristR * 2f);
+                hb.Encapsulate(new Bounds(start[i], Vector3.one * wristR * 2f));
+                float R = b.Outer.y, Lp = b.length * hr.palmLength;
+                Vector3 half = new Vector3(R * hr.palmThickness * 0.5f + pad, Lp * 0.5f + pad, R * hr.palmWidth * 0.5f + pad);
+                Vector3 pc = start[i] + f.y * (Lp * 0.5f);
+                for (int c = 0; c < 8; c++)
+                    hb.Encapsulate(pc + f.x * ((c & 1) != 0 ? half.x : -half.x) + f.y * ((c & 2) != 0 ? half.y : -half.y) + f.z * ((c & 4) != 0 ? half.z : -half.z));
+                for (int j = kernelBones; j < n; j++)
+                {
+                    if (plan.bones[j].parent != i) continue;
+                    Vector3 off = bind[j].MultiplyVector(plan.bones[j].shapeOffset);
+                    float rr = plan.bones[j].girth.x + pad;
+                    hb.Encapsulate(new Bounds(start[j] + off, Vector3.one * rr * 2f));
+                    hb.Encapsulate(new Bounds(end[j] + off, Vector3.one * rr * 2f));
+                }
+                HandBounds.Add(hb);
+            }
         bounds.Encapsulate(new Vector3(bounds.center.x, 0f, bounds.center.z)); // the soles
         kernel = BuildKernel(Allocator.Persistent);
     }
@@ -130,9 +166,22 @@ public class BodySDF : IDisposable
     public void Dispose() => kernel.Dispose();
 
     // The unmanaged copy of everything Eval needs.
+    // A sphere round hand bone i (and its digits), with room for the stretch of forearm it overlaps.
+    (Vector3 c, float r) HandSphere(int i)
+    {
+        var b = plan.bones[i];
+        Vector3 c = start[i] + frames[i].y * (b.length * 0.45f);
+        float r = b.length * 0.55f;
+        for (int j = kernelBones; j < plan.bones.Count; j++)
+            if (plan.bones[j].parent == i) r = Mathf.Max(r, (end[j] - c).magnitude + plan.bones[j].girth.x);
+        r = Mathf.Max(r, (start[i] - frames[i].y * BodyRules.Default.hands.cutOverlap - c).magnitude + b.Outer.x);
+        return (c, r + 0.004f);
+    }
+
     public BodySdfKernel BuildKernel(Allocator alloc)
     {
-        int n = plan.bones.Count;
+        int n = kernelBones;
+        var hr = BodyRules.Default.hands;
         var k = new BodySdfKernel
         {
             bones = new NativeArray<BodySdfKernel.Bone>(n, alloc),
@@ -144,7 +193,28 @@ public class BodySDF : IDisposable
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
             fatBlendMax = fatBlendMax, muscleReach = muscleReach,
+            fingerBlend = hr.fingerBlend, cutBody = -hr.cutOverlap * 0.2f, cutHand = -hr.cutOverlap, cutShrink = hr.cutShrink,
         };
+        int digitCount = plan.bones.Count - kernelBones;
+        k.digits = new NativeArray<BodySdfKernel.Digit>(digitCount, alloc);
+        var dg = k.digits;
+        for (int j = 0; j < digitCount; j++)
+        {
+            int bi = kernelBones + j;
+            var b = plan.bones[bi];
+            float r = b.girth.x;
+            Vector3 dir = (end[bi] - start[bi]).normalized;
+            Vector3 off = bind[bi].MultiplyVector(b.shapeOffset);
+            dg[j] = new BodySdfKernel.Digit { a = start[bi] + off, b = end[bi] + off - dir * r, r = r, hand = b.parent, bone = bi };
+        }
+        var cutList = new List<BodySdfKernel.HandCut>();
+        for (int i = 0; i < n; i++)
+            if (plan.bones[i].kind == BoneKind.Hand)
+            {
+                var (c, r) = HandSphere(i);
+                cutList.Add(new BodySdfKernel.HandCut { o = start[i], axis = frames[i].y, centre = c, radius = r, hand = i });
+            }
+        k.cuts = new NativeArray<BodySdfKernel.HandCut>(cutList.ToArray(), alloc);
         if (plan.dna != null)
         {
             k.hasDna = 1;
@@ -162,6 +232,14 @@ public class BodySDF : IDisposable
                 length = b.length, depthRatio = depthRatio[i], jointK = jointK[i],
                 kind = (int)b.kind, parent = b.parent, side = b.side,
             };
+            if (b.kind == BoneKind.Hand)
+            {
+                float R = b.Outer.y, Lp = b.length * hr.palmLength;
+                var hb = bs[i];
+                hb.palm = new Vector3(R * hr.palmThickness * 0.5f, Lp * 0.5f, R * hr.palmWidth * 0.5f);
+                hb.palmRound = hb.palm.x * 2f * hr.palmCorner;
+                bs[i] = hb;
+            }
         }
         var bl = k.blobs;
         for (int j = 0; j < blobs.Count; j++) bl[j] = E(blobs[j].f, blobs[j].r, blobs[j].bone, (int)blobs[j].group);
