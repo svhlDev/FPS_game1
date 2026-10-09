@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 // Phase 3: the body as a signed distance field (negative inside, positive outside), layered like
@@ -18,14 +20,18 @@ using UnityEngine;
 //   Hands  : mittens (rounded palm box + thumb capsule). Feet: rounded wedges.
 // Built in the bind pose (an A-pose: arms out, legs slightly apart, so limbs stay clear of the body).
 // All positions are in the body root's space.
-public class BodySDF
+// Evaluation lives in BodySdfKernel (unmanaged, shared with the Burst mesher); this class builds it.
+// Dispose when done (the kernel holds native arrays).
+public class BodySDF : IDisposable
 {
     // ---------- tunables (BodyRules could take these later) ----------
     public float jointBlend = 0.015f;      // core: bone with its parent (+ jointBlendGirth x the thinner core)
     public float jointBlendGirth = 0.6f;
+    public float torsoBlend = 0.04f;       // pelvis / lumbar / chest seams (rounds the steps between them)
     public float muscleBlend = 0.008f;     // small: muscle shapes stay distinct
     public float fatBlendPerMetre = 1.6f;  // fat blend radius = this x local fat thickness (+ minimum)
     public float fatBlendMin = 0.004f;
+    public float fatBlendFalloff = 0.06f;  // fat thickness blends across nearby bones (no ridges where they meet)
     public float breastBlend = 0.06f;
     public float featureBlend = 0.012f;
     public float eyeCarveBlend = 0.006f;
@@ -47,10 +53,12 @@ public class BodySDF
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
     public Bounds bounds;
-    readonly float[] dBone, jointK, wFat;
+    readonly float[] jointK;
     readonly int headIndex;
+    BodySdfKernel kernel;
 
     public BodyPlan Plan => plan;
+    public BodySdfKernel Kernel => kernel;
 
     // A-pose: arms out ArmSpread degrees, legs LegSpread (local rotations per bone).
     public static Quaternion[] APose(BodyPlan plan)
@@ -71,8 +79,9 @@ public class BodySDF
         this.plan = plan;
         pose ??= APose(plan);
         int n = plan.bones.Count;
-        start = new Vector3[n]; end = new Vector3[n]; frames = new Frame[n]; depthRatio = new float[n]; dBone = new float[n];
-        jointK = new float[n]; wFat = new float[n];
+        if (n > BodySdfKernel.MaxBones) throw new ArgumentException($"{n} bones (max {BodySdfKernel.MaxBones})");
+        start = new Vector3[n]; end = new Vector3[n]; frames = new Frame[n]; depthRatio = new float[n];
+        jointK = new float[n];
         var world = new Quaternion[n];
         for (int i = 0; i < n; i++)
         {
@@ -99,7 +108,7 @@ public class BodySDF
             if (pa < 0) continue;
             // Torso segments meet flat (their caps line up): a small blend. Limbs blend by girth.
             bool torsoPair = IsTorso(plan.bones[i].kind) && IsTorso(plan.bones[pa].kind);
-            jointK[i] = torsoPair ? jointBlend : jointBlend + jointBlendGirth * Mathf.Min(plan.bones[i].girth.y, plan.bones[pa].girth.y);
+            jointK[i] = torsoPair ? torsoBlend : jointBlend + jointBlendGirth * Mathf.Min(plan.bones[i].girth.y, plan.bones[pa].girth.y);
         }
         headIndex = plan.Index("Head");
         BuildMuscles();
@@ -115,14 +124,62 @@ public class BodySDF
         }
         foreach (var br in breasts) bounds.Encapsulate(new Bounds(br.f.o, br.r * 2.4f));
         bounds.Encapsulate(new Vector3(bounds.center.x, 0f, bounds.center.z)); // the soles
+        kernel = BuildKernel(Allocator.Persistent);
     }
+
+    public void Dispose() => kernel.Dispose();
+
+    // The unmanaged copy of everything Eval needs.
+    public BodySdfKernel BuildKernel(Allocator alloc)
+    {
+        int n = plan.bones.Count;
+        var k = new BodySdfKernel
+        {
+            bones = new NativeArray<BodySdfKernel.Bone>(n, alloc),
+            blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
+            features = new NativeArray<BodySdfKernel.Ellipsoid>(headFeatures.Count, alloc),
+            breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
+            skull = E(skull.f, skull.r, headIndex, 0),
+            headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
+            muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
+            breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
+        };
+        if (plan.dna != null)
+        {
+            k.hasDna = 1;
+            k.fatWaist = plan.dna.Fat(FatRegion.Waist); k.fatBelly = plan.dna.Fat(FatRegion.Belly);
+            k.fatHips = plan.dna.Fat(FatRegion.Hips); k.fatButtocks = plan.dna.Fat(FatRegion.Buttocks);
+        }
+        var bs = k.bones;
+        for (int i = 0; i < n; i++)
+        {
+            var b = plan.bones[i];
+            bs[i] = new BodySdfKernel.Bone
+            {
+                o = frames[i].o, x = frames[i].x, y = frames[i].y, z = frames[i].z, end = end[i],
+                girth = b.girth, muscle = b.muscle, fat = b.fat, outer = b.Outer,
+                length = b.length, depthRatio = depthRatio[i], jointK = jointK[i],
+                kind = (int)b.kind, parent = b.parent, side = b.side,
+            };
+        }
+        var bl = k.blobs;
+        for (int j = 0; j < blobs.Count; j++) bl[j] = E(blobs[j].f, blobs[j].r, blobs[j].bone, (int)blobs[j].group);
+        var fe = k.features;
+        for (int j = 0; j < headFeatures.Count; j++) fe[j] = E(headFeatures[j].f, headFeatures[j].r, headIndex, 0);
+        var br = k.breasts;
+        for (int j = 0; j < breasts.Count; j++) br[j] = E(breasts[j].f, breasts[j].r, plan.Index("Chest"), 0);
+        return k;
+    }
+
+    static BodySdfKernel.Ellipsoid E(Frame f, Vector3 r, int bone, int group) =>
+        new BodySdfKernel.Ellipsoid { o = f.o, x = f.x, y = f.y, z = f.z, r = r, bone = bone, group = group };
 
     static bool IsTorso(BoneKind k) => k == BoneKind.Pelvis || k == BoneKind.Lumbar || k == BoneKind.Chest;
 
     // ---------- construction ----------
 
-    static Vector3 Lerp3(Vector3 v, float t) => t < 0.5f ? Vector3.Lerp(new Vector3(v.x, 0, 0), new Vector3(v.y, 0, 0), t * 2f) : Vector3.Lerp(new Vector3(v.y, 0, 0), new Vector3(v.z, 0, 0), t * 2f - 1f);
-    static float Profile(Vector3 v, float t) => Lerp3(v, Mathf.Clamp01(t)).x;
+    static float Profile(Vector3 v, float t) => BodySdfKernel.Profile(v, t);
+    static float Ellipsoid(Vector3 p, Vector3 r) => BodySdfKernel.EllipsoidDist(p, r);
 
     // A blob on bone i at t along it, `angle` degrees round it (0 = front, +90 = the body's right),
     // sitting on the core surface, `along` x bone length long, `width` x core radius wide.
@@ -291,233 +348,21 @@ public class BodySDF
         }
     }
 
-    // ---------- evaluation ----------
-
-    static float SMin(float a, float b, float k)
-    {
-        if (k <= 0f) return Mathf.Min(a, b);
-        float h = Mathf.Max(k - Mathf.Abs(a - b), 0f) / k;
-        return Mathf.Min(a, b) - h * h * k * 0.25f;
-    }
-    static float SMax(float a, float b, float k) => -SMin(-a, -b, k);
-
-    static float Ellipsoid(Vector3 p, Vector3 r)
-    {
-        float k0 = new Vector3(p.x / r.x, p.y / r.y, p.z / r.z).magnitude;
-        float k1 = new Vector3(p.x / (r.x * r.x), p.y / (r.y * r.y), p.z / (r.z * r.z)).magnitude;
-        return k1 > 1e-8f ? k0 * (k0 - 1f) / k1 : -Mathf.Min(r.x, Mathf.Min(r.y, r.z));
-    }
-
-    // Round cone from the origin along +y to (0, h, 0), radii r1 -> r2 (Inigo Quilez).
-    static float RoundCone(Vector3 p, float r1, float r2, float h)
-    {
-        if (h < 1e-5f) return p.magnitude - Mathf.Max(r1, r2);
-        float b = Mathf.Clamp((r1 - r2) / h, -0.99f, 0.99f), a = Mathf.Sqrt(1f - b * b);
-        float qx = new Vector2(p.x, p.z).magnitude, qy = p.y;
-        float k = -b * qx + a * qy;   // dot(q, (-b, a))
-        if (k < 0f) return new Vector2(qx, qy).magnitude - r1;
-        if (k > a * h) return new Vector2(qx, qy - h).magnitude - r2;
-        return qx * a + qy * b - r1;  // dot(q, (a, b)) - r1
-    }
-
-    // Cone along +y from y0 (radius ra) to y1 (radius rb), flat ends (Inigo Quilez's capped cone).
-    static float CappedCone(Vector3 p, float y0, float y1, float ra, float rb)
-    {
-        float h = (y1 - y0) * 0.5f;
-        if (h < 1e-5f) return float.MaxValue;
-        Vector2 q = new Vector2(new Vector2(p.x, p.z).magnitude, p.y - (y0 + y1) * 0.5f);
-        Vector2 k1 = new Vector2(rb, h), k2 = new Vector2(rb - ra, 2f * h);
-        Vector2 ca = new Vector2(q.x - Mathf.Min(q.x, q.y < 0f ? ra : rb), Mathf.Abs(q.y) - h);
-        Vector2 cb = q - k1 + k2 * Mathf.Clamp01(Vector2.Dot(k1 - q, k2) / k2.sqrMagnitude);
-        float sgn = cb.x < 0f && ca.y < 0f ? -1f : 1f;
-        return sgn * Mathf.Sqrt(Mathf.Min(ca.sqrMagnitude, cb.sqrMagnitude));
-    }
-
-    static float RoundBox(Vector3 p, Vector3 half, float r)
-    {
-        Vector3 q = new Vector3(Mathf.Abs(p.x), Mathf.Abs(p.y), Mathf.Abs(p.z)) - half + Vector3.one * r;
-        return Vector3.Max(q, Vector3.zero).magnitude + Mathf.Min(Mathf.Max(q.x, Mathf.Max(q.y, q.z)), 0f) - r;
-    }
-
-    static float Capsule(Vector3 p, Vector3 a, Vector3 b, float r)
-    {
-        Vector3 pa = p - a, ba = b - a;
-        float h = Mathf.Clamp01(Vector3.Dot(pa, ba) / Mathf.Max(1e-8f, ba.sqrMagnitude));
-        return (pa - ba * h).magnitude - r;
-    }
-
-    float BoneCore(int i, Vector3 p)
-    {
-        var b = plan.bones[i];
-        var f = frames[i];
-        Vector3 q = f.ToLocal(p);
-        switch (b.kind)
-        {
-            case BoneKind.Hand:
-            {
-                // Mitten: palm + closed fingers as one rounded box, a thumb capsule on the front-inner side.
-                float L = b.length, w = b.girth.y + b.fat.y;
-                float palm = RoundBox(q - new Vector3(0f, L * 0.48f, 0f), new Vector3(w * 1.25f, L * 0.48f, w * 0.6f), w * 0.5f);
-                float inner = b.side < 0 ? 1f : -1f; // towards the body's midline (x = the body's right)
-                Vector3 t0 = f.o + f.y * L * 0.15f + f.z * w * 0.4f + f.x * inner * w * 0.9f;
-                Vector3 t1 = f.o + f.y * L * 0.55f + f.z * w * 0.9f + f.x * inner * w * 1.1f;
-                return SMin(palm, Capsule(p, t0, t1, w * 0.42f), 0.008f);
-            }
-            case BoneKind.Foot:
-            {
-                // Rounded wedge from heel to toe, sole on the ground, sloping down to the toes.
-                float L = (end[i] - start[i]).magnitude;
-                Vector3 ankle = start[i], toe = end[i];
-                Vector3 fwd = Vector3.ProjectOnPlane(toe - ankle, Vector3.up).normalized;
-                Vector3 side = Vector3.Cross(Vector3.up, fwd);
-                float footLen = L / 0.72f * 0.95f;
-                float h = ankle.y + b.girth.y * 0.6f;
-                Vector3 centre = new Vector3(ankle.x, 0f, ankle.z) + fwd * (footLen * 0.5f - footLen * 0.28f) + Vector3.up * h * 0.5f;
-                Vector3 lp = p - centre;
-                Vector3 l = new Vector3(Vector3.Dot(lp, side), Vector3.Dot(lp, Vector3.up), Vector3.Dot(lp, fwd));
-                float w = b.girth.y * 1.15f;
-                float box = RoundBox(l, new Vector3(w, h * 0.5f, footLen * 0.5f), Mathf.Min(w, h * 0.5f) * 0.6f);
-                // Slope: a plane from above the ankle down to the toe tip.
-                Vector3 n = new Vector3(0f, footLen * 0.75f, h * 0.9f).normalized;
-                float plane = Vector3.Dot(l - new Vector3(0f, h * 0.5f, -footLen * 0.1f), n);
-                return SMax(box, plane, 0.01f);
-            }
-            case BoneKind.Head:
-                return Ellipsoid(skull.f.ToLocal(p), skull.r); // features go on after the fat (Eval)
-        }
-        float dr = depthRatio[i];
-        Vector3 s = new Vector3(q.x, q.y, q.z / dr);
-        float L2 = b.length * 0.5f;
-        if (IsTorso(b.kind))
-        {
-            // Torso: flat-capped cones, so a wide segment's end cap never bulges over its neighbour
-            // (round caps would swallow the waist); a dome closes the open ends (buttocks, shoulders).
-            float t1 = CappedCone(s, 0f, L2, b.girth.x, b.girth.y);
-            float t2 = CappedCone(s, L2, b.length, b.girth.y, b.girth.z);
-            float dt = Mathf.Min(t1, t2);
-            if (b.kind != BoneKind.Lumbar)
-            {
-                float re = b.girth.z;
-                float dome = Ellipsoid(s - new Vector3(0f, b.length, 0f), new Vector3(re, re * 0.5f, re));
-                dt = SMin(dt, dome, re * 0.3f);
-            }
-            return dt * dr;
-        }
-        // Round cones start->mid and mid->end, flattened front-to-back by depthRatio.
-        float d1 = RoundCone(s, b.girth.x, b.girth.y, L2);
-        float d2 = RoundCone(s - new Vector3(0f, L2, 0f), b.girth.y, b.girth.z, L2);
-        return Mathf.Min(d1, d2) * dr; // squashing z by 1/dr stretches distances by up to 1/dr: stay a lower bound
-    }
-
-    // Fat thickness here: the nearest bone's fat profile at the point's position along it, steered
-    // round the torso (belly in front, buttocks behind, hips at the sides).
-    float FatAt(Vector3 p, int bone)
-    {
-        if (bone < 0) return 0f;
-        var b = plan.bones[bone];
-        var f = frames[bone];
-        Vector3 q = f.ToLocal(p);
-        float t = Mathf.Clamp01(q.y / Mathf.Max(1e-4f, b.length));
-        float th = Profile(b.fat, t);
-        var dna = plan.dna;
-        if (dna == null) return th;
-        Vector2 dir = new Vector2(q.x, q.z);
-        float front = dir.sqrMagnitude > 1e-8f ? dir.normalized.y : 0f;      // +1 front, -1 back
-        float sideAmt = dir.sqrMagnitude > 1e-8f ? Mathf.Abs(dir.normalized.x) : 0f;
-        switch (b.kind)
-        {
-            case BoneKind.Lumbar:
-                th = Mathf.Lerp(dna.Fat(FatRegion.Waist), dna.Fat(FatRegion.Belly), Mathf.Clamp01(front)) * (front < 0f ? Mathf.Lerp(1f, 0.6f, -front) : 1f);
-                break;
-            case BoneKind.Pelvis:
-                th = front < 0f ? Mathf.Lerp(dna.Fat(FatRegion.Hips), dna.Fat(FatRegion.Buttocks), -front)
-                                : Mathf.Lerp(dna.Fat(FatRegion.Hips), dna.Fat(FatRegion.Belly) * 0.7f, front);
-                break;
-            case BoneKind.Chest:
-                th = Mathf.Lerp(th, dna.Fat(FatRegion.Waist) * 0.6f, (1f - t) * 0.5f) * (1f - 0.3f * sideAmt);
-                break;
-        }
-        return th;
-    }
+    // ---------- evaluation (the kernel) ----------
 
     // Signed distance to the skin.
-    public float Eval(Vector3 p) => Eval(p, out _, out _);
+    public float Eval(Vector3 p) => kernel.Eval(p).skin;
 
     // Also the nearest bone and the local fat thickness (for regions and layer data).
     public float Eval(Vector3 p, out int nearest, out float fatThickness)
     {
-        int n = plan.bones.Count;
-        nearest = -1;
-        float best = float.MaxValue;
-        for (int i = 0; i < n; i++)
-        {
-            float d = BoneCore(i, p);
-            dBone[i] = d;
-            if (d < best) { best = d; nearest = i; }
-        }
-        // Fat thickness: blended over the nearby bones (weights fall off with distance), so it never
-        // steps where the nearest bone changes.
-        float wSum = 0f, fSum = 0f;
-        for (int i = 0; i < n; i++)
-        {
-            float w = Mathf.Exp(-(dBone[i] - best) / 0.025f);
-            if (w < 0.01f) continue;
-            wSum += w; fSum += w * FatAt(p, i);
-        }
-        fatThickness = wSum > 0f ? fSum / wSum : 0f;
-        float kFat = fatBlendMin + fatBlendPerMetre * fatThickness;
-        // Core: each bone smooth-unions with its parent only; the soft (fat) version blends wider.
-        float core = float.MaxValue, soft = float.MaxValue;
-        for (int i = 0; i < n; i++)
-        {
-            int pa = plan.bones[i].parent;
-            if (pa < 0) { core = Mathf.Min(core, dBone[i]); soft = Mathf.Min(soft, dBone[i]); continue; }
-            core = Mathf.Min(core, SMin(dBone[i], dBone[pa], jointK[i]));
-            soft = Mathf.Min(soft, SMin(dBone[i], dBone[pa], Mathf.Max(jointK[i], kFat)));
-        }
-        float muscle = core;
-        foreach (var bl in blobs)
-        {
-            if (dBone[bl.bone] > 0.12f) continue; // far from this bone: its muscles can't matter
-            float d = Ellipsoid(bl.f.ToLocal(p), bl.r);
-            muscle = SMin(muscle, d, muscleBlend);
-            soft = SMin(soft, d, kFat);
-        }
-        float skin = Mathf.Min(muscle, soft - fatThickness);
-        foreach (var br in breasts) skin = SMin(skin, Ellipsoid(br.f.ToLocal(p), br.r), breastBlend);
-        // Face features sit on the skin: pushed out by the face's fat so they stay visible.
-        if (headIndex >= 0 && dBone[headIndex] < 0.08f)
-        {
-            float faceFat = Profile(plan.bones[headIndex].fat, 0.5f);
-            foreach (var ft in headFeatures)
-                skin = SMin(skin, Ellipsoid(ft.f.ToLocal(p) - new Vector3(0f, 0f, faceFat), ft.r), featureBlend);
-        }
-        if (EyeRadius > 0f)
-        {
-            skin = SMax(skin, -((p - EyeL).magnitude - EyeRadius), eyeCarveBlend);
-            skin = SMax(skin, -((p - EyeR).magnitude - EyeRadius), eyeCarveBlend);
-        }
-        return skin;
+        var smp = kernel.Eval(p);
+        nearest = smp.nearest; fatThickness = smp.fat;
+        return smp.skin;
     }
 
     // Muscle-only surface (no fat), for debugging the layers.
-    public float EvalMuscle(Vector3 p)
-    {
-        int n = plan.bones.Count;
-        for (int i = 0; i < n; i++) dBone[i] = BoneCore(i, p);
-        float core = float.MaxValue;
-        for (int i = 0; i < n; i++)
-        {
-            int pa = plan.bones[i].parent;
-            core = Mathf.Min(core, pa >= 0 ? SMin(dBone[i], dBone[pa], jointK[i]) : dBone[i]);
-        }
-        foreach (var bl in blobs)
-        {
-            if (dBone[bl.bone] > 0.12f) continue;
-            core = SMin(core, Ellipsoid(bl.f.ToLocal(p), bl.r), muscleBlend);
-        }
-        return core;
-    }
+    public float EvalMuscle(Vector3 p) => kernel.Eval(p).muscle;
 
     public int BlobCount => blobs.Count;
 
@@ -559,7 +404,7 @@ public class BodySDF
         var sb = new System.Text.StringBuilder();
         float skin = Eval(p, out int nearest, out float fat);
         sb.Append($"skin {skin:0.000} fat {fat:0.000} nearest {plan.bones[nearest].name}; ");
-        for (int i = 0; i < plan.bones.Count; i++) if (dBone[i] < 0.06f) sb.Append($"{plan.bones[i].name} {dBone[i]:0.000}, ");
+        for (int i = 0; i < plan.bones.Count; i++) { float db = kernel.BoneCore(i, p); if (db < 0.06f) sb.Append($"{plan.bones[i].name} {db:0.000}, "); }
         foreach (var bl in blobs) { float d = Ellipsoid(bl.f.ToLocal(p), bl.r); if (d < 0.03f) sb.Append($"{bl.group}@{plan.bones[bl.bone].name} {d:0.000}, "); }
         if (headIndex >= 0) foreach (var ft in headFeatures) { float d = Ellipsoid(ft.f.ToLocal(p), ft.r); if (d < 0.03f) sb.Append($"feature {d:0.000}, "); }
         return sb.ToString();

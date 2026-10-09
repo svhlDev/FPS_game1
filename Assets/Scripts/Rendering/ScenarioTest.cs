@@ -597,18 +597,30 @@ public class ScenarioTest : MonoBehaviour
         yield return null; yield return null;
         for (float t = 0f; t < 120f && lineup.MeshesBuilt < lineup.Entries.Count; t += Time.unscaledDeltaTime) yield return null;
         {
-            float mms = 0f, sdfMs = 0f; int tris = 0, maxTris = 0; float vol = 0f;
-            foreach (var (label, r, sm) in lineup.MeshStats)
+            float mms = 0f, sdfMs = 0f, maxMs = 0f; int tris = 0, maxTris = 0, raw = 0, holes = 0, nonMan = 0; float vol = 0f;
+            foreach (var (label, r) in lineup.MeshStats)
             {
-                mms += r.sampleMs + r.meshMs + sm; sdfMs += r.sampleMs; tris += r.triangles; maxTris = Mathf.Max(maxTris, r.triangles);
+                mms += r.totalMs; sdfMs += r.sampleMs; tris += r.triangles; raw += r.rawTriangles; maxTris = Mathf.Max(maxTris, r.triangles);
+                holes += r.boundaryEdges; nonMan += r.nonManifoldEdges; maxMs = Mathf.Max(maxMs, r.totalMs);
             }
+            Log("  first body: " + lineup.MeshStats[0].result);
+            Log("  heaviest (F S20 D1): " + lineup.MeshStats.Find(x => x.label == "F S20 D1").result);
+            Log("  5 arms: " + lineup.MeshStats.Find(x => x.label == "5 arms").result);
+            var bad = new System.Text.StringBuilder("  non-manifold by body: ");
+            foreach (var (label, r) in lineup.MeshStats) if (r.nonManifoldEdges > 0) bad.Append($"{label} {r.nonManifoldEdges}, ");
+            Log(bad.ToString());
+            Log("  first body non-manifold at: " + string.Join(" ", lineup.MeshStats[0].result.nonManifoldAt));
+            Log("  heaviest non-manifold at: " + string.Join(" ", lineup.MeshStats.Find(x => x.label == "F S20 D1").result.nonManifoldAt));
             // Signed volume of the first mesh: positive = triangles wound outward.
             var m0 = lineup.MeshStats[0].result.mesh;
             var vv = m0.vertices; var tt = m0.triangles;
             for (int k = 0; k < tt.Length; k += 3) vol += Vector3.Dot(vv[tt[k]], Vector3.Cross(vv[tt[k + 1]], vv[tt[k + 2]])) / 6f;
             int nm = lineup.MeshStats.Count;
-            Log($"SDF meshes: {nm} bodies at {lineup.meshCell * 100f:0.0} cm cells, {mms / nm:0} ms each (sampling {sdfMs / nm:0} ms), {tris / nm} triangles avg, {maxTris} max; first mesh volume {vol * 1000f:0.0} L");
-            Log(vol > 0f ? "PASS SDF bodies mesh closed and outward" : "FAIL mesh inside out");
+            Log($"body meshes: {nm} bodies at {lineup.meshCell * 100f:0.0} cm cells, {mms / nm:0} ms each (max {maxMs:0}; sampling {sdfMs / nm:0} ms), " +
+                $"{raw / nm} raw -> {tris / nm} triangles avg ({maxTris} max), holes {holes}, non-manifold edges {nonMan}; first mesh volume {vol * 1000f:0.0} L");
+            Log(vol > 0f ? "PASS body meshes wound outward" : "FAIL mesh inside out");
+            Log(holes == 0 && nonMan == 0 ? "PASS no holes, no non-manifold edges" : $"WARN {holes} boundary / {nonMan} non-manifold edges over {nm} bodies");
+            Log(maxTris <= lineup.meshTriangles * 1.02f ? $"PASS triangle budget ({lineup.meshTriangles})" : "FAIL over the triangle budget");
         }
         var sk = go.GetComponentsInChildren<BodySkeleton>();
         float ms = 0f; foreach (var s in sk) ms += s.GenerationMs;

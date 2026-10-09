@@ -10,7 +10,7 @@ using UnityEngine;
 //   Rows 1-3: STR 1 / 10 / 20, columns DEX 1 / 10 / 20 (male left, female right), INT 10
 //   Row 4: INT sweep 1, 5, 10, 15, 20 (male then female)
 //   Row 5: body plan rules (0, 1, 3, 4, 5 arms)
-// Phase 3: previewMeshes shows the SDF body (BodySDF, quick surface-nets mesh, A-pose) instead of the
+// previewMeshes shows the generated body mesh (BodySDF -> BodyMesher, A-pose bind pose) instead of the
 // rings: built one per frame in play mode; in the editor use the component's context menu
 // "Build preview meshes" (they draw as gizmos).
 public class BodyLineupDebug : MonoBehaviour
@@ -20,11 +20,12 @@ public class BodyLineupDebug : MonoBehaviour
     public int baseSeed = 1000;
     public bool drawGirth = true;
     public bool previewMeshes = true;
-    public float meshCell = 0.02f;
+    public float meshCell = 0.015f;
+    public int meshTriangles = 10000;
     public Color skinColor = new Color(0.82f, 0.64f, 0.52f);
     public float LastMeshMs { get; private set; }
     public int MeshesBuilt { get; private set; }
-    public readonly List<(string label, SurfaceNets.Result result, float sdfMs)> MeshStats = new List<(string, SurfaceNets.Result, float)>();
+    public readonly List<(string label, BodyMesher.Result result)> MeshStats = new List<(string, BodyMesher.Result)>();
     readonly List<(Mesh mesh, Vector3 offset)> editorMeshes = new List<(Mesh, Vector3)>();
 
     public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; }
@@ -88,8 +89,8 @@ public class BodyLineupDebug : MonoBehaviour
         var mat = CharacterFigure.Mat(skinColor);
         foreach (var e in Entries)
         {
-            var (mesh, r, sdfMs) = BuildMesh(e.plan);
-            MeshStats.Add((e.label, r, sdfMs));
+            var (mesh, r) = BuildMesh(e.plan);
+            MeshStats.Add((e.label, r));
             var go = new GameObject("Mesh " + e.label);
             go.transform.SetParent(transform, false);
             go.transform.localPosition = e.offset;
@@ -100,14 +101,12 @@ public class BodyLineupDebug : MonoBehaviour
         }
     }
 
-    public (Mesh mesh, SurfaceNets.Result r, float sdfMs) BuildMesh(BodyPlan plan)
+    public (Mesh mesh, BodyMesher.Result r) BuildMesh(BodyPlan plan)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var sdf = new BodySDF(plan);
-        float sdfMs = (float)sw.Elapsed.TotalMilliseconds;
-        var r = SurfaceNets.Build(sdf.Eval, sdf.bounds, meshCell);
-        LastMeshMs = sdfMs + r.sampleMs + r.meshMs;
-        return (r.mesh, r, sdfMs);
+        using var sdf = new BodySDF(plan);
+        var r = BodyMesher.Build(sdf, new BodyMesher.Settings { cell = meshCell, targetTriangles = meshTriangles });
+        LastMeshMs = r.totalMs;
+        return (r.mesh, r);
     }
 
     [ContextMenu("Build preview meshes")]
