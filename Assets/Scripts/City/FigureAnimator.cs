@@ -78,6 +78,7 @@ public class FigureAnimator : MonoBehaviour
 
     void LateUpdate()
     {
+        if (Figure == null) Figure = GetComponent<CharacterFigure>();
         var f = Figure;
         if (f == null || f.Hips == null) return;
         float dt = Time.deltaTime;

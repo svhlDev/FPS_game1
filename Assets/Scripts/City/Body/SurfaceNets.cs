@@ -118,6 +118,8 @@ public static class SurfaceNets
     }
 
     public static int LastPasses;
+    // Build the lookup table up front (on the main thread) before extracting on worker threads.
+    public static void Init() => ambiguous ??= AmbiguousTable();
     static int ResolveAmbiguous(float[] v, int nx, int ny, int nz)
     {
         ambiguous ??= AmbiguousTable();

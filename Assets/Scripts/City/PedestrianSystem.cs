@@ -11,7 +11,10 @@ using UnityEngine;
 //       danger (gunfire, a crash) within dangerRadius -> flee; an officer within 2 m -> step aside;
 //       the player on a car roof within 40 m -> stop and look up for a moment.
 //   Far tier: no GameObject, positions advanced along the path, drawn as one combined slab-and-head
-//     mesh with RenderMeshInstanced (one batch).
+//     mesh with RenderMeshInstanced (one batch), scaled per pedestrian to its generated body's height
+//     and width so promotion doesn't pop.
+//   Bodies: each pedestrian has a seed; promotion assembles the pooled generated body for it
+//     (BodyPool.Civilian), or the primitive figure while the pool is still filling.
 //   Promotion at nearRadius, demotion at farRadius (hysteresis).
 // The near tier is the crowd for blending in (NearAgents).
 [DefaultExecutionOrder(120)]
@@ -49,6 +52,8 @@ public class PedestrianSystem : MonoBehaviour
         internal FigureAnimator anim;
         internal float bob, vy, lastStare;
         internal bool downLethal;
+        public int seed;
+        internal BodyAsset body;   // cached once the pool is full
         public bool IsNear => near != null;
     }
 
@@ -196,6 +201,8 @@ public class PedestrianSystem : MonoBehaviour
     void Place(Ped p, int node, System.Random rng)
     {
         p.pos = graph.positions[node];
+        p.seed = rng.Next();
+        p.body = null;
         p.speed = Mathf.Lerp(walkSpeed.x, walkSpeed.y, (float)rng.NextDouble());
         p.lane = (float)rng.NextDouble() * 2f - 1f;
         p.state = State.Walking;
@@ -261,6 +268,7 @@ public class PedestrianSystem : MonoBehaviour
         p.near = t;
         p.cc = t.GetComponent<CharacterController>();
         p.anim = t.GetComponent<FigureAnimator>();
+        Dress(p, t);
         p.vy = 0f;
         nearList.Add(p);
     }
@@ -270,8 +278,55 @@ public class PedestrianSystem : MonoBehaviour
         if (p.near == null) return;
         p.near.gameObject.SetActive(false);
         pool.Push(p.near);
+        if (p.near.GetComponent<CharacterFigure>()?.Generated == true) GeneratedNear--;
         p.near = null; p.cc = null; p.anim = null;
         nearList.Remove(p);
+    }
+
+    // The pedestrian's own body on the pooled agent object: the generated one for its seed (rebuilt only
+    // when the agent last wore another body; clothes recoloured either way), else the primitive figure.
+    void Dress(Ped p, Transform t)
+    {
+        var fig = t.GetComponent<CharacterFigure>();
+        var asset = BodyAsset(p);
+        if (asset != null)
+        {
+            if (fig == null || fig.Asset != asset) fig = CharacterFigure.Assemble(t, asset, CharacterFigure.Role.Civilian, false, false, p.seed);
+            else fig.Renderers[0].sharedMaterials = BodyMaterials.Clothes(CharacterFigure.Role.Civilian, p.seed, fig.HeadRenderer.sharedMaterial);
+        }
+        else if (fig == null || fig.Generated)
+            fig = CharacterFigure.Build(t, CharacterFigure.Role.Civilian, rand, CharacterFigure.DefaultHeight, false, false);
+        p.cc.height = fig.Height;
+        p.cc.center = new Vector3(0f, fig.Height * 0.5f, 0f);
+        GeneratedNear += fig.Generated ? 1 : 0;
+    }
+
+    BodyAsset BodyAsset(Ped p)
+    {
+        if (p.body != null) return p.body;
+        var a = global::BodyPool.Civilian(p.seed);
+        var pool = global::BodyPool.Instance;
+        if (a != null && pool != null && !pool.Filling) p.body = a; // stable once the pool is full
+        return a;
+    }
+
+    public int GeneratedNear { get; private set; }
+
+    // Far-tier scale from the body (the far mesh is 1.5 m tall, its torso 0.30 m wide).
+    Vector3 FarScale(Ped p)
+    {
+        var a = BodyAsset(p);
+        if (a == null) return Vector3.one;
+        float w = Mathf.Clamp(a.width / 0.30f, 0.6f, 2.5f);
+        return new Vector3(w, a.height / CharacterFigure.DefaultHeight, w);
+    }
+    public Vector3 DebugFarScale(Ped p) => FarScale(p);
+
+    // Test hook: demote the whole near tier (it re-promotes, re-dressed, next frame).
+    public void DebugRedress()
+    {
+        foreach (var p in new List<Ped>(nearList)) Demote(p);
+        GeneratedNear = 0;
     }
 
     Transform CreateAgentObject()
@@ -365,7 +420,7 @@ public class PedestrianSystem : MonoBehaviour
                 }
                 if (want.sqrMagnitude > 0.01f) p.yaw = Mathf.Atan2(want.x, want.z) * Mathf.Rad2Deg;
                 var rot = Quaternion.Euler(0f, p.yaw, 0f);
-                bodyMatrices.Add(Matrix4x4.TRS(p.pos, rot, Vector3.one));
+                bodyMatrices.Add(Matrix4x4.TRS(p.pos, rot, FarScale(p)));
             }
         }
     }

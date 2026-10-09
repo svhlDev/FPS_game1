@@ -27,7 +27,7 @@ public static class BodySkinner
     }
 
     [BurstCompile]
-    struct WeightJob : IJobParallelFor
+    internal struct WeightJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<Vector3> positions;

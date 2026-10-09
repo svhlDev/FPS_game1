@@ -73,7 +73,8 @@ public class CharacterFigure : MonoBehaviour
     public static CharacterFigure Build(Transform root, Role role, System.Random rng = null, float height = DefaultHeight,
                                        bool shadows = false, bool hitColliders = true)
     {
-        var f = root.gameObject.AddComponent<CharacterFigure>();
+        var f = root.GetComponent<CharacterFigure>();
+        if (f != null) f.Teardown(); else f = root.gameObject.AddComponent<CharacterFigure>();
         f.Height = height;
         float s = height / DefaultHeight;
         var look = Palette(role, rng);
@@ -133,22 +134,38 @@ public class CharacterFigure : MonoBehaviour
         return f;
     }
 
-    // ---------- generated body (phases 1-5) ----------
+    // ---------- generated body (character generation phases 1-8) ----------
 
     public class GenerationStats { public float meshMs, skinMs, totalMs; public int triangles, vertices; public BodyMesher.Result mesh; }
 
-    // A body generated from a character sheet: the BodySkeleton joints (same names as the primitive
-    // figure, plus Chest), the SDF mesh skinned to them (body + head renderers) and per-bone hit
-    // colliders sized from the generated proportions.
+    public BodyAsset Asset { get; private set; }
+
+    // Generate a body for this sheet right now (blocking; the pool generates without blocking) and
+    // assemble it.
     public static CharacterFigure BuildGenerated(Transform root, CharacterSheet sheet, Role role, bool shadows = false, bool hitColliders = true,
                                                  GenerationStats stats = null, ISpeciesTemplate template = null)
     {
-        var total = System.Diagnostics.Stopwatch.StartNew();
-        var plan = BodyPlanner.Generate(sheet, null, template);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var asset = new BodyBuild(sheet, template).RunSync();
+        float genMs = (float)sw.Elapsed.TotalMilliseconds;
+        var f = Assemble(root, asset, role, shadows, hitColliders, sheet.seed);
+        if (stats != null) { stats.meshMs = genMs; stats.triangles = asset.triangles; stats.totalMs = (float)sw.Elapsed.TotalMilliseconds; stats.skinMs = stats.totalMs - genMs; }
+        return f;
+    }
+
+    // A character from a (shared) generated body: the BodySkeleton joints (same names as the primitive
+    // figure, plus Chest), the body and head meshes skinned to them (clothing-region materials by role,
+    // skin tone from the body's seed), eyeballs, and per-bone hit colliders. Reuses (tears down) a figure
+    // already on root.
+    public static CharacterFigure Assemble(Transform root, BodyAsset a, Role role, bool shadows = false, bool hitColliders = true, int colorSeed = 0)
+    {
+        var f = root.GetComponent<CharacterFigure>();
+        if (f != null) f.Teardown(); else f = root.gameObject.AddComponent<CharacterFigure>();
+        var plan = a.plan;
         var sk = BodySkeleton.Build(root, plan);
-        var f = root.gameObject.AddComponent<CharacterFigure>();
         f.Generated = true;
         f.Plan = plan;
+        f.Asset = a;
         f.Height = plan.height;
         f.Hips = sk.Hips; f.Spine = sk.Spine; f.Chest = sk.Chest; f.Neck = sk.Neck;
         f.ShoulderL = sk.ShoulderL; f.ShoulderR = sk.ShoulderR; f.ElbowL = sk.ElbowL; f.ElbowR = sk.ElbowR;
@@ -160,117 +177,123 @@ public class CharacterFigure : MonoBehaviour
                 f.ExtraArms.Add((sk.Bones[arm.root].joint, sk.Bones[arm.mid].joint, sk.Bones[arm.end].joint, arm.side));
         int layer = root.gameObject.layer;
 
-        Mesh body, head;
-        float meshMs, skinMs;
-        using (var sdf = new BodySDF(plan))
-        {
-            var r = BodyMesher.Build(sdf);
-            meshMs = r.totalMs;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var weights = BodySkinner.Weights(sdf, r.mesh);
-            (body, head) = BodySkinner.Split(r.mesh, weights, BodySkinner.BindPoses(sdf));
-            skinMs = (float)sw.Elapsed.TotalMilliseconds;
-            // Head centre (camera anchor) and the eyes in front of it.
-            int hi = plan.Index("Head");
-            var hb = plan.bones[hi];
-            var centre = new GameObject("HeadCentre").transform;
-            centre.SetParent(sk.Head, false);
-            centre.localPosition = Vector3.up * hb.length * 0.5f;
-            f.Head = centre;
-            Vector3 headCentreRoot = sdf.start[hi] + Vector3.up * hb.length * 0.5f;
-            f.eyeForward = Mathf.Max(0.02f, (sdf.EyeL.z + sdf.EyeR.z) * 0.5f - headCentreRoot.z);
-            f.eyeHeight = (sdf.EyeL.y + sdf.EyeR.y) * 0.5f;
-            f.eyeFromNeck = (sdf.EyeL + sdf.EyeR) * 0.5f - sdf.start[plan.Index("Neck")];
-            // Eyeballs in the carved sockets, on the head joint (they turn with the head; EyeLook aims them).
-            var rules = BodyRules.Default;
-            float er = sdf.EyeRadius * rules.eyeballScale;
-            var irisCol = BodyMaterials.IrisColors[new PcgRandom(sheet.seed, "iris").Range(0, BodyMaterials.IrisColors.Length)];
-            var irisMat = BodyMaterials.Iris(irisCol, plan.dna != null ? plan.dna.eyeGlow : 0f);
-            Transform Eye(string name, Vector3 centre)
-            {
-                var e = new GameObject(name).transform;
-                e.SetParent(sk.Head, false);
-                e.localPosition = centre - sdf.start[hi] - Vector3.forward * sdf.EyeRadius * 0.15f;
-                e.gameObject.layer = layer;
-                var ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Destroy(ball.GetComponent<Collider>());
-                ball.name = "Sclera"; ball.layer = layer;
-                ball.transform.SetParent(e, false);
-                ball.transform.localScale = Vector3.one * er * 2f;
-                var br = ball.GetComponent<Renderer>(); br.sharedMaterial = BodyMaterials.Sclera();
-                br.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                var iris = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Destroy(iris.GetComponent<Collider>());
-                iris.name = "Iris"; iris.layer = layer;
-                iris.transform.SetParent(e, false);
-                iris.transform.localPosition = Vector3.forward * er * 0.82f;
-                iris.transform.localScale = new Vector3(er * 1.05f, er * 1.05f, er * 0.4f);
-                var ir = iris.GetComponent<Renderer>(); ir.sharedMaterial = irisMat;
-                ir.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                f.FaceRenderers.Add(br); f.FaceRenderers.Add(ir);
-                return e;
-            }
-            f.EyeL = Eye("EyeL", sdf.EyeL);
-            f.EyeR = Eye("EyeR", sdf.EyeR);
-            if (stats != null) { stats.mesh = r; stats.triangles = r.triangles; stats.vertices = r.vertices; }
-            Object.Destroy(r.mesh);
-        }
+        // Head centre (camera anchor), the eyes in front of it; the head isn't posed in the bind pose,
+        // so rest positions apply.
+        int hi = plan.Index("Head");
+        var hb = plan.bones[hi];
+        Vector3 headStart = plan.JointPos(hi);
+        var centre = new GameObject("HeadCentre").transform;
+        centre.SetParent(sk.Head, false);
+        centre.localPosition = Vector3.up * hb.length * 0.5f;
+        f.Head = centre;
+        Vector3 headCentreRoot = headStart + Vector3.up * hb.length * 0.5f;
+        Vector3 eyeMid = (a.eyeL + a.eyeR) * 0.5f;
+        f.eyeForward = Mathf.Max(0.02f, eyeMid.z - headCentreRoot.z);
+        f.eyeHeight = eyeMid.y;
+        f.eyeFromNeck = eyeMid - plan.JointPos(plan.Index("Neck"));
         f.hipHeight = plan.bones[plan.Index("Hips")].localPos.y;
         f.armLength = plan.bones[plan.Index("ShoulderL")].length + plan.bones[plan.Index("ElbowL")].length + plan.bones[plan.Index("WristL")].length;
 
+        // Renderers (meshes shared by every character using this body).
         var bones = new Transform[sk.Bones.Count];
         for (int i = 0; i < bones.Length; i++) bones[i] = sk.Bones[i].joint;
-        var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(sheet.seed));
-        var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", body, bones, sk.Hips, skin, shadows);
-        var headR = BodySkinner.AddRenderer(root, "HeadMesh", head, bones, sk.Hips, skin, shadows);
+        var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed));
+        var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", a.body, bones, sk.Hips, skin, shadows);
+        bodyR.sharedMaterials = BodyMaterials.Clothes(role, colorSeed, skin);
+        var headR = BodySkinner.AddRenderer(root, "HeadMesh", a.head, bones, sk.Hips, skin, shadows);
         f.Renderers.Add(bodyR); f.Renderers.Add(headR);
         f.HeadRenderer = headR;
-        f.FaceRenderers.Insert(0, headR);
+        f.FaceRenderers.Add(headR);
+
+        // Eyeballs in the carved sockets, on the head joint (they turn with the head; EyeLook aims them).
+        var rules = BodyRules.Default;
+        float er = a.eyeRadius * rules.eyeballScale;
+        var irisCol = BodyMaterials.IrisColors[new PcgRandom(a.sheet.seed, "iris").Range(0, BodyMaterials.IrisColors.Length)];
+        var irisMat = BodyMaterials.Iris(irisCol, plan.dna != null ? plan.dna.eyeGlow : 0f);
+        Transform Eye(string name, Vector3 c)
+        {
+            var e = new GameObject(name).transform;
+            e.SetParent(sk.Head, false);
+            e.localPosition = c - headStart - Vector3.forward * a.eyeRadius * 0.15f;
+            e.gameObject.layer = layer;
+            Renderer Ball(string n, Vector3 lp, Vector3 scale, Material m)
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                Destroy(go.GetComponent<Collider>());
+                go.name = n; go.layer = layer;
+                go.transform.SetParent(e, false);
+                go.transform.localPosition = lp;
+                go.transform.localScale = scale;
+                var r = go.GetComponent<Renderer>(); r.sharedMaterial = m;
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                f.FaceRenderers.Add(r);
+                return r;
+            }
+            Ball("Sclera", Vector3.zero, Vector3.one * er * 2f, BodyMaterials.Sclera());
+            Ball("Iris", Vector3.forward * er * 0.82f, new Vector3(er * 1.05f, er * 1.05f, er * 0.4f), irisMat);
+            return e;
+        }
+        f.EyeL = Eye("EyeL", a.eyeL);
+        f.EyeR = Eye("EyeR", a.eyeR);
         var look = root.gameObject.AddComponent<EyeLook>();
         look.eyeL = f.EyeL; look.eyeR = f.EyeR;
 
         // Hit colliders per bone (triggers tagged with their location), from the generated girths.
-        for (int i = 0; i < plan.bones.Count; i++)
-        {
-            var b = plan.bones[i];
-            var go = new GameObject("Hit" + b.name);
-            go.layer = layer;
-            go.transform.SetParent(sk.Bones[i].joint, false);
-            float r = Mathf.Max(b.Outer.x, Mathf.Max(b.Outer.y, b.Outer.z));
-            Vector3 mid = b.dir * b.length * 0.5f;
-            if (b.kind == BoneKind.Head)
-            {
-                var c = go.AddComponent<SphereCollider>(); c.center = mid; c.radius = Mathf.Max(r, b.length * 0.5f);
-            }
-            else if (b.kind == BoneKind.Hand || b.kind == BoneKind.Foot)
-            {
-                var c = go.AddComponent<BoxCollider>(); c.center = mid;
-                c.size = b.kind == BoneKind.Hand ? new Vector3(r * 2.4f, b.length, r * 1.6f) : new Vector3(r * 2.2f, r * 2f, b.length * 1.3f);
-                if (b.kind == BoneKind.Foot) { go.transform.localRotation = Quaternion.FromToRotation(Vector3.forward, b.dir); c.center = Vector3.forward * b.length * 0.5f; }
-            }
-            else if (b.kind == BoneKind.Pelvis || b.kind == BoneKind.Lumbar || b.kind == BoneKind.Chest)
-            {
-                var c = go.AddComponent<BoxCollider>(); c.center = mid;
-                c.size = new Vector3(r * 2f, b.length, r * 1.4f);
-            }
-            else
-            {
-                var c = go.AddComponent<CapsuleCollider>(); c.direction = 1; c.center = mid; c.radius = r; c.height = b.length + r * 2f;
-            }
-            var col = go.GetComponent<Collider>();
-            col.isTrigger = true;
-            go.AddComponent<BodyPart>().location = b.location;
-        }
         if (hitColliders)
         {
+            for (int i = 0; i < plan.bones.Count; i++)
+            {
+                var b = plan.bones[i];
+                var go = new GameObject("Hit" + b.name);
+                go.layer = layer;
+                go.transform.SetParent(sk.Bones[i].joint, false);
+                float r = Mathf.Max(b.Outer.x, Mathf.Max(b.Outer.y, b.Outer.z));
+                Vector3 mid = b.dir * b.length * 0.5f;
+                if (b.kind == BoneKind.Head)
+                {
+                    var c = go.AddComponent<SphereCollider>(); c.center = mid; c.radius = Mathf.Max(r, b.length * 0.5f);
+                }
+                else if (b.kind == BoneKind.Hand || b.kind == BoneKind.Foot)
+                {
+                    var c = go.AddComponent<BoxCollider>(); c.center = mid;
+                    c.size = b.kind == BoneKind.Hand ? new Vector3(r * 2.4f, b.length, r * 1.6f) : new Vector3(r * 2.2f, r * 2f, b.length * 1.3f);
+                    if (b.kind == BoneKind.Foot) { go.transform.localRotation = Quaternion.FromToRotation(Vector3.forward, b.dir); c.center = Vector3.forward * b.length * 0.5f; }
+                }
+                else if (b.kind == BoneKind.Pelvis || b.kind == BoneKind.Lumbar || b.kind == BoneKind.Chest)
+                {
+                    var c = go.AddComponent<BoxCollider>(); c.center = mid; c.size = new Vector3(r * 2f, b.length, r * 1.4f);
+                }
+                else
+                {
+                    var c = go.AddComponent<CapsuleCollider>(); c.direction = 1; c.center = mid; c.radius = r; c.height = b.length + r * 2f;
+                }
+                go.GetComponent<Collider>().isTrigger = true;
+                go.AddComponent<BodyPart>().location = b.location;
+            }
             var rb = f.Hips.gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = true;
             rb.useGravity = false;
         }
-        else
-            foreach (var c in f.Hips.GetComponentsInChildren<Collider>(true)) Destroy(c);
-        if (stats != null) { stats.meshMs = meshMs; stats.skinMs = skinMs; stats.totalMs = (float)total.Elapsed.TotalMilliseconds; }
         return f;
+    }
+
+    // Remove everything a Build / Assemble added (joints, parts, renderers, eyes, colliders), so the
+    // figure can be rebuilt in place (pooled pedestrians, the player changing stats). Anything else
+    // parented into the skeleton (a held gun) must be moved off first.
+    public void Teardown()
+    {
+        var sk = GetComponent<BodySkeleton>(); if (sk != null) DestroyImmediate(sk);
+        var el = GetComponent<EyeLook>(); if (el != null) DestroyImmediate(el);
+        foreach (var r in Renderers)
+            if (r != null && r.transform.parent == transform) DestroyImmediate(r.gameObject); // skinned renderers on the root
+        if (Hips != null) DestroyImmediate(Hips.gameObject);
+        Renderers.Clear(); FaceRenderers.Clear(); ExtraArms.Clear();
+        Hips = Spine = Chest = Neck = Head = HeadJoint = null;
+        ShoulderL = ShoulderR = ElbowL = ElbowR = WristL = WristR = HandL = HandR = null;
+        HipL = HipR = KneeL = KneeR = AnkleL = AnkleR = null;
+        EyeL = EyeR = null; HeadRenderer = null;
+        eyeForward = eyeHeight = hipHeight = armLength = -1f; eyeFromNeck = null;
+        Generated = false; Plan = null; Asset = null;
     }
 
     static Transform Joint(string name, Transform parent, Vector3 localPos)

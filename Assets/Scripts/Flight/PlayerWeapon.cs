@@ -80,6 +80,15 @@ public class PlayerWeapon : MonoBehaviour
         Gun.transform.localRotation = Quaternion.Euler(90f, 0f, 0f); // barrel down
     }
 
+    // The body is about to be rebuilt (new stats): park the gun on the root, then put it back.
+    public void DetachGun() { if (Gun != null) Gun.transform.SetParent(transform, true); }
+    public void ReattachGun()
+    {
+        if (Gun == null) return;
+        if (Drawn) { arm.Begin(fpc.Figure); ArmAim.Attach(Gun, fpc.Figure); }
+        else Holster();
+    }
+
     public void ToggleMode()
     {
         if (Gun == null) return;

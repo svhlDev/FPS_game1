@@ -56,6 +56,7 @@ public class ScenarioTest : MonoBehaviour
             case "skin": yield return SkinTest(); break;
             case "anim": yield return AnimTest(); break;
             case "face": yield return FaceTest(); break;
+            case "pool": yield return PoolTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -463,6 +464,123 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- generated bodies: phase 8 (pool, async, LOD, perf) ----------
+
+    IEnumerator PoolTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = -1;
+        var pool = BodyPool.Ensure();
+        var fpc = FirstPersonController.Instance;
+        var ps = PedestrianSystem.Instance;
+
+        // 1. The pool fills in the background: progress and frame times while it does.
+        var fillFrames = new List<float>();
+        float t = 0f, nextLog = 0f;
+        while (pool.Filling && t < 240f)
+        {
+            yield return null;
+            t += Time.unscaledDeltaTime;
+            fillFrames.Add(Time.unscaledDeltaTime * 1000f);
+            if (t >= nextLog) { Log($"  pool {pool.Ready}/{pool.Total} after {t:0} s"); nextLog += 10f; }
+        }
+        fillFrames.Sort();
+        float Avg(List<float> l) { float x = 0f; foreach (var v in l) x += v; return l.Count > 0 ? x / l.Count : 0f; }
+        float Pct(List<float> l, float q) => l.Count > 0 ? l[Mathf.Clamp((int)(l.Count * q), 0, l.Count - 1)] : 0f;
+        var wall = new List<float>(pool.WallMs); var main = new List<float>(pool.MainMs); wall.Sort(); main.Sort();
+        float tri = 0f; foreach (var x in pool.Triangles) tri += x; tri /= Mathf.Max(1, pool.Triangles.Count);
+        Log($"pool filled: {pool.Ready}/{pool.Total} bodies in {pool.FillSeconds:0.0} s ({pool.Failed} failed), {pool.maxInFlight} in flight; " +
+            $"per body {Avg(wall):0} ms start-to-finish (median {Pct(wall, 0.5f):0}), main thread {Avg(main):0.0} ms (max {Pct(main, 1f):0.0}), {tri:0} triangles");
+        Log($"frames while filling: avg {Avg(fillFrames):0.0} ms, p95 {Pct(fillFrames, 0.95f):0.0} ms, worst {Pct(fillFrames, 1f):0.0} ms; pool's own main-thread step worst {pool.WorstStepMs:0.0} ms");
+        Log("  main-thread ms per stage (worst body): " + string.Join(", ", System.Linq.Enumerable.Select(System.Linq.Enumerable.Range(0, 8), i => $"{(BodyBuild.Stage)i} {pool.StageMaxMs[i]:0.0}")));
+        Log(pool.Ready == pool.Total ? "PASS the pool fills in the background" : "FAIL pool incomplete");
+        Log(Pct(main, 1f) < 25f ? "PASS generation stays off the main thread (only start and upload run there)" : "WARN a body spent long on the main thread");
+
+        // 2. The crowd: the player in the street, the near tier re-dressed from the pool.
+        fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.Euler(0f, 180f, 0f));
+        fpc.DebugLook(5f, 180f);
+        yield return new WaitForSeconds(1f);
+        ps.DebugRedress();
+        yield return new WaitForSeconds(3f);
+        int near = ps.NearAgents.Count, gen = 0;
+        foreach (var p in ps.NearAgents) if (p.near != null && p.near.GetComponent<CharacterFigure>().Generated) gen++;
+        IEnumerator Measure(List<float> into, float seconds)
+        {
+            for (float m = 0f; m < seconds; m += Time.unscaledDeltaTime) { yield return null; into.Add(Time.unscaledDeltaTime * 1000f); }
+            into.Sort();
+        }
+        var genFrames = new List<float>();
+        yield return Measure(genFrames, 15f);
+        Log($"crowd with generated bodies: {near} near pedestrians ({gen} generated, ~{gen * tri / 1000f:0}k skinned triangles), {ps.FarDrawn} far; " +
+            $"frame avg {Avg(genFrames):0.0} ms, p95 {Pct(genFrames, 0.95f):0.0}, worst {Pct(genFrames, 1f):0.0}");
+        Log(gen >= near * 0.9f && near > 0 ? "PASS near pedestrians wear pooled generated bodies" : "FAIL near tier not generated");
+        fpc.zoom.Snap(0.7f);
+        fpc.DebugLook(12f, 180f);
+        yield return new WaitForSeconds(0.6f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "pool_crowd.png"));
+        yield return null; yield return null;
+        fpc.zoom.Snap(0f);
+        fpc.DebugLook(5f, 180f);
+
+        // Far tier scale: a far pedestrian's instance matches its body.
+        foreach (var p in ps.All)
+        {
+            if (p.near != null || p.state == PedestrianSystem.State.Gone) continue;
+            var sc = ps.DebugFarScale(p);
+            var a = BodyPool.Civilian(p.seed);
+            if (a == null) continue;
+            Log($"far tier: instance scale {sc}, far mesh height {1.5f * sc.y:0.00} m vs the body's {a.height:0.00} m, width {0.30f * sc.x:0.00} vs {a.width:0.00} m");
+            Log(Mathf.Abs(1.5f * sc.y - a.height) < 0.01f ? "PASS far tier sized from the body's DNA (no pop on promotion)" : "FAIL far scale");
+            break;
+        }
+
+        // Same crowd on the primitive figures, for comparison.
+        BodyPool.Enabled = false;
+        ps.DebugRedress();
+        yield return new WaitForSeconds(3f);
+        var primFrames = new List<float>();
+        yield return Measure(primFrames, 15f);
+        Log($"same crowd on primitive figures: {ps.NearAgents.Count} near; frame avg {Avg(primFrames):0.0} ms, p95 {Pct(primFrames, 0.95f):0.0}, worst {Pct(primFrames, 1f):0.0}");
+        BodyPool.Enabled = true;
+        ps.DebugRedress();
+        yield return new WaitForSeconds(1f);
+
+        // 3. Officers from the officers' sub-pool.
+        PoliceDriver unit = null;
+        foreach (var u in PoliceDispatch.Units) if (u != null && u.isActiveAndEnabled) { unit = u; break; }
+        if (unit != null)
+        {
+            var o = OfficerAgent.SpawnFrom(unit, 0f);
+            var of = o.GetComponent<CharacterFigure>();
+            Log($"officer: generated {of.Generated}, sheet {of.Asset?.sheet}, uniform '{of.Renderers[0].sharedMaterials[0].name}'");
+            Log(of.Generated && of.Asset.sheet.seed >= 50000 ? "PASS officers draw from the officer sub-pool" : "FAIL officer body");
+            Destroy(o.gameObject);
+        }
+
+        // 4. The player's stats change: a new body, generated in the background, swapped in.
+        float h0 = fpc.Figure.Height;
+        var swapFrames = new List<float>();
+        fpc.SetSheet(new CharacterSheet(Sex.Male, 20, 12, 3, 77));
+        float waited = 0f;
+        while (fpc.BodyPending && waited < 20f) { yield return null; waited += Time.unscaledDeltaTime; swapFrames.Add(Time.unscaledDeltaTime * 1000f); }
+        for (int k = 0; k < 5; k++) { yield return null; swapFrames.Add(Time.unscaledDeltaTime * 1000f); }
+        swapFrames.Sort();
+        Log($"player stats changed: body {h0:0.00} m -> {fpc.Figure.Height:0.00} m in {waited:0.00} s, generated {fpc.Figure.Generated}; worst frame meanwhile {Pct(swapFrames, 1f):0.0} ms");
+        Log(!fpc.BodyPending && Mathf.Abs(fpc.Figure.Height - h0) > 0.05f ? "PASS the player's body regenerates async and swaps in" : "FAIL player swap");
+        var w = fpc.GetComponent<PlayerWeapon>();
+        w.Draw();
+        yield return new WaitForSeconds(0.6f);
+        Log($"  after the swap the gun is on {w.Gun.transform.parent.name}, aiming {w.Aiming}");
+        w.Holster();
+        fpc.zoom.Snap(0.6f);
+        fpc.DebugLook(15f, 20f);
+        yield return new WaitForSeconds(0.6f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "pool_player_swapped.png"));
+        yield return null; yield return null;
+        fpc.zoom.Snap(0f);
     }
 
     // ---------- generated bodies: phase 7 (eyes, INT glow, skin) ----------

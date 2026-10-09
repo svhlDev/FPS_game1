@@ -44,6 +44,8 @@ public class NpcBody : MonoBehaviour
     }
 
     // The full shared figure (police blue or civilian colours), posed by FigureAnimator.
+    static int spawnSeed;
+
     static NpcBody Spawn(Vector3 pos, Quaternion rot, CharacterFigure.Role role)
     {
         var go = new GameObject("NpcBody");
@@ -54,7 +56,11 @@ public class NpcBody : MonoBehaviour
         float h = CharacterFigure.DefaultHeight;
         cc.height = h; cc.radius = 0.2f; cc.center = new Vector3(0f, h * 0.5f, 0f);
         cc.minMoveDistance = 0f;
-        var fig = CharacterFigure.Build(go.transform, role);
+        int seed = ++spawnSeed;
+        var asset = role == CharacterFigure.Role.Police ? BodyPool.Officer(seed) : BodyPool.Civilian(seed * 7919);
+        var fig = asset != null ? CharacterFigure.Assemble(go.transform, asset, role, false, true, seed)
+                                : CharacterFigure.Build(go.transform, role);
+        cc.height = fig.Height; cc.center = new Vector3(0f, fig.Height * 0.5f, 0f);
         var npc = go.AddComponent<NpcBody>();
         npc.anim = go.AddComponent<FigureAnimator>();
         Flammable.Add(go, Flammable.Kind.Character);

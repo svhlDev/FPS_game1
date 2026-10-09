@@ -96,6 +96,8 @@ public class OfficerAgent : MonoBehaviour
         return o;
     }
 
+    static int spawnSeed;
+
     static OfficerAgent Create(Vector3 pos, Quaternion rot, PoliceDriver home)
     {
         var go = new GameObject("Officer");
@@ -108,7 +110,11 @@ public class OfficerAgent : MonoBehaviour
         cc.minMoveDistance = 0f;
 
         // The figure's hit colliders (BodyPart triggers on the Player layer) are what punches hit.
-        var fig = CharacterFigure.Build(go.transform, CharacterFigure.Role.Police);
+        // A pooled generated body (officers' sub-pool), or the primitive figure while it fills.
+        var asset = BodyPool.Officer(++spawnSeed);
+        var fig = asset != null ? CharacterFigure.Assemble(go.transform, asset, CharacterFigure.Role.Police, false, true, spawnSeed)
+                                : CharacterFigure.Build(go.transform, CharacterFigure.Role.Police);
+        cc.height = fig.Height; cc.center = new Vector3(0f, fig.Height * 0.5f, 0f);
         go.AddComponent<FigureAnimator>();
         Flammable.Add(go, Flammable.Kind.Character);
         var board = GameObject.CreatePrimitive(PrimitiveType.Cube);

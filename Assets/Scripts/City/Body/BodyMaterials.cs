@@ -46,6 +46,25 @@ public static class BodyMaterials
         return m;
     }
 
+    // Placeholder clothing by role (clothing proper is a later doc): body submeshes shirt, pants, skin,
+    // shoes. Civilians: muted seed colours; police: navy uniform; the player: light shirt, dark pants.
+    static readonly Color[] Shirts = { new Color(0.32f, 0.3f, 0.34f), new Color(0.38f, 0.26f, 0.24f), new Color(0.22f, 0.3f, 0.32f), new Color(0.4f, 0.37f, 0.3f), new Color(0.26f, 0.27f, 0.36f), new Color(0.3f, 0.33f, 0.26f), new Color(0.45f, 0.42f, 0.4f) };
+    static readonly Color[] PantsColors = { new Color(0.14f, 0.14f, 0.16f), new Color(0.2f, 0.19f, 0.17f), new Color(0.16f, 0.18f, 0.22f), new Color(0.24f, 0.22f, 0.2f) };
+
+    public static Material[] Clothes(CharacterFigure.Role role, int seed, Material skin)
+    {
+        Color shirt, pants, shoes = new Color(0.07f, 0.07f, 0.08f);
+        switch (role)
+        {
+            case CharacterFigure.Role.Police: shirt = new Color(0.06f, 0.1f, 0.3f); pants = new Color(0.04f, 0.06f, 0.16f); shoes = new Color(0.03f, 0.03f, 0.03f); break;
+            case CharacterFigure.Role.Player: shirt = new Color(0.78f, 0.78f, 0.8f); pants = new Color(0.22f, 0.23f, 0.26f); break;
+            default:
+                var r = new PcgRandom(seed, "clothes");
+                shirt = Shirts[r.Range(0, Shirts.Length)]; pants = PantsColors[r.Range(0, PantsColors.Length)]; break;
+        }
+        return new[] { CharacterFigure.Mat(shirt), CharacterFigure.Mat(pants), skin, CharacterFigure.Mat(shoes) };
+    }
+
     public static Material Sclera()
     {
         if (sclera != null) return sclera;

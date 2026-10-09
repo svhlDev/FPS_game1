@@ -52,10 +52,12 @@ public class PerfProbe : MonoBehaviour
         var args = System.Environment.GetCommandLineArgs();
         bool on = false;
         string label = "run";
+        float warmupArg = -1f;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "-perfprobe") on = true;
             if (args[i] == "-perflabel" && i + 1 < args.Length) label = args[i + 1];
+            if (args[i] == "-perfwarmup" && i + 1 < args.Length && float.TryParse(args[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float w)) warmupArg = w;
         }
         if (!on) return;
         Application.runInBackground = true; // keep measuring when the window loses focus
@@ -64,6 +66,7 @@ public class PerfProbe : MonoBehaviour
             foreach (var c in Camera.allCameras) c.useOcclusionCulling = false;
         var probe = new GameObject("PerfProbe").AddComponent<PerfProbe>();
         probe.label = label;
+        if (warmupArg >= 0f) probe.warmup = warmupArg; // -perfwarmup N: e.g. let the body pool fill first
     }
 
     void Start()

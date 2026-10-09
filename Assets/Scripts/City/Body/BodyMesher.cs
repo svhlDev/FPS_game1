@@ -44,7 +44,7 @@ public static class BodyMesher
     const int C = 4; // coarse step in cells
 
     [BurstCompile]
-    struct CoarseJob : IJobParallelFor
+    internal struct CoarseJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         public Vector3 min;
@@ -59,7 +59,7 @@ public static class BodyMesher
     }
 
     [BurstCompile]
-    struct FineJob : IJobParallelFor
+    internal struct FineJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<float> coarse;
@@ -86,7 +86,7 @@ public static class BodyMesher
 
     // Newton steps onto the surface: p -= n * d.
     [BurstCompile]
-    struct ProjectJob : IJobParallelFor
+    internal struct ProjectJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         public NativeArray<Vector3> positions;
@@ -107,7 +107,7 @@ public static class BodyMesher
     }
 
     [BurstCompile]
-    struct AttribJob : IJobParallelFor
+    internal struct AttribJob : IJobParallelFor
     {
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<Vector3> positions;
@@ -239,6 +239,31 @@ public static class BodyMesher
         for (int i = 0; i < verts.Count; i++) verts[i] = p[i];
         p.Dispose();
     }
+
+    // Laplacian smoothing: each vertex moves toward its neighbours' average (re-project afterwards).
+    internal static void Smooth(List<Vector3> verts, List<int> tris, int iterations, float strength)
+    {
+        var adj = Neighbours(verts.Count, tris);
+        var tmp = new Vector3[verts.Count];
+        for (int it = 0; it < iterations; it++)
+        {
+            for (int i = 0; i < verts.Count; i++)
+            {
+                var nb = adj[i];
+                if (nb.Count == 0) { tmp[i] = verts[i]; continue; }
+                Vector3 avg = Vector3.zero;
+                foreach (int j in nb) avg += verts[j];
+                tmp[i] = Vector3.Lerp(verts[i], avg / nb.Count, strength);
+            }
+            for (int i = 0; i < verts.Count; i++) verts[i] = tmp[i];
+        }
+    }
+
+    internal static float Importance(Settings s, BoneKind k) =>
+        k == BoneKind.Head ? s.headImportance : k == BoneKind.Hand ? s.handImportance
+        : k == BoneKind.Foot ? s.footImportance : k == BoneKind.Neck ? s.neckImportance : 1f;
+
+    internal const int CoarseStep = C;
 
     static List<int>[] Neighbours(int n, List<int> tris)
     {

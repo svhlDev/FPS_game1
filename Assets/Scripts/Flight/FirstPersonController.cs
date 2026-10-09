@@ -209,6 +209,7 @@ public class FirstPersonController : MonoBehaviour
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
         // Older scenes carry a capsule + visor body: hide it, the figure replaces it.
         if (bodyRenderers != null) foreach (var r in bodyRenderers) if (r != null) r.enabled = false;
+        BodyPool.Ensure(); // starts filling the crowd's bodies in the background
         Figure = generatedBody ? CharacterFigure.BuildGenerated(transform, sheet, CharacterFigure.Role.Player, shadows: true)
                                : CharacterFigure.Build(transform, CharacterFigure.Role.Player, null, figureHeight, shadows: true);
         float h = Figure.Height;
@@ -916,6 +917,37 @@ public class FirstPersonController : MonoBehaviour
     }
 
     public void BlockInteractThisFrame() => blockInteractFrame = Time.frameCount;
+
+    // New stats: the body is regenerated in the background (BodyPool) and swapped in when ready.
+    public bool BodyPending { get; private set; }
+    public void SetSheet(CharacterSheet newSheet)
+    {
+        sheet = newSheet;
+        if (!generatedBody) return;
+        BodyPending = true;
+        BodyPool.Ensure().Request(newSheet, asset =>
+        {
+            BodyPending = false;
+            if (this == null || asset == null || !sheet.Equals(newSheet)) return;
+            SwapBody(asset);
+        });
+    }
+
+    void SwapBody(BodyAsset asset)
+    {
+        var weapon = GetComponent<PlayerWeapon>();
+        weapon?.DetachGun();
+        CharacterFigure.Assemble(transform, asset, CharacterFigure.Role.Player, true, true, sheet.seed);
+        weapon?.ReattachGun();
+        float h = Figure.Height;
+        cc.height = h;
+        cc.radius = 0.2f * h / CharacterFigure.DefaultHeight;
+        cc.center = new Vector3(0f, h * 0.5f, 0f);
+        bodyRenderers = Figure.FaceRenderers.Count > 0 ? Figure.FaceRenderers.ToArray() : new[] { Figure.HeadRenderer };
+        bool shown = bodyShown;
+        bodyShown = !shown;
+        SetBodyVisible(shown);
+    }
 
     public void Flash(string msg) { flash = msg; flashUntil = Time.time + 2f; }
 
