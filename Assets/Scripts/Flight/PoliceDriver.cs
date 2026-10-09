@@ -286,16 +286,10 @@ public class PoliceDriver : MonoBehaviour
 
         Vector3 end = origin + laserDir * laserRange;
         FlyingVehicle hitCar = null;
-        RaycastHit hit = default;
-        // First thing the beam meets, not counting this police car itself.
-        int n = Physics.RaycastNonAlloc(origin, laserDir, laserHits, laserRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-        float best = float.MaxValue;
-        for (int i = 0; i < n; i++)
-        {
-            if (laserHits[i].collider.GetComponentInParent<FlyingVehicle>() == Car) continue;
-            if (laserHits[i].distance < best) { best = laserHits[i].distance; hit = laserHits[i]; }
-        }
-        if (best < float.MaxValue)
+        // First thing the beam meets, not counting this police car itself (shared laser ray).
+        bool traced = LaserWeapon.Trace(origin, laserDir, laserRange, transform, out RaycastHit hit);
+        float best = traced ? hit.distance : float.MaxValue;
+        if (traced)
         {
             end = hit.point;
             hitCar = hit.collider.GetComponentInParent<FlyingVehicle>();
@@ -317,25 +311,13 @@ public class PoliceDriver : MonoBehaviour
     }
 
     float laserCycleStart = -1f;
-    static readonly RaycastHit[] laserHits = new RaycastHit[8];
     public static int LaserHitFrames, LaserFireFrames;
     public static string LastLaserHit = "";
     Vector3 laserDir;
     LineRenderer laser;
 
-    // Two shared materials: the thin aiming line and the beam (colours never change per car).
-    static Material aimMat, beamMat;
-
-    static Material LaserMat(bool beam)
-    {
-        ref Material m = ref (beam ? ref beamMat : ref aimMat);
-        if (m != null) return m;
-        var shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null) return null;
-        m = new Material(shader);
-        m.SetColor("_BaseColor", beam ? new Color(1f, 0.08f, 0.05f) * 6f : new Color(1f, 0.1f, 0.08f) * 1.5f);
-        return m;
-    }
+    // Shared with every laser weapon: the thin aiming line and the lethal beam (LaserWeapon).
+    static Material LaserMat(bool beam) => beam ? LaserWeapon.BeamMat(Weapon.Mode.Lethal) : LaserWeapon.AimLineMat;
 
     void ShowLaser(Vector3 a, Vector3 b, float width, bool beam)
     {

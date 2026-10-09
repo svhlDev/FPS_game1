@@ -8,6 +8,7 @@ using UnityEngine.Rendering;
 //   Debris   : dark tumbling boxes thrown by explosions (no colliders).
 //   Flash    : a short additive fireball sphere (explosions).
 //   Ring     : an expanding additive shockwave ring.
+//   Glow     : a short flash sphere in a laser mode colour (T-gun muzzle and impact).
 //   Flame    : an immediate-mode flickering flame billboard for this frame (burning cars, fire patches,
 //              chunks). Call every frame while it should show.
 //   Scorch   : an immediate-mode dark decal flat on a surface for this frame.
@@ -16,18 +17,19 @@ using UnityEngine.Rendering;
 public class Effects : MonoBehaviour
 {
     struct Particle { public Vector3 pos, vel, spin; public float age, life, size; public byte kind; }
-    const byte PuffK = 0, DebrisK = 1, FlashK = 2, RingK = 3;
+    const byte PuffK = 0, DebrisK = 1, FlashK = 2, RingK = 3, StunK = 4, LethalK = 5;
 
     static Effects instance;
     readonly List<Particle> particles = new List<Particle>(1024);
-    readonly List<Matrix4x4> puffM = new List<Matrix4x4>(), debrisM = new List<Matrix4x4>(), flashM = new List<Matrix4x4>(), ringM = new List<Matrix4x4>();
+    readonly List<Matrix4x4> puffM = new List<Matrix4x4>(), debrisM = new List<Matrix4x4>(), flashM = new List<Matrix4x4>(), ringM = new List<Matrix4x4>(),
+        stunM = new List<Matrix4x4>(), lethalM = new List<Matrix4x4>();
     // Immediate-mode requests for this frame.
     readonly List<Vector4> flames = new List<Vector4>(1024);   // xyz pos, w size
     readonly List<Vector4> scorches = new List<Vector4>(256);   // xyz pos, w radius
     readonly List<Matrix4x4> flameM = new List<Matrix4x4>(1024), scorchM = new List<Matrix4x4>(256);
     int requestFrame = -1;
     Mesh cube, quad, sphere, ring;
-    Material puffMat, debrisMat, flashMat, flameMat, emberMat, scorchMat;
+    Material puffMat, debrisMat, flashMat, flameMat, emberMat, scorchMat, stunMat, lethalMat;
 
     static Effects I
     {
@@ -42,6 +44,7 @@ public class Effects : MonoBehaviour
     public static void Debris(Vector3 pos, Vector3 vel, float size) => I.Add(pos, vel, size, Random.Range(1.2f, 2.2f), DebrisK);
     public static void Flash(Vector3 pos, float radius) => I.Add(pos, Vector3.zero, radius, 0.35f, FlashK);
     public static void Ring(Vector3 pos, float radius) => I.Add(pos, Vector3.zero, radius, 0.5f, RingK);
+    public static void Glow(Vector3 pos, float radius, bool stun, float life = 0.12f) => I.Add(pos, Vector3.zero, radius, life, stun ? StunK : LethalK);
 
     public static void Flame(Vector3 pos, float size)
     {
@@ -82,6 +85,8 @@ public class Effects : MonoBehaviour
         flashMat = Unlit(new Color(1f, 0.75f, 0.35f) * 4f);
         flameMat = Unlit(new Color(1f, 0.42f, 0.08f) * 3f);
         emberMat = flameMat;
+        stunMat = Unlit(new Color(0.2f, 0.6f, 1f) * 4f);
+        lethalMat = Unlit(new Color(1f, 0.12f, 0.08f) * 4f);
     }
 
     static Mesh Prim(PrimitiveType t)
@@ -130,7 +135,7 @@ public class Effects : MonoBehaviour
     void Update()
     {
         float dt = Time.deltaTime;
-        puffM.Clear(); debrisM.Clear(); flashM.Clear(); ringM.Clear();
+        puffM.Clear(); debrisM.Clear(); flashM.Clear(); ringM.Clear(); stunM.Clear(); lethalM.Clear();
         for (int i = particles.Count - 1; i >= 0; i--)
         {
             var p = particles[i];
@@ -152,6 +157,10 @@ public class Effects : MonoBehaviour
                 case FlashK:
                     flashM.Add(Matrix4x4.TRS(p.pos, Quaternion.identity, Vector3.one * p.size * 2f * Mathf.Sin(Mathf.Min(1f, t * 1.3f) * Mathf.PI) + Vector3.one * 0.01f));
                     break;
+                case StunK:
+                case LethalK:
+                    (p.kind == StunK ? stunM : lethalM).Add(Matrix4x4.TRS(p.pos, Quaternion.identity, Vector3.one * p.size * 2f * (1f - t) + Vector3.one * 0.005f));
+                    break;
                 case RingK:
                     ringM.Add(Matrix4x4.TRS(p.pos + Vector3.up * 0.3f, Quaternion.identity, new Vector3(p.size * t, 1f, p.size * t)));
                     break;
@@ -167,6 +176,8 @@ public class Effects : MonoBehaviour
         Batch(cam, cube, debrisMat, debrisM);
         Batch(cam, sphere, flashMat, flashM);
         Batch(cam, ring, flashMat, ringM);
+        Batch(cam, sphere, stunMat, stunM);
+        Batch(cam, sphere, lethalMat, lethalM);
 
         // Billboards facing this camera (flicker in size), flat scorch decals.
         bool fresh = requestFrame == Time.frameCount || requestFrame == Time.frameCount - 1;

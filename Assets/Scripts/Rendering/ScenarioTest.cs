@@ -51,6 +51,7 @@ public class ScenarioTest : MonoBehaviour
             case "damage": yield return DamageTest(); break;
             case "fx": yield return FxTest(); break;
             case "aim": yield return AimTest(); break;
+            case "tgun": yield return TGunTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -458,6 +459,234 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- T-gun: modes, police rules, officers' guns ----------
+
+    IEnumerator TGunTest()
+    {
+        var fpc = FirstPersonController.Instance;
+        var w = fpc.GetComponent<PlayerWeapon>();
+        var disp = PoliceDispatch.Ensure();
+        var cam = fpc.playerCamera.transform;
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        IEnumerator Shot(string name)
+        {
+            yield return null;
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"tgun_{name}.png"));
+            yield return null; yield return null;
+        }
+        void LookAt(Vector3 p)
+        {
+            Vector3 d = p - cam.position;
+            fpc.DebugLook(Mathf.Clamp(-Mathf.Atan2(d.y, new Vector2(d.x, d.z).magnitude) * Mathf.Rad2Deg, -80f, 80f), Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg);
+        }
+        yield return new WaitForSeconds(1f);
+
+        // 1. Model and modes.
+        var gun = w.Gun;
+        Log($"gun {gun.name}: {gun.GetComponentsInChildren<Renderer>().Length} parts, muzzle z {gun.muzzle.localPosition.z:0.000}, mode {gun.CurrentMode}");
+        w.Draw();
+        w.DebugSteady = true;
+        fpc.DebugLook(8f, fpc.transform.eulerAngles.y);
+        yield return new WaitForSeconds(1f);
+        var strip = gun.transform.GetChild(gun.transform.childCount - 2).GetComponent<Renderer>();
+        bool blue = strip.sharedMaterial == LaserWeapon.ModeMat(Weapon.Mode.Stun);
+        yield return Shot("stun_mode");
+        w.ToggleMode();
+        bool red = strip.sharedMaterial == LaserWeapon.ModeMat(Weapon.Mode.Lethal);
+        bool blockedFire = !w.DebugFire();
+        yield return new WaitForSeconds(0.35f);
+        bool firesAfter = w.DebugFire();
+        yield return Shot("lethal_mode");
+        Log($"modes: stun strips blue {blue}, B -> lethal strips red {red}, no fire right after switching {blockedFire}, fires after 0.35 s {firesAfter}");
+        Log(blue && red && blockedFire && firesAfter ? "PASS B flips the mode (strips, 0.3 s lockout)" : "FAIL mode switch");
+        w.DebugSteady = false;
+        fpc.zoom.Snap(0.35f);
+        fpc.DebugLook(20f, fpc.transform.eulerAngles.y + 160f);
+        yield return new WaitForSeconds(0.8f);
+        yield return Shot("tp_hand");
+        fpc.zoom.Snap(0f);
+        fpc.DebugLook(8f, fpc.transform.eulerAngles.y - 160f);
+
+        // 2. Police rules, with a patrol car held in view.
+        PoliceDriver cop = null;
+        foreach (var u in PoliceDispatch.Units) if (u != null && u.isActiveAndEnabled) { cop = u; break; }
+        if (cop == null) { Log("WARN no police unit"); }
+        else
+        {
+            Vector3 copPos = fpc.transform.position + Vector3.ProjectOnPlane(cam.forward, Vector3.up).normalized * 30f + Vector3.up * 6f;
+            IEnumerator Hold(float seconds)
+            {
+                for (float t = 0f; t < seconds; t += Time.deltaTime)
+                {
+                    cop.Car.DebugPlace(copPos, Quaternion.LookRotation(fpc.transform.position - copPos), Vector3.zero);
+                    yield return null;
+                }
+            }
+            disp.DebugClear();
+            if (w.Mode != Weapon.Mode.Stun) w.ToggleMode();
+            yield return Hold(0.6f);
+            fpc.DebugLook(-40f, fpc.transform.eulerAngles.y + 90f); // fire into the sky
+            yield return Hold(0.4f);
+            w.DebugFire();
+            yield return Hold(0.3f);
+            Log($"stun shot seen by police: wanted {disp.WantedLevel}, force {disp.ForceLevel}");
+            Log(disp.WantedLevel == 1 && disp.ForceLevel == PoliceDispatch.Force.NonLethal ? "PASS a stun shot brings stun guns, not lethal force" : "FAIL stun-shot rule");
+
+            disp.DebugClear();
+            w.ToggleMode();
+            yield return Hold(0.8f);
+            Log($"lethal T-gun drawn in sight: wanted {disp.WantedLevel}, force {disp.ForceLevel}");
+            Log(disp.WantedLevel >= 1 && disp.ForceLevel == PoliceDispatch.Force.NonLethal ? "PASS brandishing a lethal gun brings out the stun guns" : "FAIL brandishing rule");
+            w.DebugFire();
+            yield return Hold(0.3f);
+            Log($"lethal shot seen: wanted {disp.WantedLevel}, force {disp.ForceLevel}");
+            Log(disp.WantedLevel >= 2 && disp.ForceLevel == PoliceDispatch.Force.Lethal ? "PASS a lethal shot brings lethal force" : "FAIL lethal-shot rule");
+            disp.DebugClear();
+            cop.Car.DebugPlace(copPos + Vector3.up * 400f, Quaternion.identity, Vector3.zero); // out of the way
+        }
+
+        // 3. Cars: stun hiccups, lethal damages.
+        var car = PickNearLaneCar(fpc.transform.position, 600f);
+        if (car != null)
+        {
+            Vector3 carPos = cam.position + Vector3.ProjectOnPlane(cam.forward, Vector3.up).normalized * 14f + Vector3.up * 1f;
+            if (w.Mode != Weapon.Mode.Stun) w.ToggleMode();
+            float hp0 = car.Health.Health;
+            for (float t = 0f; t < 0.9f; t += Time.deltaTime)
+            {
+                car.DebugPlace(carPos, Quaternion.LookRotation(cam.right), Vector3.zero);
+                LookAt(car.transform.position);
+                yield return null;
+            }
+            w.DebugFire();
+            bool hiccup = car.Hiccuping;
+            float hpStun = car.Health.Health;
+            Log($"stun shot on {car.name}: hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}, hiccup {hiccup}, health {hp0:0} -> {hpStun:0}");
+            yield return Shot("car_hiccup");
+            yield return new WaitForSeconds(0.6f);
+            Log($"  after 0.6 s: hiccuping {car.Hiccuping}");
+            Log(hiccup && hpStun == hp0 && !car.Hiccuping ? "PASS stun hiccups a car, no damage" : "FAIL car stun");
+            w.ToggleMode();
+            for (float t = 0f; t < 0.5f; t += Time.deltaTime)
+            {
+                car.DebugPlace(carPos, Quaternion.LookRotation(cam.right), Vector3.zero);
+                LookAt(car.transform.position);
+                yield return null;
+            }
+            w.DebugFire();
+            Log($"lethal shot on the car: health {hpStun:0} -> {car.Health.Health:0}");
+            Log(car.Health.Health <= hpStun - 14f ? "PASS lethal shot damages a car (15)" : "FAIL lethal car damage");
+            disp.DebugClear();
+        }
+
+        // 4. Down in the street: stun a pedestrian.
+        fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.Euler(0f, 180f, 0f));
+        yield return new WaitForSeconds(3f);
+        if (w.Mode != Weapon.Mode.Stun) w.ToggleMode();
+        var ps = PedestrianSystem.Instance;
+        PedestrianSystem.Ped ped = null;
+        for (float t = 0f; t < 10f && ped == null && ps != null; t += 0.25f)
+        {
+            foreach (var p in ps.NearAgents)
+            {
+                float d = Vector3.Distance(p.pos, fpc.transform.position);
+                if (d > 3f && d < 40f && p.state != PedestrianSystem.State.Down && PoliceDispatch.LineOfSight(cam.position, p.pos + Vector3.up)) { ped = p; break; }
+            }
+            if (ped == null) yield return new WaitForSeconds(0.25f);
+        }
+        if (ped == null) Log($"no pedestrian: {(ps != null ? ps.NearAgents.Count : -1)} near agents");
+        if (ped == null) Log("WARN no pedestrian in sight");
+        else
+        {
+            for (float t = 0f; t < 0.8f; t += Time.deltaTime) { LookAt(ped.pos + Vector3.up * 0.95f); yield return null; }
+            w.DebugFire();
+            var hitPed = PedestrianSystem.Find(PlayerWeapon.LastShotCollider);
+            if (hitPed != null && hitPed != ped) { Log("  (another pedestrian stepped into the shot)"); ped = hitPed; }
+            yield return null;
+            var s0 = ped.state;
+            fpc.zoom.Snap(0.5f);
+            yield return Shot("ped_down");
+            fpc.zoom.Snap(0f);
+            yield return new WaitForSeconds(2.4f);
+            Log($"stunned pedestrian: hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}, state {s0}, after 2.4 s {ped.state}");
+            Log(s0 == PedestrianSystem.State.Down && ped.state != PedestrianSystem.State.Down ? "PASS stun drops a pedestrian for 2 s, then it flees" : "FAIL pedestrian stun");
+        }
+        disp.DebugClear();
+
+        // 5. An officer's T-gun: shots leave its muzzle, cover stops them.
+        PoliceDriver home = null;
+        foreach (var u in PoliceDispatch.Units) if (u != null && u.isActiveAndEnabled) { home = u; break; }
+        if (home == null) { Log("WARN no unit for the officer test"); yield break; }
+        Vector3 me = fpc.transform.position;
+        Vector3 side = Vector3.ProjectOnPlane(cam.right, Vector3.up).normalized;
+        Vector3 spot = me + side * 8f;
+        home.Car.DebugPlace(spot + Vector3.up * 4f, Quaternion.identity, Vector3.zero);
+        var off = OfficerAgent.SpawnFrom(home, 0f);
+        for (float t = 0f; t < 15f && !(off.State == OfficerAgent.Phase.Foot && off.AtGoal); t += Time.deltaTime)
+        {
+            off.Goal = spot;
+            off.StopDistance = 0.5f;
+            yield return null;
+        }
+        Log($"test officer: {off.State}, {Vector3.Distance(off.transform.position, me):0.0} m away");
+        off.Armed = true;
+        Vector3 chest = fpc.transform.position + Vector3.up * 1.2f;
+        int hits = 0, shots = 0; float worstOrigin = 0f;
+        for (float t = 0f; t < 5f; t += Time.deltaTime)
+        {
+            off.Goal = spot; off.AimAt(chest);
+            Vector3 muzzle = off.Gun.muzzle.position;
+            int before = LaserWeapon.Shots;
+            if (off.FireStun(chest, 30f, 0.5f)) hits++;
+            if (LaserWeapon.Shots > before) { shots++; worstOrigin = Mathf.Max(worstOrigin, Vector3.Distance(LaserWeapon.LastOrigin, muzzle)); }
+            yield return null;
+        }
+        Log($"officer stun shots: {shots} fired, {hits} hit the player (aim error shrinks with tracking), shot origin within {worstOrigin * 100f:0.0} cm of its muzzle");
+        Log(shots > 0 && worstOrigin < 0.01f && hits > 0 ? "PASS officer fires along its barrel and hits once settled" : "FAIL officer shots");
+        fpc.zoom.Snap(1f);
+        LookAt(off.transform.position + Vector3.up * 1.2f);
+        fpc.DebugLook(25f, fpc.transform.eulerAngles.y + 35f);
+        for (int i = 0; i < 3; i++) { off.Goal = spot; off.AimAt(chest); yield return null; }
+        yield return Shot("officer_aim");
+        fpc.zoom.Snap(0f);
+
+        // Cover: a slab 1.2 m in front of the officer (where its eye and barrel lines are furthest apart),
+        // under the eye line but over the barrel line.
+        Vector3 fromOff = chest - (off.transform.position + Vector3.up * 1.2f);
+        Vector3 flat = Vector3.ProjectOnPlane(fromOff, Vector3.up).normalized;
+        var slab = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        slab.name = "TestCover";
+        float ground = off.transform.position.y;
+        slab.transform.position = off.transform.position + flat * 1.2f + Vector3.up * 0.67f;
+        slab.transform.rotation = Quaternion.LookRotation(flat);
+        slab.transform.localScale = new Vector3(3f, 1.34f, 0.15f);
+        Physics.SyncTransforms();
+        bool eyeClear = PoliceDispatch.LineOfSight(off.transform.position + Vector3.up * 1.4f, chest);
+        int coverHits = 0, coverShots = 0, onSlab = 0;
+        for (float t = 0f; t < 3f; t += Time.deltaTime)
+        {
+            off.Goal = spot; off.AimAt(chest);
+            int before = LaserWeapon.Shots;
+            if (off.FireStun(chest, 30f, 0.5f)) coverHits++;
+            if (LaserWeapon.Shots > before) { coverShots++; if (LaserWeapon.LastHit != null && LaserWeapon.LastHit.gameObject == slab) onSlab++; }
+            yield return null;
+        }
+        Log($"behind cover (officer still sees: {eyeClear}): {coverShots} shots, {onSlab} hit the cover, {coverHits} hit the player");
+        Log(coverShots > 0 && coverHits == 0 && onSlab > 0 ? "PASS cover stops officers' shots" : eyeClear ? "FAIL cover didn't stop the shots" : "WARN slab also blocked the eye line (no shots)");
+        Destroy(slab);
+
+        // 6. The player stuns the officer.
+        w.Draw();
+        for (float t = 0f; t < 0.8f; t += Time.deltaTime) { off.Goal = spot; LookAt(off.transform.position + Vector3.up * 1f); yield return null; }
+        w.DebugFire();
+        yield return null;
+        bool down = off.Stunned;
+        Log($"player stuns the officer: hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}, stunned {down}, force now {disp.ForceLevel}");
+        yield return Shot("officer_stunned");
+        yield return new WaitForSeconds(2.2f);
+        Log(down && !off.Stunned && disp.ForceLevel == PoliceDispatch.Force.Lethal ? "PASS stun drops an officer for 2 s (and brings lethal force)" : "FAIL officer stun");
     }
 
     // ---------- one-handed aiming ----------

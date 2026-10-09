@@ -13,6 +13,9 @@ using UnityEngine;
 // scooter, guard when force is authorised, reaching out to cuff, one arm on the player when dragging).
 //   Return  : back on the scooter to its unit; removed on arrival.
 // Stands on moving cars like the player does (carried by the car it's standing on).
+// Weapon: a T-gun on the hip; while PoliceDispatch calls AimAt it is drawn and aimed with the shared
+// arm IK (ArmAim) at the target plus an error that shrinks the longer it tracks, and shots leave the
+// muzzle along the barrel (LaserWeapon), so cover stops them. Stun(s) drops it like the player.
 // Lives on the Player layer: cars never push it; the player's fists hit it.
 // Runs after the player (whose Update syncs the moved cars' colliders), so it stands on cars cleanly.
 [DefaultExecutionOrder(110)]
@@ -61,7 +64,16 @@ public class OfficerAgent : MonoBehaviour
     int probeMask;
     float nextFire;
     int burstLeft;
-    LineRenderer tracer; float tracerUntil;
+    // T-gun in the right hand (holstered on the hip until force is used).
+    public float errorStart = 1.2f, errorSettled = 0.12f, errorSettle = 3f;
+    CharacterFigure fig;
+    Weapon gun;
+    readonly ArmAim arm = new ArmAim();
+    bool gunDrawn;
+    Vector3 aimTarget; int aimFrame = -10;
+    float trackTime, seed;
+    float stunUntil;
+    public bool Stunned => Time.time < stunUntil;
 
     // ---------- spawning ----------
 
@@ -119,6 +131,7 @@ public class OfficerAgent : MonoBehaviour
     void Awake()
     {
         cc = GetComponent<CharacterController>();
+        seed = Random.value * 100f;
         int playerLayer = LayerMask.NameToLayer("Player");
         probeMask = Physics.DefaultRaycastLayers & ~(playerLayer >= 0 ? 1 << playerLayer : 0);
     }
@@ -129,10 +142,18 @@ public class OfficerAgent : MonoBehaviour
     void OnDestroy()
     {
         if (scooter != null && scooter.parent == null) Destroy(scooter.gameObject); // parked scooter goes too
-        if (tracer != null) Destroy(tracer.gameObject);
     }
 
     // ---------- commands ----------
+
+    void Start()
+    {
+        fig = GetComponent<CharacterFigure>();
+        if (fig != null) { gun = Weapon.BuildTGun(transform, gameObject.layer); HolsterGun(); }
+    }
+
+    // Stun shot: down (Stunned pose) for `seconds`, no moving or shooting.
+    public void Stun(float seconds) => stunUntil = Mathf.Max(stunUntil, Time.time + seconds);
 
     public void Stagger(float seconds, Vector3 knockback)
     {
@@ -180,7 +201,6 @@ public class OfficerAgent : MonoBehaviour
             case Phase.Foot: UpdateFoot(dt); break;
             default: UpdateReturn(dt); break;
         }
-        if (tracer != null && tracer.enabled && Time.time > tracerUntil) tracer.enabled = false;
         Pose(dt);
     }
 
@@ -196,15 +216,18 @@ public class OfficerAgent : MonoBehaviour
         anim.Grounded = State != Phase.Foot || Grounded;
         anim.LookYaw = transform.eulerAngles.y;
         anim.CurrentPose = State != Phase.Foot ? FigureAnimator.Pose.Scooter
+                         : Stunned ? FigureAnimator.Pose.Stunned
                          : Staggered ? FigureAnimator.Pose.Staggered
                          : !Grounded ? FigureAnimator.Pose.Air
                          : ActionPose;
-        anim.ArmMode = Armed && ActionPose == FigureAnimator.Pose.Normal ? FigureAnimator.Arms.Guard : FigureAnimator.Arms.Lowered;
+        anim.ArmMode = Aiming ? FigureAnimator.Arms.Aim
+                     : Armed && ActionPose == FigureAnimator.Pose.Normal ? FigureAnimator.Arms.Guard : FigureAnimator.Arms.Lowered;
     }
 
     void UpdateScooter(float dt)
     {
         cc.enabled = false;
+        if (Stunned) return; // hangs there on the hovering scooter
         Vector3 target = Goal + Vector3.up * 0.3f;
         Vector3 to = target - transform.position;
         Vector3 flat = new Vector3(to.x, 0f, to.z);
@@ -248,7 +271,8 @@ public class OfficerAgent : MonoBehaviour
 
         Vector3 move = Vector3.zero;
         AtGoal = false;
-        if (Staggered)
+        if (Stunned) { }
+        else if (Staggered)
         {
             // Knocked back over the first fraction of the stagger.
             move = knock * 4f;
@@ -284,12 +308,14 @@ public class OfficerAgent : MonoBehaviour
                 }
 
                 move = dir * Mathf.Min(speed, d / Mathf.Max(dt, 1e-4f));
-                Face(dir, dt);
+                // Aiming: keeps facing the target while moving (strafes).
+                if (!Aiming) Face(dir, dt);
+                else { Vector3 look = aimTarget - transform.position; look.y = 0f; Face(look, dt); }
             }
             else
             {
                 AtGoal = true;
-                Vector3 look = (LookAt ?? Goal) - transform.position;
+                Vector3 look = (Aiming ? aimTarget : LookAt ?? Goal) - transform.position;
                 look.y = 0f;
                 if (look.sqrMagnitude > 0.01f) Face(look, dt);
             }
@@ -335,25 +361,29 @@ public class OfficerAgent : MonoBehaviour
 
     // ---------- weapons (called by PoliceDispatch) ----------
 
-    // Non-lethal: one stun shot every `interval` s within `range`; returns true on a hit.
-    public bool FireStun(Vector3 target, float range, float interval, float hitChance, Material tracerMat)
+    // Point the T-gun at `target` this frame (call every frame while it should aim). The arm aims at
+    // the target plus an error that shrinks the longer it keeps tracking.
+    public void AimAt(Vector3 target) { aimTarget = target; aimFrame = Time.frameCount; }
+
+    public bool Aiming => Time.frameCount - aimFrame <= 1 && State == Phase.Foot && !Staggered && !Stunned
+                          && ActionPose == FigureAnimator.Pose.Normal && gun != null;
+    public Weapon Gun => gun;
+    public Vector3 AimPoint { get; private set; }
+    public float TrackTime => trackTime;
+
+    // Non-lethal: one stun shot every `interval` s within `range`, along the barrel. True if it hit the
+    // player.
+    public bool FireStun(Vector3 target, float range, float interval)
     {
-        if (State != Phase.Foot || Staggered || Time.time < nextFire) return false;
-        Vector3 eye = transform.position + Vector3.up * 1.4f;
-        if ((target - eye).sqrMagnitude > range * range || !PoliceDispatch.LineOfSight(eye, target)) return false;
+        if (!CanFire(target, range) || Time.time < nextFire) return false;
         nextFire = Time.time + interval;
-        bool hit = Random.value < hitChance;
-        ShowTracer(eye, hit ? target : target + Random.insideUnitSphere * 1.5f, tracerMat, new Color(0.4f, 0.7f, 1f));
-        return hit;
+        return Shoot(Weapon.Mode.Stun, range);
     }
 
-    // Lethal: bursts of hitscan shots from the sidearm; returns the number of hits this frame (0 or 1).
-    public int FireSidearm(Vector3 target, float range, int burst, float burstInterval, float shotInterval, Material tracerMat)
+    // Lethal: bursts of shots along the barrel; returns 1 if this frame's shot hit the player.
+    public int FireSidearm(Vector3 target, float range, int burst, float burstInterval, float shotInterval)
     {
-        if (State != Phase.Foot || Staggered) return 0;
-        Vector3 eye = transform.position + Vector3.up * 1.4f;
-        float d = Vector3.Distance(eye, target);
-        if (d > range || !PoliceDispatch.LineOfSight(eye, target)) return 0;
+        if (!CanFire(target, range)) return 0;
         if (burstLeft <= 0)
         {
             if (Time.time < nextFire) return 0;
@@ -361,30 +391,69 @@ public class OfficerAgent : MonoBehaviour
         }
         if (Time.time < nextFire) return 0;
         burstLeft--;
+        bool hit = Shoot(Weapon.Mode.Lethal, range);
         nextFire = Time.time + (burstLeft > 0 ? shotInterval : burstInterval);
-        bool hit = Random.value < Mathf.Lerp(0.6f, 0.15f, d / range);
-        ShowTracer(eye, hit ? target : target + Random.insideUnitSphere * 2f, tracerMat, Color.white);
         return hit ? 1 : 0;
     }
 
-    void ShowTracer(Vector3 a, Vector3 b, Material mat, Color tint)
+    // Drawn and on the target for a moment, the suspect in sight (eye line) and in range.
+    bool CanFire(Vector3 target, float range)
     {
-        PedestrianSystem.ReportDanger(a);
-        if (mat == null) return;
-        if (tracer == null)
+        if (!Aiming || !gunDrawn || trackTime < 0.4f) return false;
+        Vector3 eye = transform.position + Vector3.up * 1.4f;
+        return (target - eye).sqrMagnitude <= range * range && PoliceDispatch.LineOfSight(eye, target);
+    }
+
+    // One shot from the muzzle along the barrel; cover in the way takes it. True if the player was hit.
+    bool Shoot(Weapon.Mode mode, float range)
+    {
+        if (gun.CurrentMode != mode) gun.SetMode(mode);
+        Vector3 m = gun.muzzle.position, dir = gun.muzzle.forward;
+        bool hit = LaserWeapon.Fire(m, dir, range * 1.5f, transform, mode, out var h);
+        arm.Kick(dir, gun);
+        Shots++;
+        if (!hit) return false;
+        var player = FirstPersonController.Instance;
+        if (player != null && h.collider.transform.IsChildOf(player.transform)) { HitsOnPlayer++; return true; }
+        // Stray shots: cars and bystanders take them like the player's would.
+        var car = h.collider.GetComponentInParent<FlyingVehicle>();
+        if (car != null)
         {
-            var go = new GameObject("OfficerTracer");
-            tracer = go.AddComponent<LineRenderer>();
-            tracer.sharedMaterial = mat;
-            tracer.positionCount = 2;
-            tracer.startWidth = tracer.endWidth = 0.05f;
-            tracer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            tracer.receiveShadows = false;
+            if (mode == Weapon.Mode.Stun) car.Hiccup(gun.carHiccup);
+            else if (car.Health != null) car.Health.Damage(gun.carDamage, h.point, h.normal);
         }
-        tracer.startColor = tracer.endColor = tint;
-        tracer.SetPosition(0, a);
-        tracer.SetPosition(1, b);
-        tracer.enabled = true;
-        tracerUntil = Time.time + 0.06f;
+        PedestrianSystem.Shot(h.collider, mode == Weapon.Mode.Lethal, gun.stunTime, m);
+        return false;
+    }
+
+    public static int Shots, HitsOnPlayer;
+
+    void LateUpdate()
+    {
+        if (gun == null || fig == null) return;
+        bool want = Aiming;
+        if (want != gunDrawn)
+        {
+            gunDrawn = want;
+            if (want) { arm.Begin(fig); ArmAim.Attach(gun, fig); trackTime = 0f; }
+            else HolsterGun();
+        }
+        if (!want) { trackTime = 0f; return; }
+        float dt = Time.deltaTime;
+        trackTime += dt;
+        // Aim error: wanders smoothly, shrinking from errorStart to errorSettled over errorSettle s.
+        float err = Mathf.Lerp(errorStart, errorSettled, Mathf.Clamp01(trackTime / errorSettle));
+        float t = Time.time * 0.9f + seed;
+        Vector3 e = new Vector3(Mathf.PerlinNoise(t, 0.1f) - 0.5f, Mathf.PerlinNoise(0.3f, t) - 0.5f, Mathf.PerlinNoise(t, 0.7f) - 0.5f) * 2f * err;
+        AimPoint = aimTarget + e;
+        arm.Solve(fig, gun, AimPoint, transform, anim != null ? anim.BodyYaw : transform.eulerAngles.y, Vector3.up, null, Vector3.zero, dt);
+    }
+
+    void HolsterGun()
+    {
+        if (gun == null || fig == null) return;
+        gun.transform.SetParent(fig.Hips, false);
+        gun.transform.localPosition = new Vector3(0.18f, -0.03f, 0.03f) * fig.Scale;
+        gun.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
     }
 }

@@ -84,7 +84,6 @@ public class PoliceDispatch : MonoBehaviour
     [Header("Force")]
     public float stunRange = 12f;
     public float stunInterval = 2.5f;
-    public float stunHitChance = 0.6f;
     public float stunTime = 2f;
     public float sidearmRange = 30f;
     public int sidearmBurst = 3;
@@ -110,6 +109,7 @@ public class PoliceDispatch : MonoBehaviour
     // Seconds of grace left before the contact meter starts draining.
     public float ContactGraceLeft => Mathf.Max(0f, contactGrace - (Time.time - lastTouchTime));
     public IReadOnlyList<PoliceDriver> Pursuing => pursuing;
+    public static IReadOnlyList<PoliceDriver> Units => units;
 
     static readonly List<PoliceDriver> units = new List<PoliceDriver>();
     readonly List<PoliceDriver> pursuing = new List<PoliceDriver>();
@@ -359,30 +359,61 @@ public class PoliceDispatch : MonoBehaviour
         Escalate(Force.Lethal, "Assaulted an officer");
     }
 
-    // Shooting an officer or a police car: lethal force.
-    void OnShotHit(Collider c, Vector3 point, float damage)
+    // T-gun hits. An officer or a police car in either mode: lethal force. A civilian in sight of
+    // police: stunned -> wanted 1, shot -> wanted 2.
+    void OnShotHit(Collider c, Vector3 point, float damage, Weapon.Mode mode)
     {
         var o = c.GetComponentInParent<OfficerAgent>();
         if (o != null)
         {
-            Vector3 away = o.transform.position - FirstPersonController.Instance.transform.position;
-            away.y = 0f;
-            o.Stagger(1.2f, away.normalized * 1.5f);
+            if (mode == Weapon.Mode.Lethal)
+            {
+                Vector3 away = o.transform.position - FirstPersonController.Instance.transform.position;
+                away.y = 0f;
+                o.Stagger(1.2f, away.normalized * 1.5f);
+            }
             EnsureWanted(2, o.Home);
-            Escalate(Force.Lethal, "Shot an officer");
+            Escalate(Force.Lethal, mode == Weapon.Mode.Stun ? "Stunned an officer" : "Shot an officer");
             return;
         }
         var unit = c.GetComponentInParent<PoliceDriver>();
-        if (unit != null) { EnsureWanted(2, unit); Escalate(Force.Lethal, "Shot at police"); }
+        if (unit != null) { EnsureWanted(2, unit); Escalate(Force.Lethal, "Shot at police"); return; }
+        bool civilian = PedestrianSystem.IsPedestrian(c) || c.GetComponentInParent<NpcBody>() != null;
+        if (civilian && PoliceSees(point + Vector3.up, triggerRange, out var by))
+        {
+            EnsureWanted(mode == Weapon.Mode.Stun ? 1 : 2, by);
+            Show(mode == Weapon.Mode.Stun ? "POLICE: Assault on a civilian" : "POLICE: Civilian shot!");
+        }
     }
 
-    // Gunfire in sight of police.
-    void OnShotFired(Vector3 muzzle)
+    // Gunfire in sight of police: stun -> wanted 1 and stun guns; lethal -> wanted 2 and lethal force.
+    void OnShotFired(Vector3 muzzle, Weapon.Mode mode)
     {
         if (!PoliceSees(muzzle, triggerRange, out var by)) return;
-        EnsureWanted(2, by);
-        Escalate(Force.Lethal, "Shots fired");
+        EnsureWanted(mode == Weapon.Mode.Stun ? 1 : 2, by);
+        if (mode == Weapon.Mode.Stun) Escalate(Force.NonLethal, "Stun shots fired", 1);
+        else Escalate(Force.Lethal, "Shots fired");
     }
+
+    // Brandishing shows the mode: a lethal-mode gun drawn in sight of police brings out the stun guns.
+    void CheckBrandishing()
+    {
+        if (Time.time < nextBrandishCheck) return;
+        nextBrandishCheck = Time.time + 0.25f;
+        var fpc = FirstPersonController.Instance;
+        if (fpc == null || !fpc.isActiveAndEnabled) return;
+        var w = fpc.GetComponent<PlayerWeapon>();
+        if (w == null || !w.Brandishing || w.Mode != Weapon.Mode.Lethal || ForceLevel >= Force.NonLethal) return;
+        Vector3 p = fpc.transform.position + Vector3.up * 1.2f;
+        bool seen = PoliceSees(p, triggerRange, out var by);
+        if (!seen)
+            foreach (var o in officers)
+                if (o != null && (o.transform.position - p).sqrMagnitude < 40f * 40f && LineOfSight(o.transform.position + Vector3.up * 1.4f, p)) { seen = true; break; }
+        if (!seen) return;
+        EnsureWanted(1, by);
+        Escalate(Force.NonLethal, "Armed suspect", 1);
+    }
+    float nextBrandishCheck;
 
     void OnPunchPressed(int hand)
     {
@@ -440,6 +471,7 @@ public class PoliceDispatch : MonoBehaviour
     // Test hook (ScenarioTest): wanted at `level` with the nearest unit on the case.
     public void DebugStartPursuit(int level) => EnsureWanted(level, null);
     public void DebugForce(Force f) => Escalate(f, "test");
+    public void DebugClear() => EndPursuit();
 
     void Resist(string why)
     {
@@ -449,10 +481,11 @@ public class PoliceDispatch : MonoBehaviour
         Show($"{why}  -  WANTED {WantedLevel}");
     }
 
-    // Raise the force level (never lowers). Non-lethal and lethal both mean wanted 2 or more.
-    void Escalate(Force f, string why)
+    // Raise the force level (never lowers). Force means wanted `level` or more (2 unless a stun-only
+    // incident: stun shots seen, an armed suspect).
+    void Escalate(Force f, string why, int level = 2)
     {
-        EnsureWanted(2, null);
+        EnsureWanted(level, null);
         if (f <= ForceLevel) return;
         ForceLevel = f;
         Show((why != null ? why + "  -  " : "") + (f == Force.Lethal ? "POLICE: LETHAL FORCE" : "POLICE: stun guns out"));
@@ -504,6 +537,7 @@ public class PoliceDispatch : MonoBehaviour
         for (int i = dockers.Count - 1; i >= 0; i--)
             if (dockers[i] == null || !pursuing.Contains(dockers[i])) { UndockUnit(dockers[i]); dockers.RemoveAt(i); }
         officers.RemoveAll(o => o == null || o.State == OfficerAgent.Phase.Return);
+        CheckBrandishing();
         foreach (var o in officers)
         {
             o.ActionPose = o != cuffer ? FigureAnimator.Pose.Normal
@@ -882,17 +916,17 @@ public class PoliceDispatch : MonoBehaviour
         foreach (var o in officers)
         {
             if (o == null) continue;
-            var tracerMat = o.Home != null ? o.Home.tracerMaterial : null;
+            if (ForceLevel != Force.None) o.AimAt(aim);
             if (ForceLevel == Force.NonLethal && !fpc.Stunned)
             {
-                if (o.FireStun(aim, stunRange, stunInterval, stunHitChance, tracerMat))
+                if (o.FireStun(aim, stunRange, stunInterval))
                 {
                     fpc.Stun(stunTime);
                     stunFlashUntil = Time.time + 0.4f;
                     Show("Stunned!");
                 }
             }
-            else if (ForceLevel == Force.Lethal && o.FireSidearm(aim, sidearmRange, sidearmBurst, sidearmBurstInterval, sidearmShotInterval, tracerMat) > 0)
+            else if (ForceLevel == Force.Lethal && o.FireSidearm(aim, sidearmRange, sidearmBurst, sidearmBurstInterval, sidearmShotInterval) > 0)
             {
                 fpc.Damage(sidearmDamage);
                 if (fpc.Health <= 0f) { Busted("Shot down"); return; }

@@ -31,7 +31,7 @@ public class PedestrianSystem : MonoBehaviour
 
     public static PedestrianSystem Instance { get; private set; }
 
-    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone }
+    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone, Down }
 
     public class Ped
     {
@@ -48,6 +48,7 @@ public class PedestrianSystem : MonoBehaviour
         internal CharacterController cc;
         internal FigureAnimator anim;
         internal float bob, vy, lastStare;
+        internal bool downLethal;
         public bool IsNear => near != null;
     }
 
@@ -74,6 +75,28 @@ public class PedestrianSystem : MonoBehaviour
         // One report per spot is enough (bursts and scraping crashes repeat every frame).
         foreach (var d in dangers) if (Time.time - d.t < 0.3f && (d.p - p).sqrMagnitude < 25f) return;
         dangers.Add((p, radius, Time.time));
+    }
+
+    // A T-gun shot hit `c`: if it's a near pedestrian, it goes down (stun: stunTime s, then flees from
+    // `from`; lethal: stays down, then is gone). True if it was a pedestrian.
+    public static bool Shot(Collider c, bool lethal, float stunTime, Vector3 from)
+    {
+        var p = Find(c);
+        if (p == null) return false;
+        p.state = State.Down;
+        p.downLethal = p.downLethal || lethal;
+        p.until = Time.time + (p.downLethal ? 30f : stunTime);
+        p.fleeFrom = from;
+        return true;
+    }
+
+    public static bool IsPedestrian(Collider c) => Find(c) != null;
+
+    public static Ped Find(Collider c)
+    {
+        if (Instance == null || c == null) return null;
+        foreach (var p in Instance.nearList) if (p.near != null && c.transform.IsChildOf(p.near)) return p;
+        return null;
     }
 
     void Awake() => Instance = this;
@@ -352,6 +375,13 @@ public class PedestrianSystem : MonoBehaviour
     // Desired velocity: along the path (with a lane offset), waiting at crosswalks, fleeing, staring.
     Vector3 Steer(Ped p, float dt, Vector3? roofRider)
     {
+        // Shot: on the ground, then up and running (or gone).
+        if (p.state == State.Down)
+        {
+            if (Time.time < p.until) return Vector3.zero;
+            if (p.downLethal) { p.downLethal = false; Despawn(p); return Vector3.zero; }
+            p.state = State.Fleeing; p.until = Time.time + 5f;
+        }
         // Danger nearby: run from it.
         foreach (var d in dangers)
             if ((d.p - p.pos).sqrMagnitude < d.r * d.r && p.state != State.Fleeing)
@@ -450,7 +480,7 @@ public class PedestrianSystem : MonoBehaviour
             p.anim.Grounded = p.cc.isGrounded;
             p.anim.LookYaw = p.yaw;
             p.anim.LookPitch = p.state == State.Staring ? -35f : 0f;
-            p.anim.CurrentPose = FigureAnimator.Pose.Normal;
+            p.anim.CurrentPose = p.state == State.Down ? (p.downLethal ? FigureAnimator.Pose.Fallen : FigureAnimator.Pose.Stunned) : FigureAnimator.Pose.Normal;
         }
         // Fell off something: back to the nearest node.
         if (p.pos.y < -5f) Despawn(p);

@@ -14,7 +14,7 @@ public class VehicleHUD : MonoBehaviour
         "WASD move | Shift sprint | Space jump, again in the air: boost | hold Space: glide | E hijack",
         "Hanging off a rack: mash Space to climb | Ctrl let go | in car: E exit door, hold E exit to roof",
         "Car: Space layer up | Shift+Space layer down | Ctrl magnet on/off | Ctrl+Space free flight",
-        "1 draw pistol | H holster | LMB fire (fists when unarmed) | RMB steady aim | Q guard",
+        "1 draw T-gun | H holster | B stun/lethal | LMB fire (fists when unarmed) | RMB steady aim | Q guard",
         "Scroll camera zoom | Esc release / quit",
         "F1 toggle this help",
     };

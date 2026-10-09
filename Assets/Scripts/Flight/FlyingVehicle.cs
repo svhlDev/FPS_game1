@@ -459,6 +459,28 @@ public class FlyingVehicle : MonoBehaviour
 
     public void Shake(float amount) { if (IsOccupied) shake = Mathf.Max(shake, Mathf.Clamp01(amount)); }
 
+    // Stun shot: thrust cut for `seconds` (coasts, sags, lights flicker), then flies on. No damage.
+    public void Hiccup(float seconds)
+    {
+        if (Health != null && (Health.Wrecked || Health.Critical)) return;
+        hiccupUntil = Mathf.Max(hiccupUntil, Time.time + seconds);
+        Shake(0.3f);
+    }
+    public bool Hiccuping => Time.time < hiccupUntil;
+    float hiccupUntil = -1f;
+
+    void UpdateHiccup()
+    {
+        float dt = Time.deltaTime;
+        float drag = Mathf.Exp(-0.6f * dt);
+        velocity = new Vector3(velocity.x * drag, velocity.y - 6f * dt, velocity.z * drag);
+        bool last = Time.time + dt >= hiccupUntil;
+        if (lights != null) lights.SetOn(last ? !parked : Random.value < 0.35f);
+        Quaternion rot = PlatformRotation;
+        transform.SetPositionAndRotation(MoveAndCollide(transform.position, velocity * dt, rot), rot);
+        SyncAttached();
+    }
+
     // Impact damage: (v - collisionDamageSpeed) * collisionDamagePerMs, scaled by the other's mass / own.
     void ImpactDamage(float speed, float otherMass, Vector3 point, Vector3 outward)
     {
@@ -493,6 +515,7 @@ public class FlyingVehicle : MonoBehaviour
         if (Health != null && Health.Wrecked) { UpdateWreck(); return; }
         if (Health != null && Health.Critical) { UpdateCritical(kb, mouse); return; }
         if (Disabled) { UpdateDisabled(mouse); return; }
+        if (Hiccuping) { UpdateHiccup(); return; }
         if (autopilot && !IsOccupied) { UpdateAutopilot(); return; }
 
         switch (Mode)
