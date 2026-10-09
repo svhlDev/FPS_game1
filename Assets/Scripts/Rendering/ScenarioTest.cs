@@ -61,6 +61,7 @@ public class ScenarioTest : MonoBehaviour
             case "hands": yield return HandsTest(); break;
             case "seats": yield return SeatsTest(); break;
             case "daynight": yield return DayNightTest(); break;
+            case "garments": yield return GarmentsTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -603,6 +604,103 @@ public class ScenarioTest : MonoBehaviour
         cam.fieldOfView = fov;
         foreach (var g in lights) Destroy(g);
         FlyingVehicle.CameraOverride = false;
+    }
+
+    // ---------- clothing phase 1: garment fields ----------
+
+    IEnumerator GarmentsTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        var specs = new (string, CharacterSheet)[]
+        {
+            ("M S20 D1", new CharacterSheet(Sex.Male, 20, 10, 1, 1000)), ("F S20 D1", new CharacterSheet(Sex.Female, 20, 10, 1, 1000)),
+            ("M S10 D20", new CharacterSheet(Sex.Male, 10, 10, 20, 1000)), ("F S10 D10", new CharacterSheet(Sex.Female, 10, 10, 10, 1000)),
+        };
+        var lineup = new GameObject("GarmentLineup").AddComponent<BodyLineupDebug>();
+        lineup.enabled = false;
+        var shirt = GarmentDef.TShirt(); var pants = GarmentDef.Pants(); var coat = GarmentDef.Coat();
+        bool hollowsOk = true, tentOk = true, legsOk = true;
+        for (int i = 0; i < specs.Length; i++)
+        {
+            var (name, sh) = specs[i];
+            var plan = BodyPlanner.Generate(sh);
+            using var sdf = new BodySDF(plan);
+            var k = sdf.Kernel;
+            using var fs = new GarmentField(sdf, shirt);
+            using var fp = new GarmentField(sdf, pants);
+            var ks = fs.Kernel; var kp = fp.Kernel;
+
+            // Standoff: from inside the body along dir, where the skin ends and where the garment's outer
+            // surface ends (cm between them).
+            float Exit(System.Func<Vector3, float> f, Vector3 from, Vector3 dirn) { for (float t = 0f; t < 0.5f; t += 0.0005f) if (f(from + dirn * t) >= 0f) return t; return 0.5f; }
+            float Standoff(GarmentKernel g, Vector3 from, Vector3 dirn) => (Exit(g.OuterSolid, from, dirn) - Exit(k.Skin, from, dirn)) * 100f;
+            Vector3 J(string b) => sdf.start[plan.Index(b)];
+            Vector3 Ax(string b, float t) { int bi = plan.Index(b); return Vector3.Lerp(sdf.start[bi], sdf.end[bi], t); }
+
+            // Front of the lumbar (navel height) against the sides; the spine groove at the chest.
+            Vector3 lum = Ax("Spine", 0.45f), chestMid = Ax("Chest", 0.5f);
+            float navel = Standoff(ks, lum, Vector3.forward), navelSide = Standoff(ks, lum, (Vector3.forward + Vector3.right).normalized);
+            float spine = Standoff(ks, chestMid, Vector3.back);
+            // Under the chest / breasts (front, low on the chest) and below the belly.
+            float underBust = Standoff(ks, Ax("Chest", 0.12f), Vector3.forward), bust = Standoff(ks, Ax("Chest", 0.45f), Vector3.forward);
+            float belly = Standoff(ks, Ax("Spine", 0.05f) + Vector3.down * 0.03f, Vector3.forward);
+            // Pants: between the thighs, half way down: outside both leg tubes?
+            Vector3 thighL = Ax("HipL", 0.6f), thighR = Ax("HipR", 0.6f), between = (thighL + thighR) * 0.5f;
+            float crotchGap = kp.OuterSolid(between) * 100f, bodyGap = k.Skin(between) * 100f;
+            float legL = Standoff(kp, thighL, Vector3.left), legR = Standoff(kp, thighR, Vector3.right);
+            Log($"{name}: shirt {fs.buildMs:0} ms, pants {fp.buildMs:0} ms | standoff (cm): navel {navel:0.0}, navel side {navelSide:0.0}, spine {spine:0.0}, " +
+                $"under bust {underBust:0.0} vs bust {bust:0.0}, below belly {belly:0.0} | pants: legs {legL:0.0} / {legR:0.0}, between the thighs (body {bodyGap:0.0} cm apart) {crotchGap:0.0} cm outside");
+            float min = (shirt.thickness + shirt.gap) * 100f;
+            if (navel < min - 0.05f || spine < min - 0.05f) hollowsOk = false;
+            if (sh.sex == Sex.Female && sh.DEX >= 10 && underBust < bust + 0.5f) tentOk = false;   // (a heavy belly fills the space under the bust)
+            if (bodyGap > 1f && crotchGap <= 0f) legsOk = false;                                  // (heavy thighs touch: nothing to keep apart)
+
+            // Pictures: body + shirt + pants (+ a coat on the first) as debug meshes.
+            var root = new GameObject(name).transform;
+            root.position = origin + new Vector3(i * 1.1f, 0f, 0f);
+            var (bm, _) = lineup.BuildMesh(plan);
+            Mesh(root, bm, lineup.skinColor);
+            foreach (var g in (i == 0 ? new[] { coat } : new[] { shirt, pants }))
+            {
+                using var f = new GarmentField(sdf, g);
+                Mesh(root, f.BuildDebugMesh(0.006f), g.color);
+            }
+            yield return null;
+        }
+        Log(hollowsOk ? "PASS shirts bridge the navel and spine groove (never closer than thickness + gap)" : "FAIL garment hugs a hollow");
+        Log(tentOk ? "PASS shirts tent below the bust (more standoff under it than on it)" : "FAIL no tent below the bust");
+        Log(legsOk ? "PASS pants: separate leg tubes wherever the thighs are apart" : "FAIL pants fill the gap between the legs");
+
+        var cam = Camera.main; cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        TimeOfDay.Instance?.SetHour(12f);
+        var lg = new GameObject("GarmentKey"); var l = lg.AddComponent<Light>(); l.type = LightType.Directional; l.intensity = 1.3f;
+        lg.transform.rotation = Quaternion.LookRotation(new Vector3(-0.4f, -0.5f, -0.8f));
+        IEnumerator Shot(string n, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"garments_{n}.png"));
+            yield return null; yield return null;
+        }
+        Vector3 mid = origin + new Vector3(1.65f, 0.95f, 0f);
+        yield return Shot("front", mid, mid + new Vector3(0f, 0.15f, 3.6f));
+        yield return Shot("side", mid, mid + new Vector3(4.2f, 0.3f, 1.2f));
+        for (int i = 0; i < specs.Length; i++)
+        {
+            Vector3 c = origin + new Vector3(i * 1.1f, 1.05f, 0f);
+            yield return Shot("close" + i, c, c + new Vector3(0.9f, 0.1f, 1.3f));
+        }
+        Destroy(lg);
+        FlyingVehicle.CameraOverride = false;
+
+        static void Mesh(Transform parent, Mesh m, Color c)
+        {
+            var go = new GameObject(m.name);
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = m;
+            go.AddComponent<MeshRenderer>().sharedMaterial = CharacterFigure.Mat(c);
+        }
     }
 
     // ---------- day / night ----------

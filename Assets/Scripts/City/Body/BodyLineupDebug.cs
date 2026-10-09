@@ -13,6 +13,8 @@ using UnityEngine;
 // previewMeshes shows the generated body mesh (BodySDF -> BodyMesher, A-pose bind pose) instead of the
 // rings: built one per frame in play mode; in the editor use the component's context menu
 // "Build preview meshes" (they draw as gizmos).
+// previewOutfit (Clothing Phase 1 check): the STR / DEX rows also get a T-shirt and pants, each as its
+// garment field's outer solid, quick-meshed in the garment's colour.
 public class BodyLineupDebug : MonoBehaviour
 {
     public float spacing = 1.0f;
@@ -23,12 +25,16 @@ public class BodyLineupDebug : MonoBehaviour
     public float meshCell = 0.015f;
     public int meshTriangles = 10000;
     public Color skinColor = new Color(0.82f, 0.64f, 0.52f);
+    public bool previewOutfit = true;
+    public int[] outfitRows = { 1, 2, 3 };
+    public float garmentCell = 0.006f;
     public float LastMeshMs { get; private set; }
     public int MeshesBuilt { get; private set; }
     public readonly List<(string label, BodyMesher.Result result)> MeshStats = new List<(string, BodyMesher.Result)>();
     readonly List<(Mesh mesh, Vector3 offset)> editorMeshes = new List<(Mesh, Vector3)>();
+    readonly List<(Mesh mesh, Vector3 offset, Color color)> editorGarments = new List<(Mesh, Vector3, Color)>();
 
-    public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; }
+    public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; public int row; }
     public readonly List<Entry> Entries = new List<Entry>();
     public static readonly string[] RowNames = { "seed variation", "STR 1  (DEX 1/10/20)", "STR 10 (DEX 1/10/20)", "STR 20 (DEX 1/10/20)", "INT 1-20", "arms 0/1/3/4/5" };
     static readonly int[] Sweep = { 1, 5, 10, 15, 20 };
@@ -38,7 +44,7 @@ public class BodyLineupDebug : MonoBehaviour
         Entries.Clear();
         var rules = BodyRules.Default;
         void Add(int row, int col, string label, CharacterSheet sheet, ISpeciesTemplate t = null) =>
-            Entries.Add(new Entry { label = label, plan = BodyPlanner.Generate(sheet, rules, t), offset = new Vector3(-col * spacing, -row * rowHeight, 0f) });
+            Entries.Add(new Entry { label = label, plan = BodyPlanner.Generate(sheet, rules, t), offset = new Vector3(-col * spacing, -row * rowHeight, 0f), row = row });
 
         for (int i = 0; i < 4; i++)
         {
@@ -97,8 +103,32 @@ public class BodyLineupDebug : MonoBehaviour
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
             go.AddComponent<MeshRenderer>().sharedMaterial = mat;
             MeshesBuilt++;
+            if (Dressed(e))
+                foreach (var (gm, color) in BuildGarments(e.plan))
+                {
+                    var g = new GameObject("Garment " + gm.name);
+                    g.transform.SetParent(go.transform, false);
+                    g.AddComponent<MeshFilter>().sharedMesh = gm;
+                    g.AddComponent<MeshRenderer>().sharedMaterial = CharacterFigure.Mat(color);
+                }
             yield return null;
         }
+    }
+
+    bool Dressed(Entry e) => previewOutfit && System.Array.IndexOf(outfitRows, e.row) >= 0;
+
+    // The casual outfit's garments as quick debug meshes (outer solids).
+    public List<(Mesh mesh, Color color)> BuildGarments(BodyPlan plan, Outfit outfit = null)
+    {
+        outfit ??= Outfit.Casual();
+        var list = new List<(Mesh, Color)>();
+        using var sdf = new BodySDF(plan);
+        foreach (var g in outfit.garments)
+        {
+            using var field = new GarmentField(sdf, g);
+            list.Add((field.BuildDebugMesh(garmentCell), g.color));
+        }
+        return list;
     }
 
     public (Mesh mesh, BodyMesher.Result r) BuildMesh(BodyPlan plan)
@@ -113,12 +143,16 @@ public class BodyLineupDebug : MonoBehaviour
     void BuildEditorMeshes()
     {
         Generate();
-        editorMeshes.Clear();
-        foreach (var e in Entries) editorMeshes.Add((BuildMesh(e.plan).mesh, e.offset));
+        editorMeshes.Clear(); editorGarments.Clear();
+        foreach (var e in Entries)
+        {
+            editorMeshes.Add((BuildMesh(e.plan).mesh, e.offset));
+            if (Dressed(e)) foreach (var (m, c) in BuildGarments(e.plan)) editorGarments.Add((m, e.offset, c));
+        }
     }
 
     [ContextMenu("Clear preview meshes")]
-    void ClearEditorMeshes() => editorMeshes.Clear();
+    void ClearEditorMeshes() { editorMeshes.Clear(); editorGarments.Clear(); }
 
     Mesh LineObject(string name, Color c)
     {
@@ -191,6 +225,7 @@ public class BodyLineupDebug : MonoBehaviour
         {
             Gizmos.color = skinColor;
             foreach (var (m, off) in editorMeshes) Gizmos.DrawMesh(m, transform.TransformPoint(off), transform.rotation);
+            foreach (var (m, off, c) in editorGarments) { Gizmos.color = c; Gizmos.DrawMesh(m, transform.TransformPoint(off), transform.rotation); }
         }
         var lines = new List<Vector3>();
         foreach (var e in Entries)
@@ -222,5 +257,5 @@ public class BodyLineupDebug : MonoBehaviour
 #endif
     }
 
-    void OnValidate() { Entries.Clear(); editorMeshes.Clear(); }
+    void OnValidate() { Entries.Clear(); editorMeshes.Clear(); editorGarments.Clear(); }
 }
