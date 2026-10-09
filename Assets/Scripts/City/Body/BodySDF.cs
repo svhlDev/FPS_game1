@@ -28,9 +28,9 @@ public class BodySDF : IDisposable
     public float jointBlend = 0.015f;      // core: bone with its parent (+ jointBlendGirth x the thinner core)
     public float jointBlendGirth = 0.6f;
     public float torsoBlend = 0.04f;       // pelvis / lumbar / chest seams (rounds the steps between them)
-    public float muscleBlend = 0.008f;     // small: muscle shapes stay distinct
+    public float muscleBlend = 0.022f;     // small: muscle shapes stay distinct
     public float fatBlendPerMetre = 1.6f;  // fat blend radius = this x local fat thickness (+ minimum)
-    public float fatBlendMin = 0.004f;
+    public float fatBlendMin = 0.018f;
     public float fatBlendFalloff = 0.06f;  // fat thickness blends across nearby bones (no ridges where they meet)
     public float breastBlend = 0.06f;
     public float featureBlend = 0.012f;
@@ -44,6 +44,7 @@ public class BodySDF : IDisposable
 
     readonly BodyPlan plan;
     public readonly Vector3[] start, end;          // posed bone ends (root space)
+    public readonly Matrix4x4[] bind;              // each joint's transform in this pose, relative to the root
     readonly Frame[] frames;                       // bone frames: y along the bone, z the body's front
     readonly float[] depthRatio;
     readonly List<Blob> blobs = new List<Blob>();
@@ -82,6 +83,7 @@ public class BodySDF : IDisposable
         if (n > BodySdfKernel.MaxBones) throw new ArgumentException($"{n} bones (max {BodySdfKernel.MaxBones})");
         start = new Vector3[n]; end = new Vector3[n]; frames = new Frame[n]; depthRatio = new float[n];
         jointK = new float[n];
+        bind = new Matrix4x4[n];
         var world = new Quaternion[n];
         for (int i = 0; i < n; i++)
         {
@@ -92,6 +94,7 @@ public class BodySDF : IDisposable
             world[i] = pr * pose[i];
             Vector3 dir = (world[i] * b.dir).normalized;
             end[i] = start[i] + dir * b.length;
+            bind[i] = Matrix4x4.TRS(start[i], world[i], Vector3.one);
             Vector3 fwd = Vector3.ProjectOnPlane(world[i] * Vector3.forward, dir);
             if (b.kind == BoneKind.Foot) fwd = Vector3.ProjectOnPlane(Vector3.up, dir);
             if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.ProjectOnPlane(Vector3.forward, dir);
@@ -193,6 +196,9 @@ public class BodySDF : IDisposable
         float rel = avg > 1e-4f ? plan.dna.Muscle(g) / avg : 1f;
         float th = m * thick * Mathf.Pow(Mathf.Max(rel, 0f), 0.7f);
         if (th < 0.001f) return;
+        // A blob is a flat-ish ellipsoid on a curved body: its edges rise off the surface by about
+        // (width x r)^2 / 2r. Keep that under ~60% of its thickness, or the edges stand off as rims.
+        width = Mathf.Min(width, Mathf.Sqrt(1.2f * th / Mathf.Max(coreR, 1e-3f)));
         var f = frames[i];
         float a = angle * Mathf.Deg2Rad, dr = depthRatio[i];
         // On the (flattened, elliptical) core cross-section: the point at this angle and the surface
@@ -246,8 +252,8 @@ public class BodySDF : IDisposable
                             bl.f.o -= frames[i].x * s * BodyRules.Default.malePecInset;
                             blobs[blobs.Count - 1] = bl;
                         }
-                        AddBlob(i, MuscleGroup.Lats, 0.5f, s * 118f, 0.55f, 0.45f);
-                        AddBlob(i, MuscleGroup.Trapezius, 0.95f, s * 150f, 0.3f, 0.55f, 0.9f);
+                        AddBlob(i, MuscleGroup.Lats, 0.45f, s * 125f, 0.75f, 0.6f, 0.45f);
+                        AddBlob(i, MuscleGroup.Trapezius, 0.92f, s * 155f, 0.35f, 0.7f, 0.5f);
                     }
                     break;
                 case BoneKind.Lumbar:
@@ -275,7 +281,7 @@ public class BodySDF : IDisposable
                     }
                     break;
                 case BoneKind.Neck:
-                    foreach (float s in new[] { -1f, 1f }) AddBlob(i, MuscleGroup.Trapezius, 0.2f, s * 140f, 0.9f, 0.6f, 0.8f);
+                    foreach (float s in new[] { -1f, 1f }) AddBlob(i, MuscleGroup.Trapezius, 0.2f, s * 140f, 0.9f, 0.6f, 0.5f);
                     break;
                 case BoneKind.UpperArm:
                     AddBlob(i, MuscleGroup.Deltoids, 0.1f, o * 90f, 0.32f, 0.95f, 1.2f);

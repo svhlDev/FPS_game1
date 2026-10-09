@@ -149,7 +149,7 @@ public class FigureAnimator : MonoBehaviour
 
         // ---------- apply ----------
         var hips = f.Hips;
-        float hipBase = 0.71f * f.Scale;
+        float hipBase = f.HipHeight;
         hips.localPosition = Vector3.Lerp(hips.localPosition, new Vector3(0f, hipBase + hipsY * f.Scale, 0f), k);
         Quaternion hipsWorld = Quaternion.Euler(0f, bodyYaw, 0f) * Quaternion.Euler(hipsPitch, 0f, hipsRoll);
         hips.rotation = Quaternion.Slerp(hips.rotation, hipsWorld, k);

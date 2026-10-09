@@ -53,6 +53,7 @@ public class ScenarioTest : MonoBehaviour
             case "aim": yield return AimTest(); break;
             case "tgun": yield return TGunTest(); break;
             case "bodies": yield return BodiesTest(); break;
+            case "skin": yield return SkinTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -460,6 +461,178 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- generated bodies: phase 5 (skinning) ----------
+
+    static float SkinnedVolume(CharacterFigure f)
+    {
+        float vol = 0f;
+        foreach (var r in f.Renderers)
+        {
+            var smr = r as SkinnedMeshRenderer;
+            if (smr == null) continue;
+            var m = new Mesh();
+            smr.BakeMesh(m, true);
+            var v = m.vertices; var t = m.triangles;
+            // Baked vertices are in the renderer's space; the renderer sits at the body root.
+            for (int k = 0; k < t.Length; k += 3) vol += Vector3.Dot(v[t[k]], Vector3.Cross(v[t[k + 1]], v[t[k + 2]])) / 6f;
+            Destroy(m);
+        }
+        return vol;
+    }
+
+    IEnumerator SkinTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        var avgSheet = new CharacterSheet(Sex.Male, 10, 10, 10, 1000);
+
+        // 1. Bind fidelity: joints set to the A-pose reproduce the generated surface.
+        {
+            var go = new GameObject("BindCheck");
+            go.transform.position = origin + new Vector3(0f, 0f, -10f);
+            var st = new CharacterFigure.GenerationStats();
+            var f = CharacterFigure.BuildGenerated(go.transform, avgSheet, CharacterFigure.Role.Civilian, true, false, st);
+            Log($"generated body: {st.triangles} tris, mesh {st.meshMs:0} ms, skin weights + split {st.skinMs:0} ms, total {st.totalMs:0} ms; " +
+                $"height {f.Height:0.00}, hips {f.HipHeight:0.00}, eye height {f.EyeHeight:0.00}, eye forward {f.EyeForward:0.000}, arm {f.ArmLength:0.00}");
+            var sk = go.GetComponent<BodySkeleton>();
+            var pose = BodySDF.APose(f.Plan);
+            for (int i = 0; i < sk.Bones.Count; i++) sk.Bones[i].joint.localRotation = pose[i];
+            yield return null;
+            using var sdf = new BodySDF(f.Plan);
+            float worst = 0f, sum = 0f; int n = 0;
+            foreach (var r in f.Renderers)
+            {
+                var m = new Mesh();
+                ((SkinnedMeshRenderer)r).BakeMesh(m, true);
+                foreach (var v in m.vertices) { float d = Mathf.Abs(sdf.Eval(v)); worst = Mathf.Max(worst, d); sum += d; n++; }
+                Destroy(m);
+            }
+            Log($"bind check (A-pose): skinned vertices {sum / n * 1000f:0.00} mm from the SDF surface on average, worst {worst * 1000f:0.0} mm");
+            Log(worst < 0.004f ? "PASS bind poses reproduce the generated surface" : "FAIL skinned mesh doesn't match the bind pose");
+            Destroy(go);
+        }
+
+        // 2. Every pose on the same body, in a row; volume against standing.
+        var poses = new (string name, FigureAnimator.Pose pose, FigureAnimator.Arms arms, float speed, bool punch)[]
+        {
+            ("stand", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Lowered, 0f, false),
+            ("walk", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Lowered, 1.4f, false),
+            ("run", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Lowered, 6f, false),
+            ("guard punch", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Guard, 0f, true),
+            ("aim", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Aim, 0f, false),
+            ("air", FigureAnimator.Pose.Air, FigureAnimator.Arms.Lowered, 0f, false),
+            ("glide", FigureAnimator.Pose.Glide, FigureAnimator.Arms.Lowered, 0f, false),
+            ("hang", FigureAnimator.Pose.Hang, FigureAnimator.Arms.Lowered, 0f, false),
+            ("seated", FigureAnimator.Pose.Seated, FigureAnimator.Arms.Lowered, 0f, false),
+            ("cuffed", FigureAnimator.Pose.Cuffed, FigureAnimator.Arms.Behind, 0f, false),
+            ("cuffing", FigureAnimator.Pose.Cuffing, FigureAnimator.Arms.Lowered, 0f, false),
+            ("stunned", FigureAnimator.Pose.Stunned, FigureAnimator.Arms.Lowered, 0f, false),
+            ("landing", FigureAnimator.Pose.Landing, FigureAnimator.Arms.Lowered, 0f, false),
+            ("scooter", FigureAnimator.Pose.Scooter, FigureAnimator.Arms.Lowered, 0f, false),
+        };
+        var figs = new List<(string name, CharacterFigure f, FigureAnimator a, bool punch)>();
+        for (int i = 0; i < poses.Length; i++)
+        {
+            var go = new GameObject("Pose " + poses[i].name);
+            go.transform.position = origin + new Vector3(i * 1.1f, 0f, 0f);
+            var f = CharacterFigure.BuildGenerated(go.transform, avgSheet, CharacterFigure.Role.Civilian, true, false);
+            var a = go.AddComponent<FigureAnimator>();
+            a.CurrentPose = poses[i].pose; a.ArmMode = poses[i].arms;
+            a.Velocity = Vector3.forward * poses[i].speed; a.Grounded = poses[i].pose != FigureAnimator.Pose.Air && poses[i].pose != FigureAnimator.Pose.Glide;
+            a.LookYaw = 0f; a.LookPitch = 0f;
+            figs.Add((poses[i].name, f, a, poses[i].punch));
+            yield return null;
+        }
+        // Different bodies walking: heavy, ripped, women, five arms.
+        var bodies = new (string name, CharacterSheet sheet)[]
+        {
+            ("heavy man", new CharacterSheet(Sex.Male, 20, 10, 1, 1000)), ("ripped man", new CharacterSheet(Sex.Male, 20, 10, 20, 1000)),
+            ("heavy woman", new CharacterSheet(Sex.Female, 20, 10, 1, 1000)), ("woman", new CharacterSheet(Sex.Female, 10, 10, 10, 1000)),
+            ("lean woman", new CharacterSheet(Sex.Female, 10, 10, 20, 1000)), ("small soft", new CharacterSheet(Sex.Male, 1, 10, 1, 1000)),
+        };
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            var go = new GameObject("Body " + bodies[i].name);
+            go.transform.position = origin + new Vector3(i * 1.2f, -2.4f, 0f);
+            var f = CharacterFigure.BuildGenerated(go.transform, bodies[i].sheet, CharacterFigure.Role.Civilian, true, false);
+            var a = go.AddComponent<FigureAnimator>();
+            a.Velocity = Vector3.forward * 1.6f; a.Grounded = true;
+            figs.Add((bodies[i].name, f, a, false));
+            yield return null;
+        }
+        // Let the poses blend in; punches thrown just before the shot.
+        for (float t = 0f; t < 1.6f; t += Time.deltaTime)
+        {
+            foreach (var x in figs) if (x.punch && Time.frameCount % 20 == 0) x.a.Punch(1);
+            yield return null;
+        }
+        float standVol = SkinnedVolume(figs[0].f);
+        var sb = new System.Text.StringBuilder("volume vs standing: ");
+        float worstChange = 0f; string worstPose = "";
+        for (int i = 1; i < poses.Length; i++)
+        {
+            float v = SkinnedVolume(figs[i].f), ch = v / standVol - 1f;
+            sb.Append($"{figs[i].name} {ch * 100f:+0.0;-0.0}%, ");
+            if (Mathf.Abs(ch) > Mathf.Abs(worstChange)) { worstChange = ch; worstPose = figs[i].name; }
+        }
+        Log(sb.ToString());
+        Log(Mathf.Abs(worstChange) < 0.05f ? $"PASS poses keep their volume (worst {worstPose} {worstChange * 100f:+0.0;-0.0}%)" : $"WARN {worstPose} changes volume by {worstChange * 100f:0.0}%");
+
+        // Shots: a light, the pose row in two halves, the body row, a close-up.
+        var lightGo = new GameObject("SkinLight");
+        var lt = lightGo.AddComponent<Light>();
+        lt.type = LightType.Directional; lt.intensity = 1.6f; lt.color = new Color(1f, 0.96f, 0.9f);
+        lightGo.transform.rotation = Quaternion.LookRotation(new Vector3(-0.3f, -0.5f, 1f));
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        FlyingVehicle.CameraOverride = true;
+        IEnumerator Shot(string name, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            foreach (var x in figs) if (x.punch) x.a.Punch(1);
+            yield return new WaitForSeconds(0.08f);
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"skin_{name}.png"));
+            yield return null; yield return null;
+        }
+        Vector3 row = origin + new Vector3(0f, 0.9f, 0f);
+        yield return Shot("poses_a", row + new Vector3(3.3f, 0f, 0f), row + new Vector3(3.3f, 0.6f, -5.2f));
+        yield return Shot("poses_b", row + new Vector3(10.4f, 0f, 0f), row + new Vector3(10.4f, 0.6f, -5.2f));
+        yield return Shot("poses_side", row + new Vector3(6f, 0f, 0f), row + new Vector3(-2.5f, 1.2f, -3.5f));
+        Vector3 brow = origin + new Vector3(3f, -1.5f, 0f);
+        yield return Shot("bodies", brow, brow + new Vector3(0f, 0.6f, -5.4f));
+        yield return Shot("bodies_front", brow, brow + new Vector3(0f, 0.6f, 5.4f));
+        yield return Shot("poses_front", row + new Vector3(6.5f, 0f, 0f), row + new Vector3(6.5f, 0.8f, 9.5f));
+        Vector3 c = origin + new Vector3(3 * 1.1f, 1.1f, 0f);
+        yield return Shot("close_punch", c, c + new Vector3(0.8f, 0.3f, -1.6f));
+        Vector3 gl = origin + new Vector3(6 * 1.1f, 1.1f, 0f);
+        yield return Shot("close_glide", gl, gl + new Vector3(0.4f, 0.4f, -1.9f));
+        FlyingVehicle.CameraOverride = false;
+
+        // 3. The player: first person, looking down at the generated body.
+        var fpc = FirstPersonController.Instance;
+        var cr = fpc.playerCamera.transform;
+        fpc.AttachCamera(fpc.playerCamera);
+        Log($"player: generated {fpc.Figure.Generated}, height {fpc.Figure.Height:0.00}, capsule {fpc.GetComponent<CharacterController>().height:0.00}, eye {cr.position.y - fpc.transform.position.y:0.00} above the feet");
+        lightGo.transform.rotation = Quaternion.LookRotation(Vector3.ProjectOnPlane(fpc.transform.forward, Vector3.up) * -1f + Vector3.down * 0.8f);
+        fpc.DebugLook(70f, fpc.transform.eulerAngles.y);
+        yield return new WaitForSeconds(0.8f);
+        {
+            var pf = fpc.Figure;
+            Vector3 loc(Transform t) => fpc.transform.InverseTransformPoint(t.position);
+            Log($"fp: camera {loc(cr)}, head {loc(pf.Head)}, chest {loc(pf.Chest)}, hips {loc(pf.Hips)}, toes {loc(pf.AnkleL)}; cam fwd {fpc.transform.InverseTransformDirection(cr.forward)}; " +
+                $"renderers: {string.Join(", ", pf.Renderers.ConvertAll(r => r.name + (r.enabled ? "" : " OFF") + " " + r.shadowCastingMode + " visible " + r.isVisible))}");
+        }
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "skin_fp_down.png"));
+        yield return null; yield return null;
+        fpc.zoom.Snap(0.6f);
+        fpc.DebugLook(15f, fpc.transform.eulerAngles.y + 160f);
+        yield return new WaitForSeconds(0.8f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "skin_tp_player.png"));
+        yield return null; yield return null;
+        fpc.zoom.Snap(0f);
+        Destroy(lightGo);
     }
 
     // ---------- generated bodies: phase 1 (plan + skeleton) ----------

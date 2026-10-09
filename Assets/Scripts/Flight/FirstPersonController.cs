@@ -108,6 +108,10 @@ public class FirstPersonController : MonoBehaviour
     [Header("Body")]
     [Tooltip("Sole to top of head; the collision capsule matches it.")]
     public float figureHeight = CharacterFigure.DefaultHeight;
+    [Tooltip("The player's character sheet: the body is generated from it (sex, STR, INT, DEX, seed).")]
+    public CharacterSheet sheet = new CharacterSheet(Sex.Male, 10, 10, 10, 7);
+    [Tooltip("Off: the old primitive figure.")]
+    public bool generatedBody = true;
 
     [Header("Camera")]
     [Tooltip("Same zoom behaviour as the car camera; on-foot zoom is remembered separately.")]
@@ -205,10 +209,12 @@ public class FirstPersonController : MonoBehaviour
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
         // Older scenes carry a capsule + visor body: hide it, the figure replaces it.
         if (bodyRenderers != null) foreach (var r in bodyRenderers) if (r != null) r.enabled = false;
-        cc.height = figureHeight;
-        cc.radius = 0.2f * figureHeight / CharacterFigure.DefaultHeight;
-        cc.center = new Vector3(0f, figureHeight * 0.5f, 0f);
-        Figure = CharacterFigure.Build(transform, CharacterFigure.Role.Player, null, figureHeight, shadows: true);
+        Figure = generatedBody ? CharacterFigure.BuildGenerated(transform, sheet, CharacterFigure.Role.Player, shadows: true)
+                               : CharacterFigure.Build(transform, CharacterFigure.Role.Player, null, figureHeight, shadows: true);
+        float h = Figure.Height;
+        cc.height = h;
+        cc.radius = 0.2f * h / CharacterFigure.DefaultHeight;
+        cc.center = new Vector3(0f, h * 0.5f, 0f);
         Animator = gameObject.AddComponent<FigureAnimator>();
         Flammable.Add(gameObject, Flammable.Kind.Character);
         Animator.FollowLook = true;
@@ -390,8 +396,7 @@ public class FirstPersonController : MonoBehaviour
         PoseBody();
         // The eyes: just in front of the head's centre, wherever the posed head is now.
         if (Figure != null)
-            cameraRoot.position = Figure.Head.position + Quaternion.Euler(0f, transform.eulerAngles.y, 0f) * Vector3.forward * Figure.EyeForward
-                                  + Vector3.up * (0.01f * Figure.Scale);
+            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y);
 
         var cam = playerCamera.transform;
         if (cam.parent == cameraRoot)

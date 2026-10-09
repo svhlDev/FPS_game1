@@ -187,10 +187,13 @@ public struct BodySdfKernel : IDisposable
         if (hasDna == 0) return th;
         Vector2 dir = new Vector2(q.x, q.z);
         float m = dir.magnitude;
-        float front = m > 1e-4f ? dir.y / m : 0f, sideAmt = m > 1e-4f ? Mathf.Abs(dir.x / m) : 0f;
-        if (b.kind == KLumbar) th = Mathf.Lerp(fatWaist, fatBelly, Mathf.Clamp01(front)) * (front < 0f ? Mathf.Lerp(1f, 0.6f, -front) : 1f);
-        else if (b.kind == KPelvis) th = front < 0f ? Mathf.Lerp(fatHips, fatButtocks, -front) : Mathf.Lerp(fatHips, fatBelly * 0.7f, front);
-        else if (b.kind == KChest) th = Mathf.Lerp(th, fatWaist * 0.6f, (1f - t) * 0.5f) * (1f - 0.3f * sideAmt);
+        // Smooth weights round the body (squares, no abs or clamp: a kink in the thickness would show
+        // as a crease in thick fat): fr = front-ness, bk = back-ness, sd = side-ness.
+        float front = m > 1e-4f ? dir.y / m : 0f;
+        float fr = front > 0f ? front * front : 0f, bk = front < 0f ? front * front : 0f, sd = 1f - front * front;
+        if (b.kind == KLumbar) th = Mathf.Lerp(fatWaist, fatBelly, fr) * Mathf.Lerp(1f, 0.6f, bk);
+        else if (b.kind == KPelvis) th = Mathf.Lerp(Mathf.Lerp(fatHips, fatButtocks, bk), fatBelly * 0.7f, fr);
+        else if (b.kind == KChest) th = Mathf.Lerp(th, fatWaist * 0.6f, (1f - t) * 0.5f) * (1f - 0.3f * sd);
         return th;
     }
 
@@ -216,7 +219,7 @@ public struct BodySdfKernel : IDisposable
         }
         float fat = wSum > 0f ? fSum / wSum : 0f;
         // Capped: polynomial smooth-min chained over many blobs with a huge radius piles up bulges.
-        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, 0.08f);
+        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, 0.14f);
         // Core: each bone smooth-unions with its parent only; the soft (fat) version blends wider.
         float core = float.MaxValue, soft = float.MaxValue;
         for (int i = 0; i < n; i++)
