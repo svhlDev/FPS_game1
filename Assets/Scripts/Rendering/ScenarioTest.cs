@@ -52,6 +52,7 @@ public class ScenarioTest : MonoBehaviour
             case "fx": yield return FxTest(); break;
             case "aim": yield return AimTest(); break;
             case "tgun": yield return TGunTest(); break;
+            case "bodies": yield return BodiesTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -459,6 +460,80 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- generated bodies: phase 1 (plan + skeleton) ----------
+
+    IEnumerator BodiesTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        Log($"pcg check: Hash(1,2,3) = {Pcg.Hash(1, 2, 3)}, Hash(0,0,0) = {Pcg.Hash(0, 0, 0)}, U01(Hash(7,8,9)) = {Pcg.U01(Pcg.Hash(7, 8, 9)):0.000000}");
+
+        // Determinism: same sheet twice -> identical plan; different seed -> different plan.
+        var sheet = new CharacterSheet(Sex.Female, 12, 9, 14, 4242);
+        var a = BodyPlanner.Generate(sheet); var b = BodyPlanner.Generate(sheet);
+        var c = BodyPlanner.Generate(new CharacterSheet(Sex.Female, 12, 9, 14, 4243));
+        bool same = a.bones.Count == b.bones.Count, differs = false;
+        for (int i = 0; i < a.bones.Count && same; i++)
+            same = a.bones[i].length == b.bones[i].length && a.bones[i].girth == b.bones[i].girth && a.bones[i].localPos == b.bones[i].localPos;
+        for (int i = 0; i < a.bones.Count; i++) differs |= a.bones[i].length != c.bones[i].length;
+        Log($"determinism: same sheet identical {same}, next seed differs {differs}");
+        Log(same && differs ? "PASS same seed + sheet = same body" : "FAIL determinism");
+
+        // Timing and validation over many rolled sheets.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int n = 500, rerolled = 0, nudged = 0;
+        float minH = 9f, maxH = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            var plan = BodyPlanner.Generate(CharacterSheet.Roll(i));
+            if (plan.rerolls > 0) rerolled++;
+            if (!string.IsNullOrEmpty(plan.nudged)) nudged++;
+            minH = Mathf.Min(minH, plan.height); maxH = Mathf.Max(maxH, plan.height);
+        }
+        sw.Stop();
+        Log($"{n} plans in {sw.Elapsed.TotalMilliseconds:0} ms ({sw.Elapsed.TotalMilliseconds / n:0.000} ms each), re-rolled {rerolled}, nudged {nudged}, heights {minH:0.00}-{maxH:0.00}");
+
+        // Odd arms and extra girdles validate.
+        foreach (int arms in new[] { 0, 1, 3, 4, 5 })
+        {
+            var p = BodyPlanner.Generate(new CharacterSheet(Sex.Male, 10, 10, 10, 77), null, new HumanTemplate { armCount = arms });
+            Log($"  {arms} arms: {p.arms.Count} arms on girdles [{string.Join(",", p.arms.ConvertAll(x => x.girdle + (x.side < 0 ? "L" : x.side > 0 ? "R" : "C")))}], {p.bones.Count} bones, valid {BodyPlanner.Validate(p, BodyRules.Default, out var why)} {why}");
+        }
+
+        // The lineup, built as real hierarchies, in the sky.
+        var go = new GameObject("Body Lineup");
+        go.transform.position = new Vector3(0f, 1500f, 0f);
+        var lineup = go.AddComponent<BodyLineupDebug>();
+        yield return null; yield return null;
+        var sk = go.GetComponentsInChildren<BodySkeleton>();
+        float ms = 0f; foreach (var s in sk) ms += s.GenerationMs;
+        var first = sk[0];
+        bool contract = first.Hips && first.Spine && first.Chest && first.Neck && first.Head && first.ShoulderL && first.ShoulderR && first.ElbowL && first.ElbowR
+                        && first.WristL && first.WristR && first.HandL && first.HandR && first.HipL && first.HipR && first.KneeL && first.KneeR && first.AnkleL && first.AnkleR;
+        Vector3 toe = first.Bones[first.Plan.Index("AnkleL")].End;
+        Log($"lineup: {sk.Length} skeletons, hierarchy build {ms / sk.Length:0.000} ms each; named joints present {contract}; " +
+            $"male #0: height {first.Plan.height:0.000}, head top {first.Bones[first.Plan.Index("Head")].End.y - go.transform.position.y:0.000}, toe at y {toe.y - go.transform.position.y:0.000}, hand {first.Plan.bones[first.Plan.Index("WristL")].length:0.000} m");
+        Log(contract && Mathf.Abs(toe.y - go.transform.position.y) < 0.01f ? "PASS skeletons keep the rig contract, feet on the ground" : "FAIL skeleton");
+
+        // Camera: straight on, the whole grid.
+        Time.timeScale = 0f;
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        FlyingVehicle.CameraOverride = true;
+        Vector3 centre = go.transform.position + new Vector3(-4.5f, -3.4f, 0f);
+        cam.transform.SetPositionAndRotation(centre + new Vector3(0f, 0f, 13f), Quaternion.LookRotation(Vector3.back));
+        cam.fieldOfView = 55f;
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_lineup.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        // Close-up of the first row, three-quarter view.
+        cam.transform.SetPositionAndRotation(go.transform.position + new Vector3(-2.2f, 0.9f, 4.2f), Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, -1f)));
+        cam.fieldOfView = 50f;
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_row0.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        Time.timeScale = 1f;
     }
 
     // ---------- T-gun: modes, police rules, officers' guns ----------
