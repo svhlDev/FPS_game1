@@ -576,6 +576,8 @@ public class ScenarioTest : MonoBehaviour
             float lean = Bumpiness(P(Sex.Male, 15, 10, 20), out float zLean), heavy = Bumpiness(P(Sex.Male, 15, 10, 1), out float zHeavy);
             float avg = Bumpiness(P(Sex.Male, 15, 10, 10), out float zAvg);
             Log($"abs definition (RMS bumps on the belly's front, mm): DEX 20 {lean:0.000}, DEX 10 {avg:0.000}, DEX 1 {heavy:0.000}; belly front at z {zLean * 100f:0.0} / {zAvg * 100f:0.0} / {zHeavy * 100f:0.0} cm");
+            foreach (int dex in new[] { 20, 10, 1 }) Log($"  F DEX {dex}: " + new BodySDF(P(Sex.Female, 10, 10, dex)).BreastReport());
+            Log("  M avg: " + new BodySDF(P(Sex.Male, 10, 10, 10)).BreastReport());
             Log(lean > heavy * 2f && zHeavy > zLean + 0.03f ? "PASS muscle definition shows at high DEX and is smoothed over at low DEX" : "FAIL definition doesn't follow DEX");
         }
 

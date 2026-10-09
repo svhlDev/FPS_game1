@@ -182,6 +182,13 @@ public class BodySDF
                     foreach (float s in new[] { -1f, 1f })
                     {
                         AddBlob(i, MuscleGroup.Pectorals, 0.72f, s * 36f, 0.55f, 0.52f, 0.45f);
+                        // Men's pecs sit closer together (centres pecInset nearer the midline each).
+                        if (plan.sheet.sex == Sex.Male && blobs.Count > 0 && blobs[blobs.Count - 1].group == MuscleGroup.Pectorals)
+                        {
+                            var bl = blobs[blobs.Count - 1];
+                            bl.f.o -= frames[i].x * s * BodyRules.Default.malePecInset;
+                            blobs[blobs.Count - 1] = bl;
+                        }
                         AddBlob(i, MuscleGroup.Lats, 0.5f, s * 118f, 0.55f, 0.45f);
                         AddBlob(i, MuscleGroup.Trapezius, 0.95f, s * 150f, 0.3f, 0.55f, 0.9f);
                     }
@@ -256,7 +263,15 @@ public class BodySDF
             if (!sock.name.StartsWith("breast.")) continue;
             var f = frames[chest];
             // Socket in the chest's rest space; the chest isn't posed, so its frame is axis-aligned.
-            Vector3 p = start[chest] + sock.localPos - f.z * s * 0.15f;
+            // How far the breast stands out from the chest grows with its size: small ones sit close
+            // to the body, large (heavier) ones project further.
+            var rules = BodyRules.Default;
+            var cb = plan.bones[chest];
+            float tAlong = Mathf.Clamp01(sock.localPos.y / Mathf.Max(1e-4f, cb.length));
+            float front = Profile(cb.Outer, tAlong) * depthRatio[chest];
+            float k = Mathf.Lerp(rules.breastProjection.x, rules.breastProjection.y,
+                                 Mathf.InverseLerp(rules.breastProjectionSizes.x, rules.breastProjectionSizes.y, s));
+            Vector3 p = start[chest] + new Vector3(sock.localPos.x, sock.localPos.y, 0f) + f.z * (front + (k - 0.6f) * s);
             breasts.Add(new Feature { f = new Frame { o = p, x = f.x, y = f.y, z = f.z }, r = new Vector3(s, s * 0.85f, s * 0.6f) });
         }
     }
@@ -490,6 +505,24 @@ public class BodySDF
     }
 
     public int BlobCount => blobs.Count;
+
+    // Breast size, how far its tip stands out from the chest's front surface, and the pec centre spacing.
+    public string BreastReport()
+    {
+        int chest = plan.Index("Chest");
+        var sb = new System.Text.StringBuilder();
+        foreach (var br in breasts)
+        {
+            var cb = plan.bones[chest];
+            float t = Mathf.Clamp01((br.f.o.y - start[chest].y) / cb.length);
+            float front = start[chest].z + Profile(cb.Outer, t) * depthRatio[chest];
+            sb.Append($"breast r {br.r.x * 100f:0.0} cm, tip {(br.f.o.z + br.r.z - front) * 100f:0.0} cm out; ");
+            break;
+        }
+        var pecs = blobs.FindAll(b => b.group == MuscleGroup.Pectorals);
+        if (pecs.Count == 2) sb.Append($"pec centres {Mathf.Abs(pecs[0].f.o.x - pecs[1].f.o.x) * 100f:0.0} cm apart");
+        return sb.ToString();
+    }
 
     // Debug: what is near a point (bones and blobs with their distances).
     public string DescribePoint(Vector3 p)

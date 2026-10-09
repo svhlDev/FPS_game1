@@ -67,6 +67,12 @@ public class BodyRules : ScriptableObject
     public float breastFatGain = 0.35f;
     [Tooltip("Downward offset as a fraction of breast size.")]
     public float breastDroop = 0.25f;
+    [Tooltip("How far a breast stands out from the chest, as a fraction of its size: x for small breasts, y for large.")]
+    public Vector2 breastProjection = new Vector2(0.3f, 0.95f);
+    [Tooltip("Breast radius (m) that counts as small (x) and large (y) for the projection.")]
+    public Vector2 breastProjectionSizes = new Vector2(0.04f, 0.12f);
+    [Tooltip("Men's pec centres move this far (m) toward the midline each (0.01 = 2 cm closer together).")]
+    public float malePecInset = 0.01f;
     public float faceNoise = 0.15f;
     [Tooltip("Spine pitch range (deg, + = slouch).")]
     public Vector2 postureRange = new Vector2(-3f, 6f);
