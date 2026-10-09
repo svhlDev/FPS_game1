@@ -10,6 +10,13 @@ using UnityEngine;
 //   Behind (cuffed, straining while struggling), Aim (right arm left to PlayerWeapon's IK; the body
 //   turns once the aim is more than 70 degrees off it, and leans for aim pitch beyond 60 degrees).
 //   Whole-body poses: glide, hang, seated, stunned (lying), officer cuffing / dragging, scooter.
+// Generated bodies (CharacterFigure.Generated) add a procedural layer from their DNA:
+//   Size and fat: heavier bodies sway more and walk with their legs wider apart; STR lengthens the
+//   stride (bigger swing, slower cadence).
+//   Extra arms (beyond the first pair) follow the main arm on their side, smaller and a beat behind.
+//   DEX jitter (from DEX 15 to 20): small fast noise on the head and wrists, faster idle weight
+//   shifts and occasional quick glances. Head and wrists only: the player's camera rides the neck and
+//   the aim sets the gun wrist afterwards, so neither the view nor the aim ever shakes.
 // Rotation convention: limbs hang along -Y, so a negative X rotation swings them forward.
 [DefaultExecutionOrder(50)]
 public class FigureAnimator : MonoBehaviour
@@ -35,11 +42,21 @@ public class FigureAnimator : MonoBehaviour
 
     float bodyYaw, phase, idle;
     bool aimTurning;
+    float glanceUntil = -1f, nextGlance, glanceYaw, noiseSeed;
+    Quaternion[] extraShoulder, extraElbow;
+
+    // Readouts for tests.
+    public float Jitter { get; private set; }
+    public float Heavy { get; private set; }
     float[] punchStart = { -10f, -10f };
     const float PunchOut = 0.08f, PunchHold = 0.05f, PunchBack = 0.16f;
     bool init;
 
-    void Awake() => Figure = GetComponent<CharacterFigure>();
+    void Awake()
+    {
+        Figure = GetComponent<CharacterFigure>();
+        noiseSeed = (Random.value * 1000f) * 0.173f; // animation noise only, no need to be deterministic
+    }
 
     // Start a punch with hand 0 (left) or 1 (right). Returns the time to full extension.
     public float Punch(int hand)
@@ -90,12 +107,20 @@ public class FigureAnimator : MonoBehaviour
         else bodyYaw = rootYaw;
         if (CurrentPose == Pose.Seated || CurrentPose == Pose.Stunned || CurrentPose == Pose.Fallen) bodyYaw = rootYaw;
 
+        // ---------- body (generated: from the DNA) ----------
+        var dna = f.Generated && f.Plan != null ? f.Plan.dna : null;
+        float heavy = dna != null ? Mathf.InverseLerp(1f, 3f, dna.fatFactor) : 0f;   // DEX 10 = 0, DEX 1 = 1
+        float strS = dna != null ? dna.sheet.S : 0f;
+        float jit = dna != null ? dna.jitter : 0f;
+        Heavy = heavy; Jitter = jit;
+
         // ---------- gait ----------
         bool walking = Grounded && speed > 0.2f && (CurrentPose == Pose.Normal || CurrentPose == Pose.Dragging || CurrentPose == Pose.Dragged || CurrentPose == Pose.Cuffed);
         float run = Mathf.InverseLerp(2.5f, 6f, speed);
-        phase += dt * (walking ? Mathf.Lerp(7f, 11f, run) * Mathf.Clamp(speed / 1.4f, 0.6f, 1.6f) : 0f);
-        idle += dt;
-        float swing = walking ? Mathf.Lerp(28f, 55f, run) : 0f;
+        // STR: longer strides at a slower cadence.
+        phase += dt * (walking ? Mathf.Lerp(7f, 11f, run) * Mathf.Clamp(speed / 1.4f, 0.6f, 1.6f) * (1f - 0.12f * strS) : 0f);
+        idle += dt * (1f + (FollowLook ? 0f : 1.5f * jit));  // twitchy bodies shift their weight faster (not the player: the camera rides the spine)
+        float swing = walking ? Mathf.Lerp(28f, 55f, run) * (1f + 0.15f * strS) : 0f;
         float s = Mathf.Sin(phase), c = Mathf.Cos(phase);
 
         float hipL = -s * swing, hipR = s * swing;
@@ -106,6 +131,9 @@ public class FigureAnimator : MonoBehaviour
         float hipsY = 0f;
         if (walking) hipsY = -Mathf.Abs(c) * Mathf.Lerp(0.02f, 0.05f, run);
         float hipsPitch = 0f, hipsRoll = 0f;
+        // Heavier bodies sway side to side as they walk and stand with their legs wider apart.
+        if (walking) { spineRoll += s * heavy * 5f; hipsRoll += s * heavy * 3f; }
+        float wide = (CurrentPose == Pose.Normal || CurrentPose == Pose.Cuffed || CurrentPose == Pose.Dragged) ? heavy * 5f : 0f;
 
         // Arms (lowered): opposite swing.
         float shL = s * swing * 0.7f, shR = -s * swing * 0.7f, elL = -12f, elR = -12f;
@@ -170,13 +198,64 @@ public class FigureAnimator : MonoBehaviour
         Set(f.ShoulderR, Quaternion.Euler(shR, 0f, shRz), k);
         Set(f.ElbowL, Quaternion.Euler(elL, 0f, 0f), k);
         Set(f.ElbowR, Quaternion.Euler(elR, 0f, 0f), k);
-        Set(f.HipL, Quaternion.Euler(hipL, 0f, 0f), k);
-        Set(f.HipR, Quaternion.Euler(hipR, 0f, 0f), k);
+        Set(f.HipL, Quaternion.Euler(hipL, 0f, -wide), k);
+        Set(f.HipR, Quaternion.Euler(hipR, 0f, wide), k);
         Set(f.KneeL, Quaternion.Euler(kneeL, 0f, 0f), k);
         Set(f.KneeR, Quaternion.Euler(kneeR, 0f, 0f), k);
         // Feet stay roughly level.
-        Set(f.AnkleL, Quaternion.Euler(-(hipL + kneeL) * 0.5f, 0f, 0f), k);
-        Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, 0f), k);
+        Set(f.AnkleL, Quaternion.Euler(-(hipL + kneeL) * 0.5f, 0f, wide), k);
+        Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, -wide), k);
+
+        ExtraArms(f, s, swing, k);
+        if (jit > 0f) JitterLayer(f, jit, dt);
+    }
+
+    // Arms beyond the first pair follow the main arm on their side (centred ones the right),
+    // smaller and a beat behind.
+    void ExtraArms(CharacterFigure f, float s, float swing, float k)
+    {
+        var extra = f.ExtraArms;
+        if (extra == null || extra.Count == 0) return;
+        if (extraShoulder == null || extraShoulder.Length != extra.Count)
+        {
+            extraShoulder = new Quaternion[extra.Count]; extraElbow = new Quaternion[extra.Count];
+            for (int i = 0; i < extra.Count; i++) { extraShoulder[i] = Quaternion.identity; extraElbow[i] = Quaternion.identity; }
+        }
+        float lag = 1f - Mathf.Exp(-6f * Time.deltaTime);
+        for (int i = 0; i < extra.Count; i++)
+        {
+            var a = extra[i];
+            bool left = a.side < 0;
+            Transform ms = left ? f.ShoulderL : f.ShoulderR, me = left ? f.ElbowL : f.ElbowR;
+            float delayed = Mathf.Sin(phase - 0.9f - 0.4f * i) * swing * 0.25f * (left ? 1f : -1f);
+            Quaternion ts = Quaternion.Slerp(Quaternion.identity, ms.localRotation, 0.6f) * Quaternion.Euler(delayed, 0f, 0f);
+            Quaternion te = Quaternion.Slerp(Quaternion.identity, me.localRotation, 0.6f);
+            extraShoulder[i] = Quaternion.Slerp(extraShoulder[i], ts, lag);
+            extraElbow[i] = Quaternion.Slerp(extraElbow[i], te, lag);
+            a.shoulder.localRotation = extraShoulder[i];
+            if (a.elbow != null) a.elbow.localRotation = extraElbow[i];
+        }
+    }
+
+    // DEX twitchiness: fast noise on the head and wrists and occasional quick glances.
+    void JitterLayer(CharacterFigure f, float jit, float dt)
+    {
+        float t = Time.time * (9f + 6f * jit) + noiseSeed;
+        float N(float o) => (Mathf.PerlinNoise(t, o) - 0.5f) * 2f;
+        // Glances: every few seconds (more often when twitchier), a quick look aside.
+        if (Time.time > nextGlance)
+        {
+            float r = Mathf.PerlinNoise(noiseSeed, Time.time);
+            glanceYaw = (r < 0.5f ? -1f : 1f) * Mathf.Lerp(20f, 35f, r);
+            glanceUntil = Time.time + Mathf.Lerp(0.3f, 0.6f, r);
+            nextGlance = Time.time + Mathf.Lerp(4f, 1.2f, jit) * (0.6f + r);
+        }
+        float glance = Time.time < glanceUntil ? glanceYaw : 0f;
+        var head = f.HeadJoint;
+        if (head != null)
+            head.localRotation = Quaternion.Euler(N(1.3f) * 4f * jit, N(2.7f) * 5f * jit + glance * jit, N(4.1f) * 3f * jit);
+        if (f.WristL != null) f.WristL.localRotation = Quaternion.Euler(N(5.5f) * 10f * jit, N(6.2f) * 6f * jit, N(7.9f) * 8f * jit);
+        if (f.WristR != null) f.WristR.localRotation = Quaternion.Euler(N(8.4f) * 10f * jit, N(9.6f) * 6f * jit, N(10.3f) * 8f * jit);
     }
 
     // Punches snap faster than the general blend.

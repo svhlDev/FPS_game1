@@ -51,6 +51,9 @@ public class CharacterFigure : MonoBehaviour
     public bool Generated { get; private set; }
     public BodyPlan Plan { get; private set; }
     public Transform Chest;
+    // Generated bodies: the head joint (the head's pivot; Head is its centre) and arms beyond the first pair.
+    public Transform HeadJoint;
+    public readonly List<(Transform shoulder, Transform elbow, Transform wrist, int side)> ExtraArms = new List<(Transform, Transform, Transform, int)>();
 
     // Joints
     public Transform Hips, Spine, Neck, Head;
@@ -133,10 +136,10 @@ public class CharacterFigure : MonoBehaviour
     // figure, plus Chest), the SDF mesh skinned to them (body + head renderers) and per-bone hit
     // colliders sized from the generated proportions.
     public static CharacterFigure BuildGenerated(Transform root, CharacterSheet sheet, Role role, bool shadows = false, bool hitColliders = true,
-                                                 GenerationStats stats = null)
+                                                 GenerationStats stats = null, ISpeciesTemplate template = null)
     {
         var total = System.Diagnostics.Stopwatch.StartNew();
-        var plan = BodyPlanner.Generate(sheet);
+        var plan = BodyPlanner.Generate(sheet, null, template);
         var sk = BodySkeleton.Build(root, plan);
         var f = root.gameObject.AddComponent<CharacterFigure>();
         f.Generated = true;
@@ -146,6 +149,10 @@ public class CharacterFigure : MonoBehaviour
         f.ShoulderL = sk.ShoulderL; f.ShoulderR = sk.ShoulderR; f.ElbowL = sk.ElbowL; f.ElbowR = sk.ElbowR;
         f.WristL = sk.WristL; f.WristR = sk.WristR; f.HandL = sk.HandL; f.HandR = sk.HandR;
         f.HipL = sk.HipL; f.HipR = sk.HipR; f.KneeL = sk.KneeL; f.KneeR = sk.KneeR; f.AnkleL = sk.AnkleL; f.AnkleR = sk.AnkleR;
+        f.HeadJoint = sk.Head;
+        foreach (var arm in plan.arms)
+            if (arm.girdle > 0 || arm.side == 0)
+                f.ExtraArms.Add((sk.Bones[arm.root].joint, sk.Bones[arm.mid].joint, sk.Bones[arm.end].joint, arm.side));
         int layer = root.gameObject.layer;
 
         Mesh body, head;

@@ -54,6 +54,7 @@ public class ScenarioTest : MonoBehaviour
             case "tgun": yield return TGunTest(); break;
             case "bodies": yield return BodiesTest(); break;
             case "skin": yield return SkinTest(); break;
+            case "anim": yield return AnimTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -461,6 +462,166 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- generated bodies: phase 6 (animation) ----------
+
+    IEnumerator AnimTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        CharacterFigure Make(string name, CharacterSheet sh, Vector3 at, bool animator, ISpeciesTemplate t = null)
+        {
+            var go = new GameObject(name);
+            go.transform.position = origin + at;
+            CharacterFigure f;
+            if (t == null) f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false);
+            else
+            {
+                // Custom body plans go through the same path with a template.
+                f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false, null, t);
+            }
+            if (animator) { var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; }
+            return f;
+        }
+
+        // 1. Avatars for a spread of bodies.
+        var sheets = new (string name, CharacterSheet sh)[]
+        {
+            ("average man", new CharacterSheet(Sex.Male, 10, 10, 10, 1000)), ("heavy woman", new CharacterSheet(Sex.Female, 20, 10, 1, 1000)),
+            ("strong man", new CharacterSheet(Sex.Male, 20, 10, 15, 1000)), ("small soft", new CharacterSheet(Sex.Male, 1, 10, 1, 1000)),
+            ("lean woman", new CharacterSheet(Sex.Female, 10, 20, 20, 1000)),
+        };
+        var figs = new List<CharacterFigure>();
+        int valid = 0;
+        var sb = new StringBuilder("avatars: ");
+        for (int i = 0; i < sheets.Length; i++)
+        {
+            var f = Make(sheets[i].name, sheets[i].sh, new Vector3(i * 1.4f, 0f, 0f), i == 0);
+            figs.Add(f);
+            var av = BodyAvatar.Build(f);
+            bool ok = av != null && av.isValid && av.isHuman;
+            if (ok) valid++;
+            sb.Append($"{sheets[i].name} valid {av?.isValid} human {av?.isHuman}, ");
+            yield return null;
+        }
+        Log(sb.ToString());
+        Log(valid == sheets.Length ? "PASS generated bodies pass humanoid Avatar validation" : $"FAIL {sheets.Length - valid} avatars invalid");
+
+        // 2. Retarget: the average man walks (FigureAnimator); the others copy his muscle-space pose.
+        var src = figs[0];
+        var srcAnim = src.GetComponent<FigureAnimator>();
+        srcAnim.Velocity = Vector3.forward * 1.6f;
+        var handlers = new List<HumanPoseHandler>();
+        foreach (var f in figs) handlers.Add(new HumanPoseHandler(BodyAvatar.Build(f), f.transform));
+        var pose = new HumanPose();
+        // Muscles and body rotation come from the source; bodyPosition (normalized per body) is not
+        // copied: each target's hips go back to its own height plus the source's bob, scaled.
+        void Retarget(int i) => BodyAvatar.CopyPose(handlers[0], src, handlers[i], figs[i], ref pose);
+        float err = 0f; int samples = 0;
+        Vector3 Dir(CharacterFigure f, Transform a, Transform b) => f.transform.InverseTransformDirection(b.position - a.position).normalized;
+        for (float t = 0f; t < 2.5f; t += Time.deltaTime)
+        {
+            yield return new WaitForEndOfFrame();
+            for (int i = 1; i < figs.Count; i++)
+            {
+                Retarget(i);
+                if (t > 0.5f)
+                {
+                    var f = figs[i];
+                    err += Vector3.Angle(Dir(src, src.HipL, src.KneeL), Dir(f, f.HipL, f.KneeL));
+                    err += Vector3.Angle(Dir(src, src.KneeR, src.AnkleR), Dir(f, f.KneeR, f.AnkleR));
+                    err += Vector3.Angle(Dir(src, src.ShoulderL, src.ElbowL), Dir(f, f.ShoulderL, f.ElbowL));
+                    err += Vector3.Angle(Dir(src, src.ElbowR, src.WristR), Dir(f, f.ElbowR, f.WristR));
+                    samples += 4;
+                }
+            }
+        }
+        float meanErr = err / Mathf.Max(1, samples);
+        Log($"retargeting the walk onto {figs.Count - 1} other bodies: limb directions within {meanErr:0.0} deg of the source on average");
+        Log(meanErr < 10f ? "PASS humanoid retargeting drives any generated proportions" : "FAIL retargeted limbs drift from the source");
+
+        // Shots: the row (light from the front).
+        var lightGo = new GameObject("AnimLight");
+        var lt = lightGo.AddComponent<Light>();
+        lt.type = LightType.Directional; lt.intensity = 1.6f; lt.color = new Color(1f, 0.96f, 0.9f);
+        lightGo.transform.rotation = Quaternion.LookRotation(new Vector3(0.2f, -0.5f, -1f));
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        FlyingVehicle.CameraOverride = true;
+        Vector3 rowC = origin + new Vector3(2.8f, 0.9f, 0f);
+        cam.transform.SetPositionAndRotation(rowC + new Vector3(-2.5f, 0.5f, 5.2f), Quaternion.LookRotation(-new Vector3(-2.5f, 0.5f, 5.2f)));
+        for (int k = 0; k < 6; k++)
+        {
+            yield return new WaitForEndOfFrame();
+            for (int i = 1; i < figs.Count; i++) Retarget(i);
+        }
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "anim_retarget.png"));
+        yield return null; yield return null;
+
+        // 3. Procedural layer: extra arms, jitter, sway, stride.
+        var four = Make("four arms", new CharacterSheet(Sex.Male, 12, 10, 10, 1001), new Vector3(0f, -2.6f, 0f), true, new HumanTemplate { armCount = 4 });
+        var twitchy = Make("twitchy", new CharacterSheet(Sex.Male, 10, 10, 20, 1000), new Vector3(1.4f, -2.6f, 0f), true);
+        var calm = Make("calm", new CharacterSheet(Sex.Male, 10, 10, 10, 1000), new Vector3(2.8f, -2.6f, 0f), true);
+        var heavy = Make("heavy", new CharacterSheet(Sex.Male, 10, 10, 1, 1000), new Vector3(4.2f, -2.6f, 0f), true);
+        var strong = Make("strong", new CharacterSheet(Sex.Male, 20, 10, 10, 1000), new Vector3(5.6f, -2.6f, 0f), true);
+        var weak = Make("weak", new CharacterSheet(Sex.Male, 1, 10, 10, 1000), new Vector3(7.0f, -2.6f, 0f), true);
+        foreach (var f in new[] { four, heavy, strong, weak, calm }) f.GetComponent<FigureAnimator>().Velocity = Vector3.forward * 1.6f;
+        // twitchy and a second calm one stand still for the jitter measure
+        var calmStill = Make("calm still", new CharacterSheet(Sex.Male, 10, 10, 10, 1002), new Vector3(8.4f, -2.6f, 0f), true);
+        yield return new WaitForSeconds(0.6f);
+
+        float extraMin = 999f, extraMax = -999f, mainMin = 999f, mainMax = -999f;
+        float twitchSpeed = 0f, calmSpeed = 0f; int glances = 0; bool inGlance = false;
+        float rollHeavy = 0f, rollCalm = 0f, spreadHeavy = 0f, spreadCalm = 0f;
+        float swingStrong = 0f, swingWeak = 0f; int n = 0;
+        Quaternion pT = twitchy.HeadJoint.localRotation, pC = calmStill.HeadJoint.localRotation;
+        Transform extraS = four.ExtraArms.Count > 0 ? four.ExtraArms[0].shoulder : null;
+        float A(float a) => Mathf.DeltaAngle(0f, a);
+        for (float t = 0f; t < 4f; t += Time.deltaTime)
+        {
+            yield return null;
+            float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+            twitchSpeed += Quaternion.Angle(pT, twitchy.HeadJoint.localRotation) / dt; pT = twitchy.HeadJoint.localRotation;
+            calmSpeed += Quaternion.Angle(pC, calmStill.HeadJoint.localRotation) / dt; pC = calmStill.HeadJoint.localRotation;
+            float yaw = Mathf.Abs(A(twitchy.HeadJoint.localEulerAngles.y));
+            if (yaw > 12f && !inGlance) { glances++; inGlance = true; } else if (yaw < 6f) inGlance = false;
+            if (extraS != null)
+            {
+                float e = A(extraS.localEulerAngles.x), m = A(four.ShoulderL.localEulerAngles.x);
+                extraMin = Mathf.Min(extraMin, e); extraMax = Mathf.Max(extraMax, e); mainMin = Mathf.Min(mainMin, m); mainMax = Mathf.Max(mainMax, m);
+            }
+            rollHeavy = Mathf.Max(rollHeavy, Mathf.Abs(A(heavy.Spine.localEulerAngles.z)));
+            rollCalm = Mathf.Max(rollCalm, Mathf.Abs(A(calm.Spine.localEulerAngles.z)));
+            spreadHeavy = Mathf.Max(spreadHeavy, Mathf.Abs(heavy.AnkleL.position.x - heavy.AnkleR.position.x));
+            spreadCalm = Mathf.Max(spreadCalm, Mathf.Abs(calm.AnkleL.position.x - calm.AnkleR.position.x));
+            swingStrong = Mathf.Max(swingStrong, Mathf.Abs(A(strong.HipL.localEulerAngles.x)));
+            swingWeak = Mathf.Max(swingWeak, Mathf.Abs(A(weak.HipL.localEulerAngles.x)));
+            n++;
+        }
+        twitchSpeed /= n; calmSpeed /= n;
+        float extraAmp = extraMax - extraMin, mainAmp = mainMax - mainMin;
+        Log($"extra arms: {four.ExtraArms.Count}, extra shoulder swings {extraAmp:0} deg against the main arm's {mainAmp:0} deg");
+        Log(four.ExtraArms.Count == 2 && extraAmp > 5f && extraAmp < mainAmp ? "PASS extra arms follow the main pair, smaller" : "FAIL extra arms");
+        Log($"jitter: DEX 20 head moves {twitchSpeed:0} deg/s ({glances} glances in 4 s), DEX 10 {calmSpeed:0} deg/s; jitter values {twitchy.GetComponent<FigureAnimator>().Jitter:0.00} / {calmStill.GetComponent<FigureAnimator>().Jitter:0.00}");
+        Log(twitchSpeed > calmSpeed * 3f + 5f && glances > 0 ? "PASS DEX 20 is twitchy (head and glances), DEX 10 calm" : "FAIL jitter");
+        Log($"walk: heavy sways {rollHeavy:0.0} deg and spreads its feet {spreadHeavy * 100f:0} cm, average {rollCalm:0.0} deg / {spreadCalm * 100f:0} cm; hip swing STR 20 {swingStrong:0} deg, STR 1 {swingWeak:0} deg");
+        Log(rollHeavy > rollCalm + 2f && spreadHeavy > spreadCalm + 0.02f ? "PASS heavier bodies sway more and stride wider" : "FAIL heavy gait");
+        Log(swingStrong > swingWeak * 1.15f ? "PASS STR lengthens the stride" : "FAIL STR stride");
+
+        Vector3 rowP = origin + new Vector3(4f, -1.7f, 0f);
+        Vector3 pv = new Vector3(-1.5f, 0.6f, 6.4f);
+        cam.transform.SetPositionAndRotation(rowP + pv, Quaternion.LookRotation(-pv));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "anim_procedural.png"));
+        yield return null; yield return null;
+        Vector3 fa = four.transform.position + Vector3.up * 1f;
+        cam.transform.SetPositionAndRotation(fa + new Vector3(1.6f, 0.4f, 2.2f), Quaternion.LookRotation(-new Vector3(1.6f, 0.4f, 2.2f)));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "anim_four_arms.png"));
+        yield return null; yield return null;
+        FlyingVehicle.CameraOverride = false;
+        Destroy(lightGo);
     }
 
     // ---------- generated bodies: phase 5 (skinning) ----------
