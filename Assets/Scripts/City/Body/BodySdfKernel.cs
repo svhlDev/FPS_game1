@@ -40,6 +40,7 @@ public struct BodySdfKernel : IDisposable
     public float eyeRadius;
     public float muscleBlend, fatBlendPerMetre, fatBlendMin, breastBlend, featureBlend, eyeCarveBlend;
     public float fatBlendFalloff;   // fat thickness blends across bones within about this distance
+    public float fatBlendMax, muscleReach;
     public float fatWaist, fatBelly, fatHips, fatButtocks;
     public int hasDna;
 
@@ -219,7 +220,7 @@ public struct BodySdfKernel : IDisposable
         }
         float fat = wSum > 0f ? fSum / wSum : 0f;
         // Capped: polynomial smooth-min chained over many blobs with a huge radius piles up bulges.
-        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, 0.14f);
+        float kFat = Mathf.Min(fatBlendMin + fatBlendPerMetre * fat, fatBlendMax);
         // Core: each bone smooth-unions with its parent only; the soft (fat) version blends wider.
         float core = float.MaxValue, soft = float.MaxValue;
         for (int i = 0; i < n; i++)
@@ -236,7 +237,7 @@ public struct BodySdfKernel : IDisposable
             var bl = blobs[j];
             // Far from this bone its muscles can't matter: beyond the blob's reach plus the widest blend
             // that can reach them (skipping inside the blend range would make jumps in the surface).
-            if (d[bl.bone] > 0.12f + kFat) continue;
+            if (d[bl.bone] > muscleReach + kFat) continue;
             float v = EllipsoidDist(bl.ToLocal(p), bl.r);
             muscle = SMin(muscle, v, muscleBlend);
             soft = SMin(soft, v, kFat);

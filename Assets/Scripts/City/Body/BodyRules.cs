@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 // Every tunable of character generation in one asset (Tools > Characters > Create Body Rules asset puts
@@ -95,6 +96,14 @@ public class BodyRules : ScriptableObject
             if (dex <= k[i].x) return Mathf.Lerp(k[i - 1].y, k[i].y, (dex - k[i - 1].x) / Mathf.Max(1e-4f, k[i].x - k[i - 1].x));
         return k[k.Length - 1].y;
     }
+
+    [Header("SDF body, mesh, skinning, motion (BodyRulesTables.cs)")]
+    public SdfRules sdf = new SdfRules();
+    public MeshRules mesh = new MeshRules();
+    public SkinRules skinning = new SkinRules();
+    public MotionRules motion = new MotionRules();
+    public List<MuscleBlobRule> muscleBlobs = MuscleBlobRule.Defaults();
+    public List<FaceFeatureRule> faceFeatures = FaceFeatureRule.Defaults();
 
     [Header("Body plan rules")]
     public int minLegs = 2;

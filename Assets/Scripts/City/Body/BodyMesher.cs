@@ -19,8 +19,16 @@ using UnityEngine.Rendering;
 // Reports timings, triangle counts and holes (edges without exactly two faces).
 public static class BodyMesher
 {
+    // Defaults from BodyRules.mesh (construct on the main thread: the rules load from Resources).
     public class Settings
     {
+        public Settings()
+        {
+            var m = BodyRules.Default.mesh;
+            cell = m.cell; targetTriangles = m.targetTriangles; smoothIterations = m.smoothIterations; smoothStrength = m.smoothStrength;
+            normalStep = m.normalStep; headImportance = m.headImportance; handImportance = m.handImportance;
+            footImportance = m.footImportance; neckImportance = m.neckImportance;
+        }
         public float cell = 0.015f;
         public int targetTriangles = 10000;
         public int smoothIterations = 2;

@@ -24,19 +24,10 @@ using UnityEngine;
 // Dispose when done (the kernel holds native arrays).
 public class BodySDF : IDisposable
 {
-    // ---------- tunables (BodyRules could take these later) ----------
-    public float jointBlend = 0.015f;      // core: bone with its parent (+ jointBlendGirth x the thinner core)
-    public float jointBlendGirth = 0.6f;
-    public float torsoBlend = 0.04f;       // pelvis / lumbar / chest seams (rounds the steps between them)
-    public float muscleBlend = 0.022f;     // small: muscle shapes stay distinct
-    public float fatBlendPerMetre = 1.6f;  // fat blend radius = this x local fat thickness (+ minimum)
-    public float fatBlendMin = 0.018f;
-    public float fatBlendFalloff = 0.06f;  // fat thickness blends across nearby bones (no ridges where they meet)
-    public float breastBlend = 0.06f;
-    public float featureBlend = 0.012f;
-    public float eyeCarveBlend = 0.006f;
-    public static float ArmSpread = 38f;   // A-pose: degrees out from the sides
-    public static float LegSpread = 4f;
+    // ---------- tunables (BodyRules.sdf; copied per body, so they can be overridden on one) ----------
+    public float jointBlend, jointBlendGirth, torsoBlend, muscleBlend, fatBlendPerMetre, fatBlendMin, fatBlendMax,
+                 fatBlendFalloff, breastBlend, featureBlend, eyeCarveBlend, muscleReach;
+    readonly SdfRules SR;
 
     struct Frame { public Vector3 o, x, y, z; public Vector3 ToLocal(Vector3 p) { p -= o; return new Vector3(Vector3.Dot(p, x), Vector3.Dot(p, y), Vector3.Dot(p, z)); } }
     struct Blob { public int bone; public Frame f; public Vector3 r; public MuscleGroup group; }
@@ -61,9 +52,11 @@ public class BodySDF : IDisposable
     public BodyPlan Plan => plan;
     public BodySdfKernel Kernel => kernel;
 
-    // A-pose: arms out ArmSpread degrees, legs LegSpread (local rotations per bone).
+    // A-pose: arms out armSpread degrees, legs legSpread (local rotations per bone).
     public static Quaternion[] APose(BodyPlan plan)
     {
+        var sr = BodyRules.Default.sdf;
+        float ArmSpread = sr.armSpread, LegSpread = sr.legSpread;
         var rot = new Quaternion[plan.bones.Count];
         for (int i = 0; i < rot.Length; i++)
         {
@@ -78,6 +71,10 @@ public class BodySDF : IDisposable
     public BodySDF(BodyPlan plan, Quaternion[] pose = null)
     {
         this.plan = plan;
+        SR = BodyRules.Default.sdf;
+        jointBlend = SR.jointBlend; jointBlendGirth = SR.jointBlendGirth; torsoBlend = SR.torsoBlend; muscleBlend = SR.muscleBlend;
+        fatBlendPerMetre = SR.fatBlendPerMetre; fatBlendMin = SR.fatBlendMin; fatBlendMax = SR.fatBlendMax; fatBlendFalloff = SR.fatBlendFalloff;
+        breastBlend = SR.breastBlend; featureBlend = SR.featureBlend; eyeCarveBlend = SR.eyeCarveBlend; muscleReach = SR.muscleReach;
         pose ??= APose(plan);
         int n = plan.bones.Count;
         if (n > BodySdfKernel.MaxBones) throw new ArgumentException($"{n} bones (max {BodySdfKernel.MaxBones})");
@@ -103,7 +100,7 @@ public class BodySDF : IDisposable
             Vector3 right = Vector3.Cross(dir, fwd);
             if (Vector3.Dot(right, Vector3.right) < 0f) right = -right;
             frames[i] = new Frame { o = start[i], y = dir, z = fwd, x = right };
-            depthRatio[i] = b.kind == BoneKind.Pelvis ? 0.75f : b.kind == BoneKind.Lumbar ? 0.7f : b.kind == BoneKind.Chest ? 0.68f : 1f;
+            depthRatio[i] = b.kind == BoneKind.Pelvis ? SR.pelvisDepth : b.kind == BoneKind.Lumbar ? SR.lumbarDepth : b.kind == BoneKind.Chest ? SR.chestDepth : 1f;
         }
         for (int i = 0; i < n; i++)
         {
@@ -146,6 +143,7 @@ public class BodySDF : IDisposable
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
+            fatBlendMax = fatBlendMax, muscleReach = muscleReach,
         };
         if (plan.dna != null)
         {
@@ -198,14 +196,14 @@ public class BodySDF : IDisposable
         if (th < 0.001f) return;
         // A blob is a flat-ish ellipsoid on a curved body: its edges rise off the surface by about
         // (width x r)^2 / 2r. Keep that under ~60% of its thickness, or the edges stand off as rims.
-        width = Mathf.Min(width, Mathf.Sqrt(1.2f * th / Mathf.Max(coreR, 1e-3f)));
+        width = Mathf.Min(width, Mathf.Sqrt(SR.blobFit * th / Mathf.Max(coreR, 1e-3f)));
         var f = frames[i];
         float a = angle * Mathf.Deg2Rad, dr = depthRatio[i];
         // On the (flattened, elliptical) core cross-section: the point at this angle and the surface
         // normal there, so the blob lies flat on the body instead of tilting off a round one.
         Vector3 onSurface = (f.x * Mathf.Sin(a) + f.z * Mathf.Cos(a) * dr) * coreR;
         Vector3 radial = (f.x * Mathf.Sin(a) * dr + f.z * Mathf.Cos(a)).normalized;
-        Vector3 c = f.o + f.y * (b.length * t) + onSurface + radial * th * 0.15f;
+        Vector3 c = f.o + f.y * (b.length * t) + onSurface + radial * th * SR.blobLift;
         Vector3 up = f.y;
         Vector3 side = Vector3.Cross(up, radial).normalized;
         blobs.Add(new Blob
@@ -232,72 +230,40 @@ public class BodySDF : IDisposable
         }
     }
 
+    // The muscle blobs of BodyRules.muscleBlobs, per bone; then men's pecs closer together and the
+    // buttocks' projection by size.
     void BuildMuscles()
     {
+        var rules = BodyRules.Default;
         for (int i = 0; i < plan.bones.Count; i++)
         {
             var b = plan.bones[i];
             // Outward for a limb = away from the body's midline.
             float o = b.side >= 0 ? 1f : -1f;
-            switch (b.kind)
+            foreach (var m in rules.muscleBlobs)
             {
-                case BoneKind.Chest:
-                    foreach (float s in new[] { -1f, 1f })
+                if (m.bone != b.kind) continue;
+                if (!m.mirror) { AddBlob(i, m.group, m.t, m.outward ? o * m.angle : m.angle, m.along, m.width, m.thick); continue; }
+                foreach (float s in new[] { -1f, 1f })
+                {
+                    int before = blobs.Count;
+                    AddBlob(i, m.group, m.t, s * m.angle, m.along, m.width, m.thick);
+                    if (blobs.Count == before) continue;
+                    var bl = blobs[blobs.Count - 1];
+                    // Men's pecs sit closer together (centres malePecInset nearer the midline each).
+                    if (m.group == MuscleGroup.Pectorals && plan.sheet.sex == Sex.Male)
+                        bl.f.o -= frames[i].x * s * rules.malePecInset;
+                    // Like breasts: how far a buttock stands out grows with its size (glute thickness +
+                    // buttock fat): lean ones sit close to the body, heavy ones project.
+                    if (m.group == MuscleGroup.Glutes)
                     {
-                        AddBlob(i, MuscleGroup.Pectorals, 0.72f, s * 36f, 0.55f, 0.52f, 0.45f);
-                        // Men's pecs sit closer together (centres pecInset nearer the midline each).
-                        if (plan.sheet.sex == Sex.Male && blobs.Count > 0 && blobs[blobs.Count - 1].group == MuscleGroup.Pectorals)
-                        {
-                            var bl = blobs[blobs.Count - 1];
-                            bl.f.o -= frames[i].x * s * BodyRules.Default.malePecInset;
-                            blobs[blobs.Count - 1] = bl;
-                        }
-                        AddBlob(i, MuscleGroup.Lats, 0.45f, s * 125f, 0.75f, 0.6f, 0.45f);
-                        AddBlob(i, MuscleGroup.Trapezius, 0.92f, s * 155f, 0.35f, 0.7f, 0.5f);
+                        float size = bl.r.z + (plan.dna != null ? plan.dna.Fat(FatRegion.Buttocks) : 0f);
+                        float k = Mathf.Lerp(rules.buttProjection.x, rules.buttProjection.y,
+                                             Mathf.InverseLerp(rules.buttProjectionSizes.x, rules.buttProjectionSizes.y, size));
+                        bl.f.o += bl.f.z * (k - 1f - SR.blobLift) * bl.r.z; // AddBlob leaves it standing out (1 + blobLift) x its depth
                     }
-                    break;
-                case BoneKind.Lumbar:
-                    // A 2 x 3 grid of small blobs: the gaps between them are the definition.
-                    foreach (float s in new[] { -1f, 1f })
-                        foreach (float t in new[] { 0.22f, 0.5f, 0.78f })
-                            AddBlob(i, MuscleGroup.Abdominals, t, s * 14f, 0.26f, 0.3f, 0.5f);
-                    break;
-                case BoneKind.Pelvis:
-                    foreach (float s in new[] { -1f, 1f })
-                    {
-                        AddBlob(i, MuscleGroup.Glutes, 0.6f, s * 148f, 1.3f, 0.5f, 1.2f);
-                        // Like breasts: how far the buttock stands out grows with its size (glute
-                        // thickness + buttock fat): lean ones sit close to the body, heavy ones project.
-                        if (blobs.Count > 0 && blobs[blobs.Count - 1].group == MuscleGroup.Glutes)
-                        {
-                            var rules = BodyRules.Default;
-                            var bl = blobs[blobs.Count - 1];
-                            float size = bl.r.z + (plan.dna != null ? plan.dna.Fat(FatRegion.Buttocks) : 0f);
-                            float k = Mathf.Lerp(rules.buttProjection.x, rules.buttProjection.y,
-                                                 Mathf.InverseLerp(rules.buttProjectionSizes.x, rules.buttProjectionSizes.y, size));
-                            bl.f.o += bl.f.z * (k - 1.15f) * bl.r.z; // AddBlob leaves it standing out 1.15 x its depth
-                            blobs[blobs.Count - 1] = bl;
-                        }
-                    }
-                    break;
-                case BoneKind.Neck:
-                    foreach (float s in new[] { -1f, 1f }) AddBlob(i, MuscleGroup.Trapezius, 0.2f, s * 140f, 0.9f, 0.6f, 0.5f);
-                    break;
-                case BoneKind.UpperArm:
-                    AddBlob(i, MuscleGroup.Deltoids, 0.1f, o * 90f, 0.32f, 0.95f, 1.2f);
-                    AddBlob(i, MuscleGroup.Biceps, 0.55f, 0f, 0.5f, 0.6f);
-                    AddBlob(i, MuscleGroup.Triceps, 0.45f, 180f, 0.55f, 0.65f);
-                    break;
-                case BoneKind.Forearm:
-                    AddBlob(i, MuscleGroup.Forearm, 0.28f, o * 30f, 0.5f, 0.8f);
-                    break;
-                case BoneKind.Thigh:
-                    AddBlob(i, MuscleGroup.Quadriceps, 0.5f, o * 15f, 0.75f, 0.8f);
-                    AddBlob(i, MuscleGroup.Hamstrings, 0.5f, 180f, 0.65f, 0.7f, 0.8f);
-                    break;
-                case BoneKind.Shin:
-                    AddBlob(i, MuscleGroup.Calves, 0.3f, 180f, 0.45f, 0.75f, 1.1f);
-                    break;
+                    blobs[blobs.Count - 1] = bl;
+                }
             }
         }
     }
@@ -319,16 +285,17 @@ public class BodySDF : IDisposable
             Vector3 p = c + f.x * at.x * rx + f.y * at.y * ry + f.z * at.z * rz + f.z * rz * el * 0.5f;
             headFeatures.Add(new Feature { f = new Frame { o = p, x = f.x, y = f.y, z = f.z }, r = Vector3.Scale(size, R) * scale });
         }
-        float brow = dna?.brow ?? 1f, cheek = dna?.cheekbones ?? 1f, jaw = dna?.jaw ?? 1f, nose = dna?.nose ?? 1f, chin = dna?.chin ?? 1f;
-        F(new Vector3(0f, 0.18f, 0.82f), new Vector3(0.75f, 0.11f, 0.16f), brow);
-        foreach (float s in new[] { -1f, 1f }) F(new Vector3(s * 0.55f, -0.08f, 0.68f), new Vector3(0.24f, 0.14f, 0.24f), cheek);
-        F(new Vector3(0f, -0.48f, 0.32f), new Vector3(0.72f, 0.36f, 0.68f), jaw);
-        F(new Vector3(0f, -0.12f, 0.98f), new Vector3(0.11f, 0.22f, 0.2f), nose);
-        F(new Vector3(0f, -0.8f, 0.72f), new Vector3(0.28f, 0.15f, 0.2f), chin);
-        EyeRadius = rx * 0.17f;
-        Vector3 e = c + f.y * 0.06f * ry + f.z * rz * (0.86f + el * 0.5f);
-        EyeL = e - f.x * rx * 0.38f;
-        EyeR = e + f.x * rx * 0.38f;
+        float Scale(FaceScale k) => dna == null ? 1f : k == FaceScale.Brow ? dna.brow : k == FaceScale.Cheekbones ? dna.cheekbones
+                                   : k == FaceScale.Jaw ? dna.jaw : k == FaceScale.Nose ? dna.nose : dna.chin;
+        foreach (var ft in BodyRules.Default.faceFeatures)
+        {
+            if (!ft.mirror) { F(ft.at, ft.size, Scale(ft.scale)); continue; }
+            foreach (float s in new[] { -1f, 1f }) F(new Vector3(s * ft.at.x, ft.at.y, ft.at.z), ft.size, Scale(ft.scale));
+        }
+        EyeRadius = rx * SR.eyeRadius;
+        Vector3 e = c + f.y * SR.eyePosition.y * ry + f.z * rz * (SR.eyePosition.z + el * 0.5f);
+        EyeL = e - f.x * rx * SR.eyePosition.x;
+        EyeR = e + f.x * rx * SR.eyePosition.x;
     }
 
     void BuildBreasts()

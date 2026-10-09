@@ -18,8 +18,14 @@ using UnityEngine.Rendering;
 //   Renderers: body and head as two SkinnedMeshRenderers (first person hides only the head).
 public static class BodySkinner
 {
+    // Defaults from BodyRules.skinning.
     public class Settings
     {
+        public Settings()
+        {
+            var r = BodyRules.Default.skinning;
+            falloffPower = r.falloffPower; softness = r.softness; ownBoneBoost = r.ownBoneBoost; jointReach = r.jointReach;
+        }
         public float falloffPower = 4f;     // weight = 1 / (distance + softness)^power
         public float softness = 0.012f;     // m: how far a joint's influence spreads
         public float ownBoneBoost = 3f;     // the vertex's own (nearest-core) bone
