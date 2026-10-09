@@ -494,6 +494,48 @@ public class ScenarioTest : MonoBehaviour
         sw.Stop();
         Log($"{n} plans in {sw.Elapsed.TotalMilliseconds:0} ms ({sw.Elapsed.TotalMilliseconds / n:0.000} ms each), re-rolled {rerolled}, nudged {nudged}, heights {minH:0.00}-{maxH:0.00}");
 
+        // Phase 2: the sheet is readable from the body.
+        BodyPlan P(Sex sx, int str, int intel, int dex) => BodyPlanner.Generate(new CharacterSheet(sx, str, intel, dex, 1000));
+        string Read(BodyPlan p)
+        {
+            var w = p.bones[p.Index("Spine")]; var ua = p.bones[p.Index("ShoulderL")]; var th = p.bones[p.Index("HipL")];
+            var hd = p.bones[p.Index("Head")]; var hand = p.bones[p.Index("WristL")];
+            return $"h {p.height:0.00}, waist {w.Outer.y * 100f:0.0} cm (fat {w.fat.y * 1000f:0} mm), upper arm muscle {ua.muscle.y * 1000f:0} mm fat {ua.fat.y * 1000f:0} mm, " +
+                   $"thigh {th.Outer.y * 100f:0.0} cm, head {hd.length * 100f:0.0}x{hd.Outer.y * 200f:0.0} cm, hand {hand.length * 100f:0.0} cm / arm {(ua.length + p.bones[p.Index("ElbowL")].length) * 100f:0} cm";
+        }
+        foreach (var sx in new[] { Sex.Male, Sex.Female })
+            foreach (var (str, dex, name) in new[] { (20, 1, "strongman"), (20, 20, "bodybuilder"), (1, 1, "small soft"), (1, 20, "small wiry"), (10, 10, "average") })
+            {
+                var pl = P(sx, str, 10, dex);
+                Log($"  {sx} STR {str} DEX {dex} ({name}): {Read(pl)}");
+                Log($"     dna: {pl.dna}");
+            }
+        foreach (int iv in new[] { 1, 10, 16, 20 })
+        {
+            var pl = P(Sex.Male, 10, iv, 10);
+            Log($"  INT {iv}: head x{pl.dna.headScale:0.00}, elongation {pl.dna.headElongation:0.00}, eye glow {pl.dna.eyeGlow:0.00}, head bone {pl.bones[pl.Index("Head")].length * 100f:0.0} cm");
+        }
+        {
+            var big = P(Sex.Male, 20, 10, 10); var small = P(Sex.Male, 1, 10, 10);
+            var fat = P(Sex.Male, 10, 10, 1); var lean = P(Sex.Male, 10, 10, 20);
+            var smart = P(Sex.Male, 10, 20, 10); var dull = P(Sex.Male, 10, 1, 10);
+            float Muscle(BodyPlan q) => q.bones[q.Index("ShoulderL")].muscle.y;
+            float Belly(BodyPlan q) => q.bones[q.Index("Spine")].fat.y;
+            float HandRatio(BodyPlan q) => q.bones[q.Index("WristL")].length / (q.bones[q.Index("ShoulderL")].length + q.bones[q.Index("ElbowL")].length);
+            bool strOk = big.height > small.height * 1.1f && Muscle(big) > Muscle(small) * 1.6f && HandRatio(big) < HandRatio(small);
+            bool dexOk = Belly(fat) > Belly(lean) * 10f;
+            bool intOk = smart.bones[smart.Index("Head")].length > dull.bones[dull.Index("Head")].length * 1.2f && smart.dna.eyeGlow == 1f && dull.dna.eyeGlow == 0f;
+            var fem = P(Sex.Female, 10, 10, 10); var mal = P(Sex.Male, 10, 10, 10);
+            bool sexOk = fem.bones[fem.Index("Hips")].Outer.y > mal.bones[mal.Index("Hips")].Outer.y && fem.dna.breastSize > 0f && mal.dna.breastSize == 0f
+                         && Muscle(mal) > Muscle(fem);
+            Log($"STR: height {small.height:0.00} -> {big.height:0.00}, arm muscle {Muscle(small) * 1000f:0} -> {Muscle(big) * 1000f:0} mm, hand/arm {HandRatio(small):0.000} -> {HandRatio(big):0.000}; " +
+                $"DEX: belly fat {Belly(fat) * 1000f:0} -> {Belly(lean) * 1000f:0} mm");
+            Log(strOk ? "PASS STR makes bigger, more muscled bodies (hands grow less)" : "FAIL STR");
+            Log(dexOk ? "PASS DEX strips the fat (low DEX heavy, high DEX lean)" : "FAIL DEX");
+            Log(intOk ? "PASS INT grows and elongates the head, eyes glow from 16" : "FAIL INT");
+            Log(sexOk ? "PASS sex template: wider female pelvis and breasts, more male arm muscle" : "FAIL sex template");
+        }
+
         // Odd arms and extra girdles validate.
         foreach (int arms in new[] { 0, 1, 3, 4, 5 })
         {
@@ -521,17 +563,23 @@ public class ScenarioTest : MonoBehaviour
         var cam = Camera.main;
         cam.transform.SetParent(null);
         FlyingVehicle.CameraOverride = true;
-        Vector3 centre = go.transform.position + new Vector3(-4.5f, -3.4f, 0f);
-        cam.transform.SetPositionAndRotation(centre + new Vector3(0f, 0f, 13f), Quaternion.LookRotation(Vector3.back));
+        Vector3 centre = go.transform.position + new Vector3(-5f, -4.6f, 0f);
+        cam.transform.SetPositionAndRotation(centre + new Vector3(0f, 0f, 15f), Quaternion.LookRotation(Vector3.back));
         cam.fieldOfView = 55f;
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
         ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_lineup.png"));
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
-        // Close-up of the first row, three-quarter view.
-        cam.transform.SetPositionAndRotation(go.transform.position + new Vector3(-2.2f, 0.9f, 4.2f), Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, -1f)));
+        // Close-up of the STR x DEX grid (male), straight on.
+        Vector3 gm = go.transform.position + new Vector3(-1f, -3.7f, 0f), gf = go.transform.position + new Vector3(-5f, -3.7f, 0f);
+        Vector3 view = new Vector3(0f, 4.6f, 6.4f);
+        cam.transform.SetPositionAndRotation(gm + view, Quaternion.LookRotation(-view));
         cam.fieldOfView = 50f;
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
-        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_row0.png"));
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_grid_male.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        cam.transform.SetPositionAndRotation(gf + view, Quaternion.LookRotation(-view));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_grid_female.png"));
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
         Time.timeScale = 1f;
     }

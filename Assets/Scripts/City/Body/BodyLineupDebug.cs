@@ -1,23 +1,25 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// Debug lineup of generated skeletons: bones as lines, girth profiles as circles (start, middle, end of
-// each bone), in rows. Gizmos in the editor (Tools > Characters > Body Lineup adds one to the scene);
+// Debug lineup of generated skeletons: bones as lines, girth profiles as rings at the start, middle and
+// end of each bone: red = muscle surface, orange = skin (muscle + fat), so the gap between them is the
+// fat. In rows. Gizmos in the editor (Tools > Characters > Body Lineup adds one to the scene);
 // in play mode it builds the real bone hierarchies and also draws them as line meshes, so they show
 // in the game view and in builds.
 //   Row 0: individuality (4 seeds per sex, average sheet)
-//   Rows 1-3: STR / INT / DEX sweeps 1, 5, 10, 15, 20 (male then female)
-//   Row 4: body plan rules (0, 1, 3, 4, 5 arms)
+//   Rows 1-3: STR 1 / 10 / 20, columns DEX 1 / 10 / 20 (male left, female right), INT 10
+//   Row 4: INT sweep 1, 5, 10, 15, 20 (male then female)
+//   Row 5: body plan rules (0, 1, 3, 4, 5 arms)
 public class BodyLineupDebug : MonoBehaviour
 {
-    public float spacing = 0.9f;
+    public float spacing = 1.0f;
     public float rowHeight = 2.2f;
     public int baseSeed = 1000;
     public bool drawGirth = true;
 
     public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; }
     public readonly List<Entry> Entries = new List<Entry>();
-    public static readonly string[] RowNames = { "seed variation", "STR 1-20", "INT 1-20", "DEX 1-20", "arms 0/1/3/4/5" };
+    public static readonly string[] RowNames = { "seed variation", "STR 1  (DEX 1/10/20)", "STR 10 (DEX 1/10/20)", "STR 20 (DEX 1/10/20)", "INT 1-20", "arms 0/1/3/4/5" };
     static readonly int[] Sweep = { 1, 5, 10, 15, 20 };
 
     public void Generate()
@@ -32,24 +34,27 @@ public class BodyLineupDebug : MonoBehaviour
             Add(0, i, $"M #{i}", new CharacterSheet(Sex.Male, 10, 10, 10, baseSeed + i));
             Add(0, i + 5, $"F #{i}", new CharacterSheet(Sex.Female, 10, 10, 10, baseSeed + i));
         }
-        for (int k = 0; k < Sweep.Length; k++)
-            for (int sx = 0; sx < 2; sx++)
+        int[] grid = { 1, 10, 20 };
+        for (int r = 0; r < 3; r++)
+            for (int k = 0; k < 3; k++)
             {
-                var sex = sx == 0 ? Sex.Male : Sex.Female;
-                int col = k + sx * (Sweep.Length + 1), v = Sweep[k];
-                Add(1, col, $"STR {v}", new CharacterSheet(sex, v, 10, 10, baseSeed));
-                Add(2, col, $"INT {v}", new CharacterSheet(sex, 10, v, 10, baseSeed));
-                Add(3, col, $"DEX {v}", new CharacterSheet(sex, 10, 10, v, baseSeed));
+                Add(1 + r, k, $"M S{grid[r]} D{grid[k]}", new CharacterSheet(Sex.Male, grid[r], 10, grid[k], baseSeed));
+                Add(1 + r, k + 4, $"F S{grid[r]} D{grid[k]}", new CharacterSheet(Sex.Female, grid[r], 10, grid[k], baseSeed));
             }
+        for (int k = 0; k < Sweep.Length; k++)
+        {
+            Add(4, k, $"M INT {Sweep[k]}", new CharacterSheet(Sex.Male, 10, Sweep[k], 10, baseSeed));
+            Add(4, k + Sweep.Length + 1, $"F INT {Sweep[k]}", new CharacterSheet(Sex.Female, 10, Sweep[k], 10, baseSeed));
+        }
         int c = 0;
         foreach (int arms in new[] { 0, 1, 3, 4, 5 })
-            Add(4, c++, $"{arms} arms", new CharacterSheet(Sex.Male, 10, 10, 10, baseSeed + 7), new HumanTemplate { armCount = arms });
+            Add(5, c++, $"{arms} arms", new CharacterSheet(Sex.Male, 10, 10, 10, baseSeed + 7), new HumanTemplate { armCount = arms });
     }
 
     // ---------- play mode: real hierarchies + line meshes ----------
 
     readonly List<BodySkeleton> skeletons = new List<BodySkeleton>();
-    Mesh boneLines, girthLines;
+    Mesh boneLines, muscleLines, skinLines;
 
     void Start()
     {
@@ -63,7 +68,8 @@ public class BodyLineupDebug : MonoBehaviour
             skeletons.Add(BodySkeleton.Build(root, e.plan));
         }
         boneLines = LineObject("Bones", new Color(0.3f, 0.9f, 1f) * 2f);
-        girthLines = LineObject("Girth", new Color(1f, 0.75f, 0.35f) * 1.2f);
+        muscleLines = LineObject("Muscle", new Color(1f, 0.15f, 0.12f) * 1.6f);
+        skinLines = LineObject("Skin", new Color(1f, 0.75f, 0.35f) * 1.2f);
     }
 
     Mesh LineObject(string name, Color c)
@@ -84,15 +90,18 @@ public class BodyLineupDebug : MonoBehaviour
     void LateUpdate()
     {
         if (boneLines == null) return;
-        var bv = new List<Vector3>(); var gv = new List<Vector3>();
+        var bv = new List<Vector3>(); var mv = new List<Vector3>(); var sv = new List<Vector3>();
         foreach (var sk in skeletons)
             foreach (var b in sk.Bones)
             {
                 bv.Add(transform.InverseTransformPoint(b.Start)); bv.Add(transform.InverseTransformPoint(b.End));
-                if (drawGirth) AddCircles(gv, b.Start, b.Dir, b.spec.length, b.spec.girth, p => transform.InverseTransformPoint(p));
+                if (!drawGirth) continue;
+                AddCircles(mv, b.Start, b.Dir, b.spec.length, b.spec.MuscleSurface, p => transform.InverseTransformPoint(p));
+                AddCircles(sv, b.Start, b.Dir, b.spec.length, b.spec.Outer, p => transform.InverseTransformPoint(p));
             }
         Fill(boneLines, bv);
-        Fill(girthLines, gv);
+        Fill(muscleLines, mv);
+        Fill(skinLines, sv);
     }
 
     static void Fill(Mesh m, List<Vector3> v)
@@ -142,7 +151,11 @@ public class BodyLineupDebug : MonoBehaviour
                 Gizmos.DrawLine(s, en);
                 if (!drawGirth) continue;
                 lines.Clear();
-                AddCircles(lines, s, (en - s).normalized, plan.bones[i].length, plan.bones[i].girth, p => p);
+                AddCircles(lines, s, (en - s).normalized, plan.bones[i].length, plan.bones[i].MuscleSurface, p => p);
+                Gizmos.color = new Color(1f, 0.2f, 0.15f, 0.8f);
+                for (int k = 0; k < lines.Count; k += 2) Gizmos.DrawLine(lines[k], lines[k + 1]);
+                lines.Clear();
+                AddCircles(lines, s, (en - s).normalized, plan.bones[i].length, plan.bones[i].Outer, p => p);
                 Gizmos.color = new Color(1f, 0.75f, 0.35f, 0.8f);
                 for (int k = 0; k < lines.Count; k += 2) Gizmos.DrawLine(lines[k], lines[k + 1]);
             }

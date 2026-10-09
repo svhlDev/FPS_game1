@@ -30,6 +30,57 @@ public class BodyRules : ScriptableObject
     [Tooltip("Standing height noise (fraction, +-).")]
     public float heightNoise = 0.03f;
 
+    [Header("STR: size")]
+    public float strHeight = 0.08f;
+    public float strLimbLength = 0.06f;
+    public float strMuscleVolume = 0.6f;
+    [Tooltip("STR 1 is slight, not skeletal.")]
+    public float minMuscleVolume = 0.4f;
+    [Tooltip("Core (bone) girth x (1 + this x s).")]
+    public float strCoreGirth = 0.08f;
+    [Tooltip("Muscle layer thickness = average thickness x volume^this (a shell grows slower than its volume).")]
+    public float muscleThicknessExponent = 0.7f;
+
+    [Header("INT: head")]
+    public float intHeadScale = 0.10f;
+    public float intElongation = 0.15f;
+    public float eyeGlowStart = 16f, eyeGlowFull = 20f;
+
+    [Header("DEX: fat and jitter")]
+    [Tooltip("Fat thickness multiplier by DEX (x = DEX, y = x sex base fat), linear between keys.")]
+    public Vector2[] dexFatCurve = { new Vector2(1, 3.0f), new Vector2(5, 1.6f), new Vector2(10, 1.0f), new Vector2(15, 0.45f), new Vector2(20, 0.15f) };
+    public float jitterStart = 15f, jitterFull = 20f;
+
+    [Header("Layers: how an average body's girth splits into core, muscle and fat")]
+    [Tooltip("Muscle share of the (house) girth for an average body, per bone kind.")]
+    public float torsoMuscleShare = 0.18f;
+    public float limbMuscleShare = 0.32f;
+    public float neckMuscleShare = 0.22f;
+    [Tooltip("The core never goes below this fraction of the average girth.")]
+    public float coreMinFraction = 0.35f;
+
+    [Header("Seed individuality")]
+    public float muscleNoise = 0.1f;
+    public float fatDistributionNoise = 0.2f;
+    public Vector2 breastSizeRange = new Vector2(0.7f, 1.35f);
+    [Tooltip("Breast radius grows by this x the breast fat thickness.")]
+    public float breastFatGain = 0.8f;
+    [Tooltip("Downward offset as a fraction of breast size.")]
+    public float breastDroop = 0.25f;
+    public float faceNoise = 0.15f;
+    [Tooltip("Spine pitch range (deg, + = slouch).")]
+    public Vector2 postureRange = new Vector2(-3f, 6f);
+
+    public float FatCurve(int dex)
+    {
+        var k = dexFatCurve;
+        if (k == null || k.Length == 0) return 1f;
+        if (dex <= k[0].x) return k[0].y;
+        for (int i = 1; i < k.Length; i++)
+            if (dex <= k[i].x) return Mathf.Lerp(k[i - 1].y, k[i].y, (dex - k[i - 1].x) / Mathf.Max(1e-4f, k[i].x - k[i - 1].x));
+        return k[k.Length - 1].y;
+    }
+
     [Header("Body plan rules")]
     public int minLegs = 2;
     public int maxArms = 5;
@@ -95,9 +146,20 @@ public class SexTemplate
     public Vector3 shinGirth = new Vector3(0.031f, 0.029f, 0.02f);       // end replaced by the taper
     public Vector3 footGirth = new Vector3(0.02f, 0.022f, 0.016f);       // realistic; x extremityScale
 
+    [Header("Muscle and fat")]
+    [Tooltip("Muscle volume per group (Pectorals, Deltoids, Biceps, Triceps, Forearm, Trapezius, Lats, Abdominals, Glutes, Quadriceps, Hamstrings, Calves).")]
+    public float[] muscle = { 1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f, 0.9f, 1f, 1f, 1f };
+    [Tooltip("Average fat layer thickness (fraction of height) at DEX 10.")]
+    public float baseFat = 0.0095f;
+    [Tooltip("Fat weight per region (Belly, Waist, Hips, Buttocks, Thighs, Breasts, UpperArms, Neck, Face).")]
+    public float[] fat = { 1.6f, 1.3f, 0.8f, 0.8f, 0.7f, 0.6f, 0.7f, 0.8f, 0.6f };
+    [Tooltip("Breast radius (fraction of height); 0 = none.")]
+    public float breast = 0f;
+
     public static SexTemplate Male() => new SexTemplate { height = 1.54f };
 
-    // Narrower shoulders, wider pelvis, slimmer arms and chest, fuller thighs.
+    // Narrower shoulders, wider pelvis, slimmer arms and chest, fuller thighs; less arm and chest
+    // muscle, more fat on breasts, hips, buttocks and thighs (males carry it on the belly and waist).
     public static SexTemplate Female() => new SexTemplate
     {
         height = 1.46f,
@@ -111,5 +173,9 @@ public class SexTemplate
         forearmGirth = new Vector3(0.019f, 0.018f, 0.014f),
         thighGirth = new Vector3(0.056f, 0.046f, 0.032f),
         hand = 0.102f, foot = 0.145f,
+        muscle = new[] { 0.55f, 0.65f, 0.6f, 0.65f, 0.7f, 0.65f, 0.7f, 0.85f, 1.05f, 0.9f, 0.9f, 0.9f },
+        baseFat = 0.0135f,
+        fat = new[] { 1.0f, 0.9f, 1.5f, 1.6f, 1.5f, 1.6f, 1.0f, 0.6f, 0.7f },
+        breast = 0.032f,
     };
 }

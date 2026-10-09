@@ -10,7 +10,9 @@ using UnityEngine;
 //   Arms    : 0..maxArms. The first pair on the shoulders; more pairs on extra girdles lower on the
 //             chest; an odd arm goes on one side or the centre of the chest (seed-chosen).
 //   Bones   : joint position (rest, in the parent joint's space), rest rotation, direction, length and
-//             a girth profile (radius at start, middle, end).
+//             girth profiles (radius at start, middle, end) for the three layers: core (bone and
+//             base bulk), muscle (thickness on top) and fat (thickness on top of that). Outer = skin.
+// Phase 2: lengths and layers come from BodyDNA (sex + sheet + seed), see BodyDNA.cs.
 //   Sockets : named attach points on bones (grips, eyes, holster) for gear, clothing and cyberware later.
 // Joint rotations rest at identity in root space, exactly like CharacterFigure, so FigureAnimator's
 // convention holds: limbs hang along -Y, a negative X rotation swings them forward.
@@ -30,8 +32,12 @@ public class BoneSpec
     public Quaternion restRotation = Quaternion.identity;
     public Vector3 dir;              // bone direction in its joint's space
     public float length;
-    public Vector3 girth;            // radius at start, middle, end
+    public Vector3 girth;            // core radius at start, middle, end
+    public Vector3 muscle;           // muscle layer thickness at start, middle, end
+    public Vector3 fat;              // fat layer thickness at start, middle, end
     public BodyPart.Location location;
+    public Vector3 MuscleSurface => girth + muscle;
+    public Vector3 Outer => girth + muscle + fat;
 }
 
 [Serializable]
@@ -54,6 +60,7 @@ public struct Socket
 public class BodyPlan
 {
     public CharacterSheet sheet;
+    public BodyDNA dna;
     public string species;
     public float height;
     public int spineSegments;
@@ -100,7 +107,7 @@ public class BodyPlan
         for (int i = 0; i < bones.Count; i++)
         {
             var b = bones[i];
-            float m = b.girth.y * b.girth.y * b.length;
+            float m = b.Outer.y * b.Outer.y * b.length;
             sum += (JointPos(i) + BoneEnd(i)) * 0.5f * m;
             w += m;
         }
@@ -206,89 +213,132 @@ public class HumanTemplate : ISpeciesTemplate
     public BodyPlan Sample(CharacterSheet sheet, BodyRules rules, int attempt)
     {
         var t = rules.Template(sheet.sex);
+        var dna = BodyDNA.Compute(sheet, rules);
         string salt = attempt == 0 ? "" : "#" + attempt;
-        var plan = new BodyPlan { sheet = sheet, species = Name, spineSegments = 5, legType = LegType.Plantigrade };
-        float H = t.height * (1f + rules.heightNoise * new PcgRandom(sheet.seed, "height" + salt).Signed());
+        var plan = new BodyPlan { sheet = sheet, dna = dna, species = Name, spineSegments = 5, legType = LegType.Plantigrade };
+        float H = dna.height;
 
         // Per-bone noise: a shared draw per bone kind plus a smaller per-side one (left and right differ
         // a little, never a lot).
-        float Len(string key, float frac, int side = 0)
+        float Noise(string key, float amount, int side)
         {
-            float n = new PcgRandom(sheet.seed, "len." + key + salt).Signed();
-            if (side != 0) n += 0.3f * new PcgRandom(sheet.seed, "len." + key + side + salt).Signed();
-            return frac * H * (1f + rules.lengthNoise * n);
+            float n = new PcgRandom(sheet.seed, key + salt).Signed();
+            if (side != 0) n += 0.3f * new PcgRandom(sheet.seed, key + side + salt).Signed();
+            return 1f + amount * n;
         }
-        Vector3 Girth(string key, Vector3 g, float scale, int side = 0)
+        float Len(string key, float frac, int side = 0) => frac * H * Noise("len." + key, rules.lengthNoise, side);
+
+        // Layers. The template girth (x house style) is an average body's skin; it splits into core,
+        // muscle (share of the girth) and fat (the sex's average fat for the region). The DNA then sets
+        // muscle (STR) and fat (DEX) for this body; the core only grows a little with STR.
+        float avgFatScale = t.baseFat * H;
+        void Layers(BoneSpec b, string key, Vector3 template, float house, float muscleShare, float muscleAmount, float fatNow, float fatAvgWeight, int side, bool taper)
         {
-            float n = new PcgRandom(sheet.seed, "girth." + key + salt).Signed();
-            if (side != 0) n += 0.3f * new PcgRandom(sheet.seed, "girth." + key + side + salt).Signed();
-            return g * H * scale * (1f + rules.girthNoise * n);
+            Vector3 G = template * H * house * Noise("girth." + key, rules.girthNoise, side);
+            Vector3 avgMuscle = G * muscleShare;
+            float avgFat = avgFatScale * fatAvgWeight;
+            Vector3 core = G - avgMuscle - Vector3.one * avgFat;
+            core = Vector3.Max(core, G * rules.coreMinFraction) * dna.coreGirth;
+            Vector3 muscle = avgMuscle * Mathf.Pow(Mathf.Max(0f, muscleAmount), rules.muscleThicknessExponent);
+            Vector3 fat = Vector3.one * fatNow;
+            if (taper)
+            {
+                // Forearms and shins narrow into the small hands and feet: the end ring is extremityTaper
+                // of the middle, with little muscle and fat at the wrist / ankle.
+                muscle.z = muscle.y * 0.25f; fat.z = fat.y * 0.4f;
+                core.z = Mathf.Max(core.y * rules.extremityTaper - muscle.z - fat.z, core.y * 0.3f);
+            }
+            b.girth = core; b.muscle = muscle; b.fat = fat;
         }
+        float M(params MuscleGroup[] gs) { float v = 0f; foreach (var g in gs) v += dna.Muscle(g); return v / gs.Length; }
+        float F(FatRegion r) => dna.Fat(r);
+        float FA(FatRegion r) => t.fat[(int)r];
         float hg = rules.houseGirth, ex = rules.extremityScale;
-        Vector3 Taper(Vector3 g) => new Vector3(g.x, g.y, g.y * rules.extremityTaper);
+        float torso = rules.torsoMuscleShare, limb = rules.limbMuscleShare;
 
         // ---------- spine ----------
-        float ankleH = Len("ankle", t.ankleHeight), shin = Len("shin", t.shin), thigh = Len("thigh", t.thigh);
+        float limbL = dna.limbLength;
+        float ankleH = Len("ankle", t.ankleHeight), shin = Len("shin", t.shin) * limbL, thigh = Len("thigh", t.thigh) * limbL;
         float hipY = ankleH + shin + thigh;
-        float lumbar = Len("lumbar", t.lumbar), chest = Len("chest", t.chest), neck = Len("neck", t.neck), head = Len("head", t.head);
-        int hips = plan.Add(new BoneSpec { name = "Hips", kind = BoneKind.Pelvis, localPos = new Vector3(0f, hipY, 0f), dir = Vector3.down,
-                                           length = Len("pelvis", t.pelvis), girth = Girth("pelvis", t.pelvisGirth, hg), location = BodyPart.Location.Body });
-        int spine = plan.Add(new BoneSpec { name = "Spine", kind = BoneKind.Lumbar, parent = hips, dir = Vector3.up, length = lumbar,
-                                            girth = Girth("lumbar", t.lumbarGirth, hg), location = BodyPart.Location.Body });
-        int chestB = plan.Add(new BoneSpec { name = "Chest", kind = BoneKind.Chest, parent = spine, localPos = new Vector3(0f, lumbar, 0f), dir = Vector3.up,
-                                             length = chest, girth = Girth("chest", t.chestGirth, hg), location = BodyPart.Location.Body });
-        int neckB = plan.Add(new BoneSpec { name = "Neck", kind = BoneKind.Neck, parent = chestB, localPos = new Vector3(0f, chest, t.neckForward * H), dir = Vector3.up,
-                                            length = neck, girth = Girth("neck", t.neckGirth, hg), location = BodyPart.Location.Head });
-        int headB = plan.Add(new BoneSpec { name = "Head", kind = BoneKind.Head, parent = neckB, localPos = new Vector3(0f, neck, 0f), dir = Vector3.up,
-                                            length = head, girth = Girth("head", t.headGirth, 1f), location = BodyPart.Location.Head });
+        float lumbar = Len("lumbar", t.lumbar), chest = Len("chest", t.chest), neck = Len("neck", t.neck);
+        float head = Len("head", t.head) * dna.headScale * (1f + dna.headElongation);
+        var hipsB = new BoneSpec { name = "Hips", kind = BoneKind.Pelvis, localPos = new Vector3(0f, hipY, 0f), dir = Vector3.down,
+                                   length = Len("pelvis", t.pelvis), location = BodyPart.Location.Body };
+        Layers(hipsB, "pelvis", t.pelvisGirth, hg, torso, M(MuscleGroup.Glutes), (F(FatRegion.Hips) + F(FatRegion.Buttocks)) * 0.5f, (FA(FatRegion.Hips) + FA(FatRegion.Buttocks)) * 0.5f, 0, false);
+        int hips = plan.Add(hipsB);
+        var spineB = new BoneSpec { name = "Spine", kind = BoneKind.Lumbar, parent = hips, dir = Vector3.up, length = lumbar, location = BodyPart.Location.Body };
+        Layers(spineB, "lumbar", t.lumbarGirth, hg, torso, M(MuscleGroup.Abdominals), (F(FatRegion.Belly) + F(FatRegion.Waist)) * 0.5f, (FA(FatRegion.Belly) + FA(FatRegion.Waist)) * 0.5f, 0, false);
+        int spine = plan.Add(spineB);
+        var chestSpec = new BoneSpec { name = "Chest", kind = BoneKind.Chest, parent = spine, localPos = new Vector3(0f, lumbar, 0f), dir = Vector3.up, length = chest, location = BodyPart.Location.Body };
+        Layers(chestSpec, "chest", t.chestGirth, hg, torso, M(MuscleGroup.Pectorals, MuscleGroup.Lats, MuscleGroup.Trapezius),
+               (F(FatRegion.Breasts) + F(FatRegion.Waist)) * 0.4f, (FA(FatRegion.Breasts) + FA(FatRegion.Waist)) * 0.4f, 0, false);
+        int chestB = plan.Add(chestSpec);
+        var neckSpec = new BoneSpec { name = "Neck", kind = BoneKind.Neck, parent = chestB, localPos = new Vector3(0f, chest, t.neckForward * H), dir = Vector3.up, length = neck, location = BodyPart.Location.Head };
+        Layers(neckSpec, "neck", t.neckGirth, hg, rules.neckMuscleShare, M(MuscleGroup.Trapezius), F(FatRegion.Neck), FA(FatRegion.Neck), 0, false);
+        int neckB = plan.Add(neckSpec);
+        var headSpec = new BoneSpec { name = "Head", kind = BoneKind.Head, parent = neckB, localPos = new Vector3(0f, neck, 0f), dir = Vector3.up, length = head, location = BodyPart.Location.Head };
+        Layers(headSpec, "head", t.headGirth * dna.headScale, 1f, 0f, 0f, F(FatRegion.Face) * 0.5f, FA(FatRegion.Face) * 0.5f, 0, false);
+        int headB = plan.Add(headSpec);
 
         // ---------- legs ----------
-        float footLen = Len("foot", t.foot) * ex;
+        float footLen = Len("foot", t.foot) * ex * dna.extremity;
         foreach (int side in new[] { -1, 1 })
         {
             string S = side < 0 ? "L" : "R";
             var leg = new LimbSpec { side = side };
-            leg.root = plan.Add(new BoneSpec { name = "Hip" + S, kind = BoneKind.Thigh, parent = hips, side = side, limb = plan.legs.Count,
-                                               localPos = new Vector3(side * t.hipHalfWidth * H, 0f, 0f), dir = Vector3.down, length = thigh,
-                                               girth = Girth("thigh", t.thighGirth, hg, side), location = BodyPart.Location.Leg });
-            leg.mid = plan.Add(new BoneSpec { name = "Knee" + S, kind = BoneKind.Shin, parent = leg.root, side = side, limb = plan.legs.Count,
-                                              localPos = new Vector3(0f, -thigh, 0f), dir = Vector3.down, length = shin,
-                                              girth = Taper(Girth("shin", t.shinGirth, hg, side)), location = BodyPart.Location.Leg });
+            int li = plan.legs.Count;
+            var thighB = new BoneSpec { name = "Hip" + S, kind = BoneKind.Thigh, parent = hips, side = side, limb = li,
+                                        localPos = new Vector3(side * t.hipHalfWidth * H, 0f, 0f), dir = Vector3.down, length = thigh, location = BodyPart.Location.Leg };
+            Layers(thighB, "thigh", t.thighGirth, hg, limb, M(MuscleGroup.Quadriceps, MuscleGroup.Hamstrings), F(FatRegion.Thighs), FA(FatRegion.Thighs), side, false);
+            leg.root = plan.Add(thighB);
+            var shinB = new BoneSpec { name = "Knee" + S, kind = BoneKind.Shin, parent = leg.root, side = side, limb = li,
+                                       localPos = new Vector3(0f, -thigh, 0f), dir = Vector3.down, length = shin, location = BodyPart.Location.Leg };
+            Layers(shinB, "shin", t.shinGirth, hg, limb, M(MuscleGroup.Calves), F(FatRegion.Thighs) * 0.35f, FA(FatRegion.Thighs) * 0.35f, side, true);
+            leg.mid = plan.Add(shinB);
             // Foot: from the ankle forward and down to the toes on the ground (heel behind, via girth).
             Vector3 toe = new Vector3(0f, -ankleH, footLen * 0.72f);
-            leg.end = leg.tip = plan.Add(new BoneSpec { name = "Ankle" + S, kind = BoneKind.Foot, parent = leg.mid, side = side, limb = plan.legs.Count,
-                                                        localPos = new Vector3(0f, -shin, 0f), dir = toe.normalized, length = toe.magnitude,
-                                                        girth = Girth("foot", t.footGirth, ex, side), location = BodyPart.Location.Foot });
+            var footB = new BoneSpec { name = "Ankle" + S, kind = BoneKind.Foot, parent = leg.mid, side = side, limb = li,
+                                       localPos = new Vector3(0f, -shin, 0f), dir = toe.normalized, length = toe.magnitude, location = BodyPart.Location.Foot };
+            Layers(footB, "foot", t.footGirth, ex * dna.extremity, 0f, 0f, F(FatRegion.Face) * 0.3f, FA(FatRegion.Face) * 0.3f, side, false);
+            leg.end = leg.tip = plan.Add(footB);
             plan.legs.Add(leg);
         }
 
         // ---------- arms ----------
-        float upper = Len("upperArm", t.upperArm), fore = Len("forearm", t.forearm), hand = Len("hand", t.hand) * ex;
+        float upper = Len("upperArm", t.upperArm) * limbL, fore = Len("forearm", t.forearm) * limbL, hand = Len("hand", t.hand) * ex * dna.extremity;
         var slots = ArmSlots(armCount, sheet.seed, salt);
         foreach (var (side, girdle) in slots)
         {
             string S = (side < 0 ? "L" : side > 0 ? "R" : "C") + (girdle > 0 ? (girdle + 1).ToString() : "");
             float y = chest - t.shoulderDrop * H - girdle * rules.extraGirdleStep * chest;
             float x = side * t.shoulderHalfWidth * H * (girdle > 0 ? 0.9f : 1f);
-            float z = side == 0 ? t.chestGirth.y * H * hg : 0f; // a centred arm sits on the chest's front
+            float z = side == 0 ? chestSpec.Outer.y : 0f; // a centred arm sits on the chest's front
             var arm = new LimbSpec { side = side, girdle = girdle };
             int li = plan.arms.Count;
-            arm.root = plan.Add(new BoneSpec { name = "Shoulder" + S, kind = BoneKind.UpperArm, parent = chestB, side = side, limb = li,
-                                               localPos = new Vector3(x, y, z), dir = Vector3.down, length = upper,
-                                               girth = Girth("upperArm", t.upperArmGirth, hg, side), location = BodyPart.Location.Arm });
-            arm.mid = plan.Add(new BoneSpec { name = "Elbow" + S, kind = BoneKind.Forearm, parent = arm.root, side = side, limb = li,
-                                              localPos = new Vector3(0f, -upper, 0f), dir = Vector3.down, length = fore,
-                                              girth = Taper(Girth("forearm", t.forearmGirth, hg, side)), location = BodyPart.Location.Arm });
-            arm.end = arm.tip = plan.Add(new BoneSpec { name = "Wrist" + S, kind = BoneKind.Hand, parent = arm.mid, side = side, limb = li,
-                                                        localPos = new Vector3(0f, -fore, 0f), dir = Vector3.down, length = hand,
-                                                        girth = Girth("hand", t.handGirth, ex, side), location = BodyPart.Location.Hand });
+            var upperB = new BoneSpec { name = "Shoulder" + S, kind = BoneKind.UpperArm, parent = chestB, side = side, limb = li,
+                                        localPos = new Vector3(x, y, z), dir = Vector3.down, length = upper, location = BodyPart.Location.Arm };
+            Layers(upperB, "upperArm", t.upperArmGirth, hg, limb, M(MuscleGroup.Deltoids, MuscleGroup.Biceps, MuscleGroup.Triceps), F(FatRegion.UpperArms), FA(FatRegion.UpperArms), side, false);
+            arm.root = plan.Add(upperB);
+            var foreB = new BoneSpec { name = "Elbow" + S, kind = BoneKind.Forearm, parent = arm.root, side = side, limb = li,
+                                       localPos = new Vector3(0f, -upper, 0f), dir = Vector3.down, length = fore, location = BodyPart.Location.Arm };
+            Layers(foreB, "forearm", t.forearmGirth, hg, limb, M(MuscleGroup.Forearm), F(FatRegion.UpperArms) * 0.5f, FA(FatRegion.UpperArms) * 0.5f, side, true);
+            arm.mid = plan.Add(foreB);
+            var handB = new BoneSpec { name = "Wrist" + S, kind = BoneKind.Hand, parent = arm.mid, side = side, limb = li,
+                                       localPos = new Vector3(0f, -fore, 0f), dir = Vector3.down, length = hand, location = BodyPart.Location.Hand };
+            Layers(handB, "hand", t.handGirth, ex * dna.extremity, 0f, 0f, F(FatRegion.Face) * 0.3f, FA(FatRegion.Face) * 0.3f, side, false);
+            arm.end = arm.tip = plan.Add(handB);
             plan.arms.Add(arm);
             plan.sockets.Add(new Socket { name = "hand." + S + ".grip", bone = arm.end, localPos = Vector3.down * hand * 0.5f });
         }
 
-        plan.sockets.Add(new Socket { name = "head.eyes", bone = headB, localPos = new Vector3(0f, head * 0.45f, t.headGirth.y * H * 0.8f) });
-        plan.sockets.Add(new Socket { name = "hip.R.holster", bone = hips, localPos = new Vector3(t.pelvisGirth.y * H * hg, -0.02f * H, 0f) });
-        plan.sockets.Add(new Socket { name = "back", bone = chestB, localPos = new Vector3(0f, chest * 0.6f, -t.chestGirth.y * H * hg) });
+        var hd = plan.bones[headB];
+        plan.sockets.Add(new Socket { name = "head.eyes", bone = headB, localPos = new Vector3(0f, head * 0.45f, hd.Outer.y * 0.8f) });
+        plan.sockets.Add(new Socket { name = "hip.R.holster", bone = hips, localPos = new Vector3(plan.bones[hips].Outer.y, -0.02f * H, 0f) });
+        plan.sockets.Add(new Socket { name = "back", bone = chestB, localPos = new Vector3(0f, chest * 0.6f, -chestSpec.Outer.y) });
+        if (dna.breastSize > 0f)
+            foreach (int side in new[] { -1, 1 })
+                plan.sockets.Add(new Socket { name = side < 0 ? "breast.L" : "breast.R", bone = chestB,
+                                              localPos = new Vector3(side * chestSpec.Outer.y * 0.45f, chest * 0.45f - dna.breastDroop, chestSpec.Outer.y * 0.8f) });
         plan.height = hipY + lumbar + chest + neck + head;
         return plan;
     }
