@@ -536,6 +536,49 @@ public class ScenarioTest : MonoBehaviour
             Log(sexOk ? "PASS sex template: wider female pelvis and breasts, more male arm muscle" : "FAIL sex template");
         }
 
+        // Phase 3: muscle definition shows through thin fat. Front surface of the abs, top to bottom:
+        // bumpiness (mean |second difference| of the surface depth) for lean vs heavy.
+        float Bumpiness(BodyPlan pl, out float meanZ)
+        {
+            var sdf = new BodySDF(pl);
+            var lum = pl.bones[pl.Index("Spine")];
+            int li = pl.Index("Spine");
+            Vector3 a = sdf.start[li], b = sdf.end[li];
+            float x = a.x + lum.girth.y * 0.19f;
+            var zs = new List<float>();
+            for (float y = a.y + 0.01f; y < b.y - 0.01f; y += 0.003f)
+            {
+                // Scan in from the front in 2 mm steps to the first inside sample, then bisect.
+                float z = 0.45f;
+                while (z > -0.2f && sdf.Eval(new Vector3(x, y, z)) > 0f) z -= 0.002f;
+                float lo = z, hi = z + 0.002f;
+                for (int k = 0; k < 12; k++) { float mid = (lo + hi) * 0.5f; if (sdf.Eval(new Vector3(x, y, mid)) > 0f) hi = mid; else lo = mid; }
+                zs.Add((lo + hi) * 0.5f);
+            }
+            // RMS residual from a local quadratic fit over +-2.4 cm: the shape of the belly drops out,
+            // the bumps of the muscle under thin fat stay.
+            meanZ = 0f;
+            foreach (var z in zs) meanZ += z;
+            meanZ /= Mathf.Max(1, zs.Count);
+            int w = 8; float sum = 0f; int cnt = 0;
+            for (int k = w; k < zs.Count - w; k++)
+            {
+                double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+                for (int j = -w; j <= w; j++) { double u = j, zz = zs[k + j]; s0 += 1; s1 += u; s2 += u * u; s3 += u * u * u; s4 += u * u * u * u; t0 += zz; t1 += zz * u; t2 += zz * u * u; }
+                // Symmetric window: s1 = s3 = 0, so the fit's value at 0 is c0 = (t0 s4 - t2 s2) / (s0 s4 - s2^2).
+                double c0 = (t0 * s4 - t2 * s2) / (s0 * s4 - s2 * s2);
+                double r = zs[k] - c0;
+                sum += (float)(r * r); cnt++;
+            }
+            return Mathf.Sqrt(sum / Mathf.Max(1, cnt)) * 1000f;
+        }
+        {
+            float lean = Bumpiness(P(Sex.Male, 15, 10, 20), out float zLean), heavy = Bumpiness(P(Sex.Male, 15, 10, 1), out float zHeavy);
+            float avg = Bumpiness(P(Sex.Male, 15, 10, 10), out float zAvg);
+            Log($"abs definition (RMS bumps on the belly's front, mm): DEX 20 {lean:0.000}, DEX 10 {avg:0.000}, DEX 1 {heavy:0.000}; belly front at z {zLean * 100f:0.0} / {zAvg * 100f:0.0} / {zHeavy * 100f:0.0} cm");
+            Log(lean > heavy * 2f && zHeavy > zLean + 0.03f ? "PASS muscle definition shows at high DEX and is smoothed over at low DEX" : "FAIL definition doesn't follow DEX");
+        }
+
         // Odd arms and extra girdles validate.
         foreach (int arms in new[] { 0, 1, 3, 4, 5 })
         {
@@ -548,6 +591,21 @@ public class ScenarioTest : MonoBehaviour
         go.transform.position = new Vector3(0f, 1500f, 0f);
         var lineup = go.AddComponent<BodyLineupDebug>();
         yield return null; yield return null;
+        for (float t = 0f; t < 120f && lineup.MeshesBuilt < lineup.Entries.Count; t += Time.unscaledDeltaTime) yield return null;
+        {
+            float mms = 0f, sdfMs = 0f; int tris = 0, maxTris = 0; float vol = 0f;
+            foreach (var (label, r, sm) in lineup.MeshStats)
+            {
+                mms += r.sampleMs + r.meshMs + sm; sdfMs += r.sampleMs; tris += r.triangles; maxTris = Mathf.Max(maxTris, r.triangles);
+            }
+            // Signed volume of the first mesh: positive = triangles wound outward.
+            var m0 = lineup.MeshStats[0].result.mesh;
+            var vv = m0.vertices; var tt = m0.triangles;
+            for (int k = 0; k < tt.Length; k += 3) vol += Vector3.Dot(vv[tt[k]], Vector3.Cross(vv[tt[k + 1]], vv[tt[k + 2]])) / 6f;
+            int nm = lineup.MeshStats.Count;
+            Log($"SDF meshes: {nm} bodies at {lineup.meshCell * 100f:0.0} cm cells, {mms / nm:0} ms each (sampling {sdfMs / nm:0} ms), {tris / nm} triangles avg, {maxTris} max; first mesh volume {vol * 1000f:0.0} L");
+            Log(vol > 0f ? "PASS SDF bodies mesh closed and outward" : "FAIL mesh inside out");
+        }
         var sk = go.GetComponentsInChildren<BodySkeleton>();
         float ms = 0f; foreach (var s in sk) ms += s.GenerationMs;
         var first = sk[0];
@@ -558,6 +616,11 @@ public class ScenarioTest : MonoBehaviour
             $"male #0: height {first.Plan.height:0.000}, head top {first.Bones[first.Plan.Index("Head")].End.y - go.transform.position.y:0.000}, toe at y {toe.y - go.transform.position.y:0.000}, hand {first.Plan.bones[first.Plan.Index("WristL")].length:0.000} m");
         Log(contract && Mathf.Abs(toe.y - go.transform.position.y) < 0.01f ? "PASS skeletons keep the rig contract, feet on the ground" : "FAIL skeleton");
 
+        // A light for the shots (night scene).
+        var lightGo = new GameObject("LineupLight");
+        var lt = lightGo.AddComponent<Light>();
+        lt.type = LightType.Directional; lt.intensity = 1.6f; lt.color = new Color(1f, 0.96f, 0.9f);
+        lightGo.transform.rotation = Quaternion.LookRotation(new Vector3(-0.4f, -0.5f, -1f));
         // Camera: straight on, the whole grid.
         Time.timeScale = 0f;
         var cam = Camera.main;
@@ -580,6 +643,43 @@ public class ScenarioTest : MonoBehaviour
         cam.transform.SetPositionAndRotation(gf + view, Quaternion.LookRotation(-view));
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
         ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_grid_female.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        // Close-up: STR 20 row, male DEX 1 / 10 / 20, three-quarter.
+        Vector3 row3 = go.transform.position + new Vector3(-1f, -3f * lineup.rowHeight + 0.9f, 0f);
+        Vector3 v3 = new Vector3(1.0f, 0.4f, 3.0f);
+        cam.transform.SetPositionAndRotation(row3 + v3, Quaternion.LookRotation(-v3));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_str20_male.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        Vector3 row3f = row3 + new Vector3(-4f, 0f, 0f);
+        cam.transform.SetPositionAndRotation(row3f + v3, Quaternion.LookRotation(-v3));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_str20_female.png"));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        // Heads: the INT row, male, close.
+        // One body up close, front and side: average male, then STR 20 DEX 20 and STR 10 DEX 1.
+        foreach (var (label, col, row) in new[] { ("avg", 1, 2), ("ripped", 2, 3), ("heavy", 0, 2) })
+        {
+            Vector3 body = go.transform.position + new Vector3(-col * lineup.spacing, -row * lineup.rowHeight + 1.0f, 0f);
+            Vector3 vf = new Vector3(0.35f, 0.15f, 1.9f);
+            cam.transform.SetPositionAndRotation(body + vf, Quaternion.LookRotation(-vf));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"body_close_{label}.png"));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        }
+        foreach (var (label, vv) in new[] { ("front", new Vector3(0f, 0.05f, 1.1f)), ("side", new Vector3(1.1f, 0.05f, 0.05f)) })
+        {
+            Vector3 body = go.transform.position + new Vector3(-1f * lineup.spacing, -2f * lineup.rowHeight + 1.15f, 0f);
+            cam.transform.SetPositionAndRotation(body + vv, Quaternion.LookRotation(-vv));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"body_torso_{label}.png"));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        }
+        Vector3 heads = go.transform.position + new Vector3(-2f, -4f * lineup.rowHeight + 1.45f, 0f);
+        Vector3 vh = new Vector3(0.9f, 0.1f, 2.2f);
+        cam.transform.SetPositionAndRotation(heads + vh, Quaternion.LookRotation(-vh));
+        yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_int_heads.png"));
         yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
         Time.timeScale = 1f;
     }

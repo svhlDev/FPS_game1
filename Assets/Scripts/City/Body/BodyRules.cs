@@ -64,7 +64,7 @@ public class BodyRules : ScriptableObject
     public float fatDistributionNoise = 0.2f;
     public Vector2 breastSizeRange = new Vector2(0.7f, 1.35f);
     [Tooltip("Breast radius grows by this x the breast fat thickness.")]
-    public float breastFatGain = 0.8f;
+    public float breastFatGain = 0.35f;
     [Tooltip("Downward offset as a fraction of breast size.")]
     public float breastDroop = 0.25f;
     public float faceNoise = 0.15f;

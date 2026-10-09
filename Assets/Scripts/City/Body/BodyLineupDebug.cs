@@ -10,12 +10,22 @@ using UnityEngine;
 //   Rows 1-3: STR 1 / 10 / 20, columns DEX 1 / 10 / 20 (male left, female right), INT 10
 //   Row 4: INT sweep 1, 5, 10, 15, 20 (male then female)
 //   Row 5: body plan rules (0, 1, 3, 4, 5 arms)
+// Phase 3: previewMeshes shows the SDF body (BodySDF, quick surface-nets mesh, A-pose) instead of the
+// rings: built one per frame in play mode; in the editor use the component's context menu
+// "Build preview meshes" (they draw as gizmos).
 public class BodyLineupDebug : MonoBehaviour
 {
     public float spacing = 1.0f;
     public float rowHeight = 2.2f;
     public int baseSeed = 1000;
     public bool drawGirth = true;
+    public bool previewMeshes = true;
+    public float meshCell = 0.02f;
+    public Color skinColor = new Color(0.82f, 0.64f, 0.52f);
+    public float LastMeshMs { get; private set; }
+    public int MeshesBuilt { get; private set; }
+    public readonly List<(string label, SurfaceNets.Result result, float sdfMs)> MeshStats = new List<(string, SurfaceNets.Result, float)>();
+    readonly List<(Mesh mesh, Vector3 offset)> editorMeshes = new List<(Mesh, Vector3)>();
 
     public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; }
     public readonly List<Entry> Entries = new List<Entry>();
@@ -67,10 +77,49 @@ public class BodyLineupDebug : MonoBehaviour
             root.localPosition = e.offset;
             skeletons.Add(BodySkeleton.Build(root, e.plan));
         }
+        if (previewMeshes) { drawGirth = false; StartCoroutine(BuildMeshes()); }
         boneLines = LineObject("Bones", new Color(0.3f, 0.9f, 1f) * 2f);
         muscleLines = LineObject("Muscle", new Color(1f, 0.15f, 0.12f) * 1.6f);
         skinLines = LineObject("Skin", new Color(1f, 0.75f, 0.35f) * 1.2f);
     }
+
+    System.Collections.IEnumerator BuildMeshes()
+    {
+        var mat = CharacterFigure.Mat(skinColor);
+        foreach (var e in Entries)
+        {
+            var (mesh, r, sdfMs) = BuildMesh(e.plan);
+            MeshStats.Add((e.label, r, sdfMs));
+            var go = new GameObject("Mesh " + e.label);
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = e.offset;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+            MeshesBuilt++;
+            yield return null;
+        }
+    }
+
+    public (Mesh mesh, SurfaceNets.Result r, float sdfMs) BuildMesh(BodyPlan plan)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sdf = new BodySDF(plan);
+        float sdfMs = (float)sw.Elapsed.TotalMilliseconds;
+        var r = SurfaceNets.Build(sdf.Eval, sdf.bounds, meshCell);
+        LastMeshMs = sdfMs + r.sampleMs + r.meshMs;
+        return (r.mesh, r, sdfMs);
+    }
+
+    [ContextMenu("Build preview meshes")]
+    void BuildEditorMeshes()
+    {
+        Generate();
+        editorMeshes.Clear();
+        foreach (var e in Entries) editorMeshes.Add((BuildMesh(e.plan).mesh, e.offset));
+    }
+
+    [ContextMenu("Clear preview meshes")]
+    void ClearEditorMeshes() => editorMeshes.Clear();
 
     Mesh LineObject(string name, Color c)
     {
@@ -139,6 +188,11 @@ public class BodyLineupDebug : MonoBehaviour
     {
         if (Application.isPlaying) return;
         if (Entries.Count == 0) Generate();
+        if (editorMeshes.Count > 0)
+        {
+            Gizmos.color = skinColor;
+            foreach (var (m, off) in editorMeshes) Gizmos.DrawMesh(m, transform.TransformPoint(off), transform.rotation);
+        }
         var lines = new List<Vector3>();
         foreach (var e in Entries)
         {
@@ -169,5 +223,5 @@ public class BodyLineupDebug : MonoBehaviour
 #endif
     }
 
-    void OnValidate() => Entries.Clear();
+    void OnValidate() { Entries.Clear(); editorMeshes.Clear(); }
 }
