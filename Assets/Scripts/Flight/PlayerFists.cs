@@ -36,12 +36,13 @@ public class PlayerFists : MonoBehaviour
     public bool ArmsRaised { get; private set; }
 
     FirstPersonController fpc;
+    PlayerWeapon weapon;
     readonly float[] punchStart = { -10f, -10f };
     readonly bool[] hitDone = { true, true };
     float lastCombat = -100f, lastPress = -100f;
     static readonly RaycastHit[] hits = new RaycastHit[16];
 
-    void Start() => fpc = GetComponent<FirstPersonController>();
+    void Start() { fpc = GetComponent<FirstPersonController>(); weapon = GetComponent<PlayerWeapon>(); }
 
     // Test hook: guard up as if a punch was just thrown.
     public void DebugRaise() { ArmsRaised = true; lastCombat = Time.time; }
@@ -58,6 +59,14 @@ public class PlayerFists : MonoBehaviour
         var mouse = Mouse.current;
         var kb = Keyboard.current;
         bool usable = !fpc.IsHanging;
+        // Pistol drawn: the mouse buttons fire / steady instead (PlayerWeapon), the fists stay down.
+        if (weapon != null && weapon.Drawn)
+        {
+            ArmsRaised = false;
+            anim.ArmMode = FigureAnimator.Arms.Lowered;
+            anim.Straining = false;
+            return;
+        }
 
         if (mouse != null && Cursor.lockState == CursorLockMode.Locked && usable)
         {

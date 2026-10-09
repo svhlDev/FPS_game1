@@ -49,6 +49,8 @@ public class ScenarioTest : MonoBehaviour
             case "peds": yield return Peds(); break;
             case "figures": yield return Figures(); break;
             case "damage": yield return DamageTest(); break;
+            case "fx": yield return FxTest(); break;
+            case "aim": yield return AimTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -281,6 +283,7 @@ public class ScenarioTest : MonoBehaviour
         var cam = Camera.main;
         IEnumerator ShotAt(string name, Vector3 target, Vector3 from)
         {
+            FlyingVehicle.CameraOverride = true;
             cam.transform.SetParent(null);
             cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(target - from));
             yield return null;
@@ -288,6 +291,8 @@ public class ScenarioTest : MonoBehaviour
             yield return null;
             ScreenCapture.CaptureScreenshot(Path.Combine(dir, "dmg_" + name + ".png"));
             yield return null;
+            yield return null;
+            FlyingVehicle.CameraOverride = false;
         }
         var pink = FlyingVehicle.PinkCar;
         Log(pink != null ? $"pink car present: {pink.name}, top speed {pink.middleLaneMaxSpeed:0} m/s, turn {pink.headingTurnRate:0} deg/s"
@@ -386,17 +391,29 @@ public class ScenarioTest : MonoBehaviour
         if (car == null) { Log("WARN no car for the laser test"); yield break; }
         car.EjectDriver(-1);
         car.Enter(FirstPersonController.Instance);
-        car.DebugPlace(near.transform.position + near.transform.right * 45f, near.transform.rotation, Vector3.zero);
-        PoliceDispatch.Ensure().DebugStartPursuit(2);
-        PoliceDispatch.Instance.DebugForce(PoliceDispatch.Force.Lethal);
-        float wait = 0f;
-        while (wait < 40f && NearestPolice(car) > 90f) { wait += 0.5f; yield return new WaitForSeconds(0.5f); }
-        Log($"police within {NearestPolice(car):0} m after {wait:0} s");
+        // A spot 45 m away with a clear line to the police car (not inside or behind a building).
+        Vector3 spot = near.transform.position + near.transform.right * 45f;
+        foreach (var off in new[] { near.transform.right, -near.transform.right, near.transform.forward, -near.transform.forward,
+                                    near.transform.right + Vector3.up * 0.4f, -near.transform.right + Vector3.up * 0.4f })
+        {
+            Vector3 c = near.transform.position + off.normalized * 45f;
+            if (PoliceDispatch.LineOfSight(near.transform.position + Vector3.up * 2f, c) &&
+                !Physics.CheckBox(c, car.BodyHalfExtents + Vector3.one, Quaternion.identity, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            { spot = c; break; }
+        }
+        car.DebugPlace(spot, near.transform.rotation, Vector3.zero);
+        // Drive this police car's laser at the player's car directly for 4 s (no chase AI involved).
         float hl = car.Health.Health;
-        for (float t = 0f; t < 15f && car.Health.Current == VehicleHealth.State.Ok; t += 0.5f) yield return new WaitForSeconds(0.5f);
-        Log($"laser: player car health {hl:0} -> {car.Health.Health:0}, state {car.Health.Current}; beam frames {PoliceDriver.LaserFireFrames}, on target {PoliceDriver.LaserHitFrames}");
-        Log(car.Health.Health < hl ? "PASS police laser damages the car" : "FAIL laser never hit");
-        var cop = NearestPoliceCar(car);
+        for (float t = 0f; t < 4f; t += Time.deltaTime)
+        {
+            near.UpdateLaser(car);
+            yield return null;
+        }
+        near.StopLaser();
+        Log($"laser: player car health {hl:0} -> {car.Health.Health:0}, state {car.Health.Current}; beam frames {PoliceDriver.LaserFireFrames}, " +
+            $"on target {PoliceDriver.LaserHitFrames}; last beam hit {PoliceDriver.LastLaserHit}");
+        Log(PoliceDriver.LaserHitFrames > 0 && car.Health.Health < hl ? "PASS police laser damages the car" : "FAIL laser never hit");
+        var cop = near;
         if (cop != null) yield return ShotAt("laser", car.transform.position, (car.transform.position + cop.transform.position) * 0.5f + Vector3.up * 15f + Vector3.Cross(cop.transform.position - car.transform.position, Vector3.up).normalized * 25f);
     }
 
@@ -407,6 +424,27 @@ public class ScenarioTest : MonoBehaviour
         if (d == null) return null;
         foreach (var u in d.Pursuing) if (u != null && Vector3.Distance(u.transform.position, car.transform.position) < bd) { bd = Vector3.Distance(u.transform.position, car.transform.position); best = u; }
         return best;
+    }
+
+    // Every effect in front of the camera, one screenshot each.
+    IEnumerator FxTest()
+    {
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        var fpc = FirstPersonController.Instance;
+        if (fpc != null) fpc.gameObject.SetActive(false);
+        Vector3 at = cam.transform.position + cam.transform.forward * 8f;
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        for (int i = 0; i < 20; i++) Effects.Puff(at + Random.insideUnitSphere, Vector3.zero, 0.8f, 3f);
+        for (float t = 0f; t < 0.5f; t += Time.deltaTime) { Effects.Flame(at + Vector3.right * 2f, 1.5f); Effects.Scorch(at + Vector3.left * 2f + Vector3.down, 1f); yield return null; }
+        Effects.Flame(at + Vector3.right * 2f, 1.5f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "fx_puff_flame.png"));
+        yield return null;
+        Effects.Flash(at, 3f); Effects.Ring(at, 6f);
+        yield return new WaitForSeconds(0.12f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "fx_flash.png"));
+        yield return null;
+        Log($"hologram shader found: {Shader.Find("FPS/Hologram") != null}, lit found: {Shader.Find("Universal Render Pipeline/Lit") != null}");
     }
 
     static FlyingVehicle PickNearLaneCar(Vector3 near, float within, int skip = 0)
@@ -420,6 +458,148 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- one-handed aiming ----------
+
+    static float BarrelMiss(PlayerWeapon w)
+    {
+        Vector3 m = w.Gun.muzzle.position, f = w.Gun.muzzle.forward;
+        Vector3 toA = w.AimPoint - m;
+        return Vector3.Cross(f, toA).magnitude; // distance of the aim point from the barrel ray
+    }
+
+    IEnumerator AimTest()
+    {
+        var fpc = FirstPersonController.Instance;
+        var w = fpc.GetComponent<PlayerWeapon>();
+        var fig = fpc.Figure;
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        IEnumerator Shot(string name)
+        {
+            yield return null;
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"aim_{name}.png"));
+            yield return null; yield return null;
+        }
+        float ElbowBend() => Vector3.Angle(fig.ElbowR.position - fig.ShoulderR.position, fig.WristR.position - fig.ElbowR.position);
+        float reach = Vector3.Distance(fig.ShoulderR.position, fig.ElbowR.position) + Vector3.Distance(fig.ElbowR.position, fig.WristR.position);
+        yield return new WaitForSeconds(1f);
+
+        // 1. Draw: the arm rises into view, nearly straight.
+        Log($"holstered: gun on {w.Gun.transform.parent.name}");
+        w.Draw();
+        fpc.DebugLook(5f, fpc.transform.eulerAngles.y);
+        yield return new WaitForSeconds(1f);
+        float ext = Vector3.Distance(fig.ShoulderR.position, fig.WristR.position) / reach;
+        Vector3 vp = fpc.playerCamera.WorldToViewportPoint(w.Gun.muzzle.position);
+        Log($"drawn: wrist at {ext:P0} of reach, elbow bend {ElbowBend():0} deg, muzzle on screen {vp.x:0.00},{vp.y:0.00} z {vp.z:0.00}, brandishing {w.Brandishing}");
+        Log(ext > 0.9f && vp.z > 0f && vp.x > 0f && vp.x < 1f && vp.y > 0f && vp.y < 1f ? "PASS draw raises the arm into view" : "FAIL arm not up / gun not in view");
+        yield return Shot("drawn");
+
+        // 2. Convergence at many distances: barrel ray through the aim point.
+        float worst = 0f; string worstAt = "";
+        foreach (var (pitch, yaw) in new[] { (5f, 0f), (20f, 30f), (45f, -40f), (70f, 10f), (-10f, 90f), (0f, 180f), (30f, -120f) })
+        {
+            fpc.DebugLook(pitch, fpc.transform.eulerAngles.y + yaw);
+            yield return new WaitForSeconds(0.7f);
+            float miss = BarrelMiss(w);
+            float dist = Vector3.Distance(fpc.playerCamera.transform.position, w.AimPoint);
+            Log($"  look pitch {pitch} yaw +{yaw}: aim {dist:0.0} m away, barrel misses by {miss * 100f:0.0} cm, blocked {w.Blocked}");
+            if (miss > worst) { worst = miss; worstAt = $"{dist:0.0} m"; }
+        }
+        Log(worst < 0.03f ? $"PASS barrel ray meets the centre ray (worst {worst * 100f:0.0} cm at {worstAt})" : $"FAIL barrel misses the aim point by {worst * 100f:0.0} cm at {worstAt}");
+
+        // 3. Flick: the arm trails, then settles.
+        fpc.DebugLook(10f, fpc.transform.eulerAngles.y);
+        yield return new WaitForSeconds(0.8f);
+        fpc.DebugLook(10f, fpc.transform.eulerAngles.y + 50f);
+        yield return null; yield return null;
+        float lagNow = Vector3.Angle(w.Gun.muzzle.forward, w.AimPoint - w.Gun.muzzle.position);
+        yield return new WaitForSeconds(0.5f);
+        float lagLater = Vector3.Angle(w.Gun.muzzle.forward, w.AimPoint - w.Gun.muzzle.position);
+        Log($"flick 50 deg: barrel off the aim {lagNow:0.0} deg after 2 frames, {lagLater:0.00} deg after 0.5 s");
+        Log(lagNow > 1f && lagLater < 0.5f ? "PASS arm trails a flick and settles" : "WARN flick lag not as expected");
+
+        // 4. Body turn: aim 100 deg to the side, the body follows.
+        float body0 = fpc.Animator.BodyYaw;
+        fpc.DebugLook(5f, fpc.transform.eulerAngles.y + 100f);
+        yield return new WaitForSeconds(0.8f);
+        float bodyOff = Mathf.Abs(Mathf.DeltaAngle(fpc.Animator.BodyYaw, fpc.transform.eulerAngles.y));
+        Log($"aim 100 deg aside: body turned {Mathf.DeltaAngle(body0, fpc.Animator.BodyYaw):0} deg, now {bodyOff:0} deg off the aim");
+        Log(bodyOff < 10f ? "PASS body turns to follow a wide aim" : "FAIL body didn't turn");
+
+        // 5. Steady aim: hand just under the eye line; recoil kicks and recovers.
+        w.DebugSteady = true;
+        yield return new WaitForSeconds(0.8f);
+        var cam = fpc.playerCamera.transform;
+        Vector3 eyeToWrist = fig.WristR.position - cam.position;
+        float below = -Vector3.Dot(eyeToWrist, cam.up), side = Vector3.Dot(eyeToWrist, cam.right);
+        Log($"steady: wrist {below:0.000} m below the eye line, {side:0.000} m to the side, fov {fpc.playerCamera.fieldOfView:0.0}");
+        Log(below > 0.04f && below < 0.14f ? "PASS steady aim holds the pistol under the eye line" : "FAIL steady pose off");
+        yield return Shot("steady");
+        Quaternion g0 = w.Gun.muzzle.rotation;
+        w.DebugFire();
+        yield return null; yield return null;
+        float kick = Quaternion.Angle(g0, w.Gun.muzzle.rotation);
+        yield return Shot("recoil");
+        yield return new WaitForSeconds(0.6f);
+        float back = Quaternion.Angle(g0, w.Gun.muzzle.rotation);
+        Log($"recoil: barrel kicked {kick:0.0} deg, {back:0.00} deg off after 0.6 s; shots {PlayerWeapon.ShotsFired}");
+        Log(kick > 2f && back < 0.6f ? "PASS recoil kicks and recovers" : "FAIL recoil");
+        w.DebugSteady = false;
+
+        // 6. Cover: a slab just under the eye line blocks the barrel but not the view.
+        fpc.DebugLook(0f, fpc.transform.eulerAngles.y);
+        yield return new WaitForSeconds(0.6f);
+        Vector3 flat = Vector3.ProjectOnPlane(cam.forward, Vector3.up).normalized;
+        var slab = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        slab.name = "TestCover";
+        slab.transform.position = cam.position + flat * 1.6f + Vector3.down * (0.08f + 0.3f);
+        slab.transform.rotation = Quaternion.LookRotation(flat);
+        slab.transform.localScale = new Vector3(2f, 0.6f, 0.3f);
+        yield return new WaitForSeconds(0.6f);
+        bool blocked = w.Blocked;
+        w.DebugFire();
+        yield return null;
+        Log($"cover slab: aim {Vector3.Distance(cam.position, w.AimPoint):0.0} m, blocked marker {blocked}, shot hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}");
+        Log(blocked && PlayerWeapon.LastShotCollider != null && PlayerWeapon.LastShotCollider.gameObject == slab ? "PASS shot past cover hits the cover, marker shown" : "FAIL cover not detected");
+        yield return Shot("blocked");
+        Destroy(slab);
+
+        // 7. Wall at arm's length: the elbow bends and the gun stays out of the wall.
+        Vector3 start = fpc.transform.position;
+        RaycastHit wall = default; bool found = false;
+        for (int i = 0; i < 16 && !found; i++)
+        {
+            Vector3 d = Quaternion.Euler(0f, i * 22.5f, 0f) * Vector3.forward;
+            if (Physics.Raycast(start + Vector3.up * 1.2f, d, out var h, 40f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                && Mathf.Abs(h.normal.y) < 0.2f && h.collider.GetComponentInParent<FlyingVehicle>() == null
+                && Physics.Raycast(start + Vector3.up * 1.8f, d, out var h2, 40f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                && Mathf.Abs(h2.distance - h.distance) < 0.1f)
+            { wall = h; found = true; }
+        }
+        if (!found) { Log("WARN no wall near the start"); yield break; }
+        Vector3 n = new Vector3(wall.normal.x, 0f, wall.normal.z).normalized;
+        fpc.PlaceAt(new Vector3(wall.point.x, start.y, wall.point.z) + n * 0.55f, Quaternion.LookRotation(-n));
+        fpc.DebugLook(5f, Quaternion.LookRotation(-n).eulerAngles.y);
+        yield return new WaitForSeconds(1f);
+        Vector3 mz = w.Gun.muzzle.position;
+        float clear = Vector3.Dot(mz - wall.point, n);
+        float bend = ElbowBend();
+        Log($"wall {wall.collider.name} at {Vector3.Dot(cam.position - wall.point, n):0.00} m from the eyes: elbow bend {bend:0} deg, muzzle {clear:0.00} m off the wall, barrel misses {BarrelMiss(w) * 100f:0.0} cm");
+        Log(bend > 25f && clear > 0.05f ? "PASS close wall bends the elbow, no clipping" : "FAIL arm clips / doesn't bend");
+        yield return Shot("wall");
+        fpc.zoom.Snap(1f);
+        fpc.DebugLook(10f, fpc.transform.eulerAngles.y + 150f);
+        yield return new WaitForSeconds(0.8f);
+        yield return Shot("tp_aim");
+        fpc.zoom.Snap(0f);
+
+        // 8. Holster.
+        w.Holster();
+        yield return new WaitForSeconds(0.5f);
+        Log($"holster: gun on {w.Gun.transform.parent.name}, brandishing {w.Brandishing}");
+        Log(w.Gun.transform.parent == fig.Hips && !w.Brandishing ? "PASS holster puts the pistol on the hip" : "FAIL holster");
     }
 
     // ---------- character figures ----------

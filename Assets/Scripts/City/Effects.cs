@@ -2,7 +2,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// Placeholder visual effects, all drawn instanced per camera (no Light components, no GameObjects):
+// Placeholder visual effects, all drawn instanced per camera (no Light components, no GameObjects).
+// Glows are emissive unlit colours bright enough to bloom:
 //   Puff     : grey smoke cubes that rise, grow and shrink away.
 //   Debris   : dark tumbling boxes thrown by explosions (no colliders).
 //   Flash    : a short additive fireball sphere (explosions).
@@ -75,11 +76,11 @@ public class Effects : MonoBehaviour
         sphere = Prim(PrimitiveType.Sphere);
         quad = Prim(PrimitiveType.Quad);
         ring = RingMesh();
-        puffMat = Lit(new Color(0.35f, 0.35f, 0.37f));
+        puffMat = Unlit(new Color(0.26f, 0.26f, 0.28f));   // reads as smoke at night (lit grey goes black)
         debrisMat = Lit(new Color(0.06f, 0.06f, 0.06f));
         scorchMat = Lit(new Color(0.03f, 0.025f, 0.02f));
-        flashMat = Glow(new Color(1f, 0.6f, 0.2f), new Color(1f, 0.9f, 0.6f), 3f);
-        flameMat = Glow(new Color(1f, 0.35f, 0.05f), new Color(1f, 0.75f, 0.2f), 2.2f);
+        flashMat = Unlit(new Color(1f, 0.75f, 0.35f) * 4f);
+        flameMat = Unlit(new Color(1f, 0.42f, 0.08f) * 3f);
         emberMat = flameMat;
     }
 
@@ -93,20 +94,14 @@ public class Effects : MonoBehaviour
 
     static Material Lit(Color c) => CharacterFigure.Mat(c);
 
-    // Additive glow on the hologram shader (plain content, no scanlines).
-    static Material Glow(Color a, Color b, float intensity)
+    // Emissive unlit colour (HDR above 1 blooms), instancing on: flames, flash and ring glow like the car
+    // lights do, no Light components.
+    static Material Unlit(Color c)
     {
-        var shader = Shader.Find("FPS/Hologram");
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
         if (shader == null) return null;
         var m = new Material(shader) { enableInstancing = true };
-        m.SetColor("_ColorA", a);
-        m.SetColor("_ColorB", b);
-        m.SetFloat("_Intensity", intensity);
-        m.SetFloat("_Pattern", 0f);
-        m.SetFloat("_ScanlineStrength", 0f);
-        m.SetFloat("_FlickerRate", 0f);
-        m.SetFloat("_EdgeFade", 0.35f);
-        m.SetFloat("_ScrollSpeed", 0.6f);
+        m.SetColor("_BaseColor", c);
         return m;
     }
 

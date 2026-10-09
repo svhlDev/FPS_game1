@@ -7,14 +7,15 @@ using UnityEngine;
 //   more than turnThreshold degrees away or the character moves; otherwise the hips face the root.
 //   Legs: idle sway, walk and run cycles with opposite arm swing, air pose, landing crouch.
 //   Arms: Lowered (at the sides), Guard (fists up, aimed along the look), punches from the guard,
-//   Behind (cuffed, straining while struggling).
+//   Behind (cuffed, straining while struggling), Aim (right arm left to PlayerWeapon's IK; the body
+//   turns once the aim is more than 70 degrees off it, and leans for aim pitch beyond 60 degrees).
 //   Whole-body poses: glide, hang, seated, stunned (lying), officer cuffing / dragging, scooter.
 // Rotation convention: limbs hang along -Y, so a negative X rotation swings them forward.
 [DefaultExecutionOrder(50)]
 public class FigureAnimator : MonoBehaviour
 {
     public enum Pose { Normal, Air, Landing, Glide, Hang, Seated, Stunned, Fallen, Cuffed, Dragged, Cuffing, Dragging, Scooter, Staggered }
-    public enum Arms { Lowered, Guard, Behind }
+    public enum Arms { Lowered, Guard, Behind, Aim }
 
     // ---------- inputs ----------
     public Vector3 Velocity { get; set; }
@@ -33,6 +34,7 @@ public class FigureAnimator : MonoBehaviour
     public float BodyYaw => bodyYaw;
 
     float bodyYaw, phase, idle;
+    bool aimTurning;
     float[] punchStart = { -10f, -10f };
     const float PunchOut = 0.08f, PunchHold = 0.05f, PunchBack = 0.16f;
     bool init;
@@ -75,7 +77,14 @@ public class FigureAnimator : MonoBehaviour
             // then drags the body along.
             // Fighting (guard up): squared up to the look, so the fists are where you're looking.
             float off = Mathf.DeltaAngle(bodyYaw, LookYaw);
-            if (speed > 0.3f || ArmMode == Arms.Guard) bodyYaw = Mathf.MoveTowardsAngle(bodyYaw, LookYaw, 720f * dt);
+            if (ArmMode == Arms.Aim && speed <= 0.3f)
+            {
+                // Aiming: the arm covers 70 degrees either side; past that the body turns to follow.
+                if (Mathf.Abs(off) > 70f) aimTurning = true;
+                if (aimTurning) bodyYaw = Mathf.MoveTowardsAngle(bodyYaw, LookYaw, 240f * dt);
+                if (Mathf.Abs(Mathf.DeltaAngle(bodyYaw, LookYaw)) < 3f) aimTurning = false;
+            }
+            else if (speed > 0.3f || ArmMode == Arms.Guard) bodyYaw = Mathf.MoveTowardsAngle(bodyYaw, LookYaw, 720f * dt);
             else if (Mathf.Abs(off) > turnThreshold) bodyYaw = LookYaw - Mathf.Sign(off) * turnThreshold;
         }
         else bodyYaw = rootYaw;
@@ -147,6 +156,9 @@ public class FigureAnimator : MonoBehaviour
 
         // Spine takes some of the vertical look (the head the rest), and leans with speed.
         float spineFromLook = CurrentPose == Pose.Normal || CurrentPose == Pose.Air ? pitchShare * 0.3f : 0f;
+        // Aiming: the shoulder takes up to 60 degrees of pitch, the body leans up to 20 more.
+        if (ArmMode == Arms.Aim && (CurrentPose == Pose.Normal || CurrentPose == Pose.Air))
+            spineFromLook = Mathf.Sign(LookPitch) * Mathf.Clamp(Mathf.Abs(LookPitch) - 60f, 0f, 20f);
         Set(f.Spine, Quaternion.Euler(spinePitch + spineFromLook, 0f, spineRoll), k);
 
         // Head: the rest of the look (yaw relative to the body, pitch).

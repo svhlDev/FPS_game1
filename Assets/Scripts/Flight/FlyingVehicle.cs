@@ -1522,9 +1522,12 @@ public class FlyingVehicle : MonoBehaviour
 
     // ---------- camera ----------
 
+    // Test hook: leave the camera alone (ScenarioTest screenshots).
+    public static bool CameraOverride;
+
     void LateUpdate()
     {
-        if (!IsOccupied || cam == null) return;
+        if (!IsOccupied || cam == null || CameraOverride) return;
         var mouse = Mouse.current;
         if (mouse != null)
         {

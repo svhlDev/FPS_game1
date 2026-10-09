@@ -304,6 +304,7 @@ public class PoliceDriver : MonoBehaviour
         else if (tc < laserWarmup + laserBurst)
         {
             LaserFireFrames++;
+            LastLaserHit = best < float.MaxValue ? $"{hit.collider.name} ({(hitCar != null ? hitCar.name : "no car")}) at {best:0.0} m, target {target.name} at {dist:0.0} m" : $"nothing (target {target.name} at {dist:0.0} m)";
             ShowLaser(origin, end, 0.22f, true);
             if (hitCar != null && hitCar == target && target.Health != null)
             {
@@ -318,6 +319,7 @@ public class PoliceDriver : MonoBehaviour
     float laserCycleStart = -1f;
     static readonly RaycastHit[] laserHits = new RaycastHit[8];
     public static int LaserHitFrames, LaserFireFrames;
+    public static string LastLaserHit = "";
     Vector3 laserDir;
     LineRenderer laser;
 

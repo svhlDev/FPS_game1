@@ -172,6 +172,8 @@ public class PoliceDispatch : MonoBehaviour
     {
         PlayerFists.PunchHit += OnPunchHit;
         PlayerFists.PunchPressed += OnPunchPressed;
+        PlayerWeapon.ShotHit += OnShotHit;
+        PlayerWeapon.ShotFired += OnShotFired;
         FirstPersonController.CarJump += OnCarJump;
     }
 
@@ -179,6 +181,8 @@ public class PoliceDispatch : MonoBehaviour
     {
         PlayerFists.PunchHit -= OnPunchHit;
         PlayerFists.PunchPressed -= OnPunchPressed;
+        PlayerWeapon.ShotHit -= OnShotHit;
+        PlayerWeapon.ShotFired -= OnShotFired;
         FirstPersonController.CarJump -= OnCarJump;
     }
 
@@ -353,6 +357,31 @@ public class PoliceDispatch : MonoBehaviour
         o.Stagger(0.8f, away.normalized * 1f);
         EnsureWanted(2, o.Home);
         Escalate(Force.Lethal, "Assaulted an officer");
+    }
+
+    // Shooting an officer or a police car: lethal force.
+    void OnShotHit(Collider c, Vector3 point, float damage)
+    {
+        var o = c.GetComponentInParent<OfficerAgent>();
+        if (o != null)
+        {
+            Vector3 away = o.transform.position - FirstPersonController.Instance.transform.position;
+            away.y = 0f;
+            o.Stagger(1.2f, away.normalized * 1.5f);
+            EnsureWanted(2, o.Home);
+            Escalate(Force.Lethal, "Shot an officer");
+            return;
+        }
+        var unit = c.GetComponentInParent<PoliceDriver>();
+        if (unit != null) { EnsureWanted(2, unit); Escalate(Force.Lethal, "Shot at police"); }
+    }
+
+    // Gunfire in sight of police.
+    void OnShotFired(Vector3 muzzle)
+    {
+        if (!PoliceSees(muzzle, triggerRange, out var by)) return;
+        EnsureWanted(2, by);
+        Escalate(Force.Lethal, "Shots fired");
     }
 
     void OnPunchPressed(int hand)

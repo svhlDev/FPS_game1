@@ -212,6 +212,7 @@ public class FirstPersonController : MonoBehaviour
         Animator = gameObject.AddComponent<FigureAnimator>();
         Flammable.Add(gameObject, Flammable.Kind.Character);
         Animator.FollowLook = true;
+        if (GetComponent<PlayerWeapon>() == null) gameObject.AddComponent<PlayerWeapon>();
         // First person hides only the head (the camera is inside it); everything else stays visible.
         bodyRenderers = new[] { Figure.HeadRenderer };
         bodyShown = true;
