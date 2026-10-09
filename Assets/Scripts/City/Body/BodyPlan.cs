@@ -13,8 +13,9 @@ using UnityEngine;
 //             girth profiles (radius at start, middle, end) for the three layers: core (bone and
 //             base bulk), muscle (thickness on top) and fat (thickness on top of that). Outer = skin.
 // Phase 2: lengths and layers come from BodyDNA (sex + sheet + seed), see BodyDNA.cs.
-//   Hands   : one bone per digit (thumb, index, middle, ring, little), children of the hand, added after
-//             every other bone (the SDF kernel takes the bones before them; digits are capsules of the hand).
+//   Hands   : digits (thumb, index, middle, ring, little) as chains of segment bones (fingers 3, the
+//             thumb 2) under the hand, added after every other bone (the SDF kernel takes the bones
+//             before them; each segment is a capsule of the hand).
 //   Sockets : named attach points on bones (grips, eyes, holster) for gear, clothing and cyberware later.
 // Joint rotations rest at identity in root space, exactly like CharacterFigure, so FigureAnimator's
 // convention holds: limbs hang along -Y, a negative X rotation swings them forward.
@@ -49,7 +50,8 @@ public class LimbSpec
     public int side;                 // -1 / 0 / +1
     public int girdle;               // 0 = shoulders / hips, 1+ = extra girdles
     public int root, mid, end, tip;  // bone indices: upper, lower, hand/foot (tip = end bone)
-    public int[] digits;             // hands: thumb, index, middle, ring, little (bone indices; after every other bone)
+    public int[] digits;             // hands: thumb, index, middle, ring, little (their first segment's bone; after every other bone)
+    public List<int> digitBones;     // hands: every digit segment's bone
 }
 
 [Serializable]
@@ -347,6 +349,7 @@ public class HumanTemplate : ISpeciesTemplate
             float r = Mathf.Min(W * hr.fingerRadius + hr.fingerFat * hb.fat.y, W * 0.105f); // gaps stay >= 4% of the width
             float fl = Lp * hr.fingerLength;
             arm.digits = new int[5];
+            arm.digitBones = new List<int>();
             string[] names = { "Thumb", "Index", "Middle", "Ring", "Little" };
             for (int k = 0; k < 5; k++)
             {
@@ -366,11 +369,25 @@ public class HumanTemplate : ISpeciesTemplate
                     len = fl * hr.fingerScale[k - 1];
                 }
                 len *= Noise("digit." + k, hr.fingerNoise, hb.side);
-                // Fingers pivot on the palm side of the sausage, so a fist folds them onto the palm.
+                // Joints pivot on the palm side of the sausage, so a fist folds it onto the palm.
                 Vector3 pivot = k == 0 ? Vector3.zero : new Vector3(inner * rad * hr.knucklePivot, 0f, 0f);
-                var d = new BoneSpec { name = names[k] + S, kind = BoneKind.Finger, parent = arm.end, side = hb.side, limb = hb.limb,
-                                       localPos = pos + pivot, shapeOffset = -pivot, dir = dir, length = len, girth = Vector3.one * rad, location = BodyPart.Location.Hand };
-                arm.digits[k] = plan.Add(d);
+                // Segments: a chain along the digit (each joint at the previous segment's end).
+                Vector4 split = k == 0 ? new Vector4(hr.thumbSegments.x, hr.thumbSegments.y, 0f, 0f)
+                                       : new Vector4(hr.fingerSegments.x, hr.fingerSegments.y, hr.fingerSegments.z, 0f);
+                float total = split.x + split.y + split.z;
+                int parent = arm.end;
+                Vector3 at = pos + pivot;
+                for (int sgi = 0; sgi < 3; sgi++)
+                {
+                    if (split[sgi] <= 0f) break;
+                    float sl = len * split[sgi] / total;
+                    var d = new BoneSpec { name = names[k] + (sgi + 1) + S, kind = BoneKind.Finger, parent = parent, side = hb.side, limb = hb.limb,
+                                           localPos = at, shapeOffset = -pivot, dir = dir, length = sl, girth = Vector3.one * rad, location = BodyPart.Location.Hand };
+                    parent = plan.Add(d);
+                    arm.digitBones.Add(parent);
+                    if (sgi == 0) arm.digits[k] = parent;
+                    at = dir * sl;
+                }
             }
         }
 

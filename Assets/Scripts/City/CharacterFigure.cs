@@ -182,16 +182,25 @@ public class CharacterFigure : MonoBehaviour
         var hr = BodyRules.Default.hands;
         foreach (var arm in plan.arms)
         {
-            if (arm.digits == null) continue;
+            if (arm.digitBones == null) continue;
             float inner = arm.side <= 0 ? 1f : -1f;   // towards the midline (palms face it)
-            for (int d = 0; d < arm.digits.Length; d++)
+            foreach (int bi in arm.digitBones)
             {
-                var spec = plan.bones[arm.digits[d]];
-                // Fingers curl toward the palm (about the hand's front axis); the thumb folds across them.
-                Quaternion fist = d == 0
-                    ? Quaternion.FromToRotation(spec.dir, new Vector3(inner * hr.thumbFold.x, -hr.thumbFold.y, -hr.thumbFold.z).normalized)
-                    : Quaternion.AngleAxis(inner * hr.fistCurl, Vector3.forward);
-                f.Digits.Add((sk.Bones[arm.digits[d]].joint, arm.side > 0 ? 1 : 0, fist));
+                var spec = plan.bones[bi];
+                string n = spec.name;
+                int seg = n[n.IndexOfAny("123".ToCharArray())] - '1';
+                bool thumb = n.StartsWith("Thumb");
+                // Finger joints curl toward the palm (about the hand's front axis); the thumb's base folds
+                // across the fingers, its tip bends in.
+                Quaternion fist;
+                if (!thumb) fist = Quaternion.AngleAxis(inner * hr.fistCurl[seg], Vector3.forward);
+                else
+                {
+                    Vector3 fold = new Vector3(inner * hr.thumbFold.x, -hr.thumbFold.y, -hr.thumbFold.z).normalized;
+                    fist = seg == 0 ? Quaternion.FromToRotation(spec.dir, fold)
+                                    : Quaternion.AngleAxis(hr.thumbTipCurl, Vector3.Cross(spec.dir, new Vector3(inner, 0f, 0f)).normalized);
+                }
+                f.Digits.Add((sk.Bones[bi].joint, arm.side > 0 ? 1 : 0, fist));
             }
         }
 

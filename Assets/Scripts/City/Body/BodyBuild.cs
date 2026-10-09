@@ -80,8 +80,17 @@ public class BodyBuild
         this.template = template;
     }
 
+    bool sync;
+
+    void ForPieces(Action<int> body)
+    {
+        if (sync) Parallel.For(0, pieces.Count, body);
+        else for (int k = 0; k < pieces.Count; k++) body(k);
+    }
+
     public BodyAsset RunSync()
     {
+        sync = true;
         while (!Step())
         {
             handle.Complete();
@@ -174,16 +183,17 @@ public class BodyBuild
         // (The grids are copied out on the workers; their native arrays are freed after.)
         task = Task.Run(() =>
         {
-            // (One worker per body, pieces in turn: the pool runs bodies side by side, and more threads
-            // per body only crowd the frame.)
-            foreach (var p in pieces)
+            // (Async: one worker per body, pieces in turn - the pool runs bodies side by side, and more
+            // threads per body only crowd the frame. RunSync blocks anyway: pieces in parallel.)
+            ForPieces(k =>
             {
+                var p = pieces[k];
                 p.grid = p.fine.ToArray();
                 var v = new List<Vector3>(); var t = new List<int>();
                 SurfaceNets.Extract(p.grid, p.nx, p.ny, p.nz, p.min, p.cell, v, t);
                 BodyMesher.Smooth(v, t, iters, strength);
                 p.v = v; p.t = t; p.grid = null;
-            }
+            });
             Concat();
         });
         CurrentStage = Stage.Extract;
@@ -240,15 +250,15 @@ public class BodyBuild
             var imp = importance;
             var offsets = new int[pieces.Count];
             for (int k = 0; k < pieces.Count; k++) { offsets[k] = o; o += pieces[k].v.Count; }
-            for (int k = 0; k < pieces.Count; k++)
+            ForPieces(k =>
             {
                 var p = pieces[k];
-                if (p.t.Count / 3 <= p.target) continue;
+                if (p.t.Count / 3 <= p.target) return;
                 var pi = new float[p.v.Count];
                 System.Array.Copy(imp, offsets[k], pi, 0, pi.Length);
                 MeshDecimator.Run(p.v, p.t, pi, p.target, out var dv, out var dt, out _);
                 p.v = dv; p.t = dt;
-            }
+            });
             Concat();
         });
         CurrentStage = Stage.Decimate;

@@ -13,8 +13,9 @@ using UnityEngine.Rendering;
 //   over jointReach x the joint's radius): a back vertex near the arm in the A-pose doesn't follow the
 //   arm, an armpit vertex does. The 4 strongest are kept and normalized. At a joint the two bones are
 //   about equally near, so elbows and knees split their weight and bend smoothly.
-//   Digits: a hand vertex on (or near) a finger or thumb sausage goes to that digit's bone, blending into
-//   the hand over knuckle x the digit's radius either side of the knuckle.
+//   Digits: a hand vertex on (or near) a finger or thumb segment goes to that segment's bone, blending
+//   into the one before it (or the hand, at the knuckle) and the one after it over knuckle x the radius
+//   either side of each joint.
 //   Bind poses: each bone's transform in the pose the mesh was generated in (the A-pose), relative to the
 //   body root, so the mesh follows the skeleton from any pose.
 //   Renderers: body and head as two SkinnedMeshRenderers (first person hides only the head).
@@ -94,7 +95,40 @@ public static class BodySkinner
                     var dg = kernel.digits[dj];
                     float t = Vector3.Dot(p - dg.a, (dg.b - dg.a).normalized);
                     float blend = Mathf.Max(1e-4f, knuckle * dg.r);
-                    float share = Mathf.SmoothStep(0f, 1f, 0.5f + t / (2f * blend)) * Mathf.Clamp01(1.5f - Mathf.Max(0f, dd) / dg.r);
+                    float onDigit = Mathf.Clamp01(1.5f - Mathf.Max(0f, dd) / dg.r);
+                    float fromStart = Mathf.SmoothStep(0f, 1f, 0.5f + t / (2f * blend));
+                    if (dg.parentBone != own)
+                    {
+                        // Past the knuckle: all on the digit, split between this segment and its neighbours.
+                        float toParent = 1f - fromStart;
+                        float toChild = dg.childBone >= 0 ? 1f - Mathf.SmoothStep(0f, 1f, 0.5f + (dg.length - t) / (2f * blend)) : 0f;
+                        float self = Mathf.Max(0f, 1f - toParent - toChild);
+                        float hand = 1f - onDigit;   // (only hand vertices near a digit come here)
+                        i0 = dg.bone; w0 = self * onDigit;
+                        i1 = dg.parentBone; w1 = toParent * onDigit;
+                        i2 = dg.childBone >= 0 ? dg.childBone : own; w2 = dg.childBone >= 0 ? toChild * onDigit : 0f;
+                        i3 = own; w3 = hand;
+                        sum = w0 + w1 + w2 + w3;
+                        if (sum <= 0f) { w0 = 1f; sum = 1f; }
+                        weights[v] = new BoneWeight
+                        {
+                            boneIndex0 = i0, weight0 = w0 / sum, boneIndex1 = i1, weight1 = w1 / sum,
+                            boneIndex2 = i2, weight2 = w2 / sum, boneIndex3 = i3, weight3 = w3 / sum,
+                        };
+                        return;
+                    }
+                    float toNext = dg.childBone >= 0 ? 1f - Mathf.SmoothStep(0f, 1f, 0.5f + (dg.length - t) / (2f * blend)) : 0f;
+                    float share = fromStart * onDigit;
+                    if (toNext > 0f && share > 0f)
+                    {
+                        // First segment near its far joint: shares with the next (all on the digit by then).
+                        i0 = dg.bone; w0 = share * (1f - toNext);
+                        i1 = dg.childBone; w1 = share * toNext;
+                        i2 = own; w2 = 1f - share; i3 = own; w3 = 0f;
+                        sum = w0 + w1 + w2;
+                        weights[v] = new BoneWeight { boneIndex0 = i0, weight0 = w0 / sum, boneIndex1 = i1, weight1 = w1 / sum, boneIndex2 = i2, weight2 = w2 / sum, boneIndex3 = i3, weight3 = 0f };
+                        return;
+                    }
                     if (share > 0f)
                     {
                         // Scale the others down; the digit replaces the weakest.

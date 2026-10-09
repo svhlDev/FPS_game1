@@ -79,12 +79,17 @@ public class HandRules
     public Vector3 thumbDir = new Vector3(0.35f, 0.6f, 0.55f);
     [Tooltip("Knuckle pivot: this x the finger's radius toward the palm side.")]
     public float knucklePivot = 0.6f;
+    [Tooltip("Finger segments (knuckle to tip), as shares of its length; thumb: two.")]
+    public Vector3 fingerSegments = new Vector3(0.45f, 0.3f, 0.25f);
+    public Vector2 thumbSegments = new Vector2(0.55f, 0.45f);
     [Tooltip("Fingers onto the palm (m): small, so the sausages stay readable.")]
     public float fingerBlend = 0.004f;
 
     [Header("Poses")]
-    [Tooltip("Fist: fingers curl this many degrees toward the palm (one segment each: well past 90, or a fist reads as a flat L).")]
-    public float fistCurl = 150f;
+    [Tooltip("Fist: degrees each finger joint bends toward the palm (knuckle, middle, tip).")]
+    public Vector3 fistCurl = new Vector3(85f, 100f, 70f);
+    [Tooltip("Fist: the thumb's tip joint bends this many degrees.")]
+    public float thumbTipCurl = 45f;
     [Tooltip("Fist: the thumb folds across the fingers, toward (in, down, back) in the hand's space.")]
     public Vector3 thumbFold = new Vector3(0.2f, 0.75f, 0.55f);
     [Tooltip("Relaxed hands (lowered, hanging): this much of the fist.")]

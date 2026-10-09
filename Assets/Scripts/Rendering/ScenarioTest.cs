@@ -505,7 +505,9 @@ public class ScenarioTest : MonoBehaviour
                     gapMin = Mathf.Min(gapMin, sdf.Kernel.Skin(m));
                 }
                 if (gapMin <= 0f) apart = false;
-                var hb = plan.bones[arm.end]; var mid = plan.bones[arm.digits[2]];
+                var hb = plan.bones[arm.end];
+                float midLen = 0f; foreach (int db in arm.digitBones) if (plan.bones[db].name.StartsWith("Middle")) midLen += plan.bones[db].length;
+                var mid = plan.bones[arm.digits[2]];
                 // Hand triangles (both hands) and holes in the whole mesh.
                 // (Body and head welded by position: the split shares the vertices on the seam.)
                 var tris = new List<int>(); var weld = new Dictionary<Vector3, int>();
@@ -528,8 +530,8 @@ public class ScenarioTest : MonoBehaviour
                 BodyMesher.CountEdges(tris, out int holes, out int nonMan);
                 if (holes > 0) closed = false;
                 worstHand = Mathf.Max(worstHand, handTris);
-                Log($"{name}: {plan.bones.Count} bones ({plan.arms.Count * 5} digits), hand {hb.length * 100f:0.0} cm long, palm {hb.Outer.y * BodyRules.Default.hands.palmWidth * 100f:0.0} cm wide, " +
-                    $"middle finger {mid.length * 100f:0.0} x {mid.girth.x * 200f:0.0} cm, narrowest finger gap {gapMin * 1000f:0.0} mm; " +
+                Log($"{name}: {plan.bones.Count} bones ({plan.arms.Count * 5} digits, {arm.digitBones.Count * plan.arms.Count} segments), hand {hb.length * 100f:0.0} cm long, palm {hb.Outer.y * BodyRules.Default.hands.palmWidth * 100f:0.0} cm wide, " +
+                    $"middle finger {midLen * 100f:0.0} x {mid.girth.x * 200f:0.0} cm, narrowest finger gap {gapMin * 1000f:0.0} mm; " +
                     $"{f.Asset.triangles} tris ({handTris} hands), holes {holes}, non-manifold {nonMan}; generated in {ms:0} ms");
             }
             yield return null;

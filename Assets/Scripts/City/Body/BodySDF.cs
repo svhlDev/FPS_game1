@@ -151,7 +151,7 @@ public class BodySDF : IDisposable
                     hb.Encapsulate(pc + f.x * ((c & 1) != 0 ? half.x : -half.x) + f.y * ((c & 2) != 0 ? half.y : -half.y) + f.z * ((c & 4) != 0 ? half.z : -half.z));
                 for (int j = kernelBones; j < n; j++)
                 {
-                    if (plan.bones[j].parent != i) continue;
+                    if (HandOf(j) != i) continue;
                     Vector3 off = bind[j].MultiplyVector(plan.bones[j].shapeOffset);
                     float rr = plan.bones[j].girth.x + pad;
                     hb.Encapsulate(new Bounds(start[j] + off, Vector3.one * rr * 2f));
@@ -166,6 +166,13 @@ public class BodySDF : IDisposable
     public void Dispose() => kernel.Dispose();
 
     // The unmanaged copy of everything Eval needs.
+    // The hand a digit segment belongs to.
+    int HandOf(int j)
+    {
+        while (j >= 0 && plan.bones[j].kind == BoneKind.Finger) j = plan.bones[j].parent;
+        return j;
+    }
+
     // A sphere round hand bone i (and its digits), with room for the stretch of forearm it overlaps.
     (Vector3 c, float r) HandSphere(int i)
     {
@@ -173,7 +180,7 @@ public class BodySDF : IDisposable
         Vector3 c = start[i] + frames[i].y * (b.length * 0.45f);
         float r = b.length * 0.55f;
         for (int j = kernelBones; j < plan.bones.Count; j++)
-            if (plan.bones[j].parent == i) r = Mathf.Max(r, (end[j] - c).magnitude + plan.bones[j].girth.x);
+            if (HandOf(j) == i) r = Mathf.Max(r, (end[j] - c).magnitude + plan.bones[j].girth.x);
         r = Mathf.Max(r, (start[i] - frames[i].y * BodyRules.Default.hands.cutOverlap - c).magnitude + b.Outer.x);
         return (c, r + 0.004f);
     }
@@ -205,7 +212,13 @@ public class BodySDF : IDisposable
             float r = b.girth.x;
             Vector3 dir = (end[bi] - start[bi]).normalized;
             Vector3 off = bind[bi].MultiplyVector(b.shapeOffset);
-            dg[j] = new BodySdfKernel.Digit { a = start[bi] + off, b = end[bi] + off - dir * r, r = r, hand = b.parent, bone = bi };
+            // Segments overlap at their joints (round ends of the same radius: smooth when straight, a
+            // rounded knuckle when bent); the tip stops short by its radius so the digit keeps its length.
+            int child = -1;
+            for (int c = kernelBones; c < plan.bones.Count; c++) if (plan.bones[c].parent == bi) child = c;
+            bool tip = child < 0;
+            dg[j] = new BodySdfKernel.Digit { a = start[bi] + off, b = end[bi] + off - (tip ? dir * r : Vector3.zero), r = r, hand = HandOf(bi), bone = bi,
+                                              parentBone = b.parent, childBone = child, length = b.length };
         }
         var cutList = new List<BodySdfKernel.HandCut>();
         for (int i = 0; i < n; i++)
@@ -240,6 +253,14 @@ public class BodySDF : IDisposable
                 hb.palmRound = hb.palm.x * 2f * hr.palmCorner;
                 bs[i] = hb;
             }
+        }
+        // Each hand's segments (added hand by hand, so contiguous).
+        for (int j = 0; j < digitCount; j++)
+        {
+            var hd = bs[dg[j].hand];
+            if (hd.digitCount == 0) hd.digitStart = j;
+            hd.digitCount++;
+            bs[dg[j].hand] = hd;
         }
         var bl = k.blobs;
         for (int j = 0; j < blobs.Count; j++) bl[j] = E(blobs[j].f, blobs[j].r, blobs[j].bone, (int)blobs[j].group);

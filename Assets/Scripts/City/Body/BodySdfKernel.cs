@@ -20,13 +20,16 @@ public struct BodySdfKernel : IDisposable
         public int kind, parent, side;
         public Vector3 palm;            // hands: palm half extents (thickness, length, width)
         public float palmRound;
+        public int digitStart, digitCount;  // hands: their segments in digits (contiguous)
     }
 
     public struct Digit
     {
         public Vector3 a, b;            // capsule (bind pose)
         public float r;
-        public int hand, bone;          // kernel index of the hand, plan / skin bone index of the digit
+        public int hand, bone;          // kernel index of the hand, plan / skin bone index of the segment
+        public int parentBone, childBone;  // the segment before (or the hand) and after (-1 at the tip)
+        public float length;            // joint to joint
     }
 
     public struct HandCut
@@ -165,8 +168,8 @@ public struct BodySdfKernel : IDisposable
             if (bound > 0.04f) return bound;
             float palm = RoundBox(q - new Vector3(0f, b.palm.y, 0f), b.palm, b.palmRound);
             float fingers = float.MaxValue;
-            for (int j = 0; j < digits.Length; j++)
-                if (digits[j].hand == i) fingers = Mathf.Min(fingers, Capsule(p, digits[j].a, digits[j].b, digits[j].r));
+            for (int j = b.digitStart; j < b.digitStart + b.digitCount; j++)
+                fingers = Mathf.Min(fingers, Capsule(p, digits[j].a, digits[j].b, digits[j].r));
             return fingers < float.MaxValue ? SMin(palm, fingers, fingerBlend) : palm;
         }
         if (b.kind == KFoot)
