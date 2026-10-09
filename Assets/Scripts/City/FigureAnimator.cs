@@ -6,6 +6,10 @@ using UnityEngine;
 //   Body yaw: with followLook (the player) the head turns first and the hips follow once the look is
 //   more than turnThreshold degrees away or the character moves; otherwise the hips face the root.
 //   Legs: idle sway, walk and run cycles with opposite arm swing, air pose, landing crouch.
+//   Feet plant: the cadence follows the stride (body speed / (2 x leg length x sin swing) per half
+//   cycle), the stance leg sweeps so the foot moves back at a constant speed (an asin profile, not a
+//   sine), and the gait joints are set directly while walking (the general pose blend would lag them
+//   and shorten the stride); a short ramp eases into and out of walking.
 //   Arms: Lowered (at the sides), Guard (fists up, aimed along the look), punches from the guard,
 //   Behind (cuffed, straining while struggling), Aim (right arm left to PlayerWeapon's IK; the body
 //   turns once the aim is more than 70 degrees off it, and leans for aim pitch beyond 60 degrees).
@@ -42,12 +46,16 @@ public class FigureAnimator : MonoBehaviour
 
     float bodyYaw, phase, idle;
     bool aimTurning;
+    float walkAmount;                 // 0 standing .. 1 walking (eases the gait in and out)
+    Transform legFor; float legLength; // leg length (hip to ankle), measured once per figure
     float glanceUntil = -1f, nextGlance, glanceYaw, noiseSeed;
     Quaternion[] extraShoulder, extraElbow;
 
     // Readouts for tests.
     public float Jitter { get; private set; }
     public float Heavy { get; private set; }
+    // How far (m) the gait has lowered the hips this frame (the first-person camera keeps only part of it).
+    public float GaitDrop { get; private set; }
     float[] punchStart = { -10f, -10f };
     const float PunchOut = 0.08f, PunchHold = 0.05f, PunchBack = 0.16f;
     bool init;
@@ -114,27 +122,46 @@ public class FigureAnimator : MonoBehaviour
         float strS = dna != null ? dna.sheet.S : 0f;
         float jit = dna != null ? dna.jitter : 0f;
         Heavy = heavy; Jitter = jit;
+        var mr = dna != null ? BodyRules.Default.motion : null;
 
         // ---------- gait ----------
         bool walking = Grounded && speed > 0.2f && (CurrentPose == Pose.Normal || CurrentPose == Pose.Dragging || CurrentPose == Pose.Dragged || CurrentPose == Pose.Cuffed);
         float run = Mathf.InverseLerp(2.5f, 6f, speed);
-        // STR: longer strides at a slower cadence.
-        phase += dt * (walking ? Mathf.Lerp(7f, 11f, run) * Mathf.Clamp(speed / 1.4f, 0.6f, 1.6f) * (1f - 0.12f * strS) : 0f);
-        idle += dt * (1f + (FollowLook ? 0f : 1.5f * jit));  // twitchy bodies shift their weight faster (not the player: the camera rides the spine)
-        float swing = walking ? Mathf.Lerp(28f, 55f, run) * (1f + 0.15f * strS) : 0f;
+        walkAmount = Mathf.MoveTowards(walkAmount, walking ? 1f : 0f, dt * 5f);
+        idle += dt * (1f + (FollowLook || mr == null ? 0f : mr.jitterIdle * jit));  // twitchy bodies shift their weight faster (not the player: the camera rides the spine)
+        float swing = walking || walkAmount > 0f ? Mathf.Lerp(28f, 55f, run) * (1f + (mr != null ? mr.strStrideSwing : 0f) * strS) * walkAmount : 0f;
+        // Cadence from the stride: the stance foot covers 2 L sin(swing) per half cycle (pi of phase).
+        if (legFor != f.Hips)
+        {
+            legFor = f.Hips;
+            legLength = Vector3.Distance(f.HipL.position, f.KneeL.position) + Vector3.Distance(f.KneeL.position, f.AnkleL.position);
+        }
+        if (walking)
+        {
+            float stride = 2f * legLength * Mathf.Sin(Mathf.Max(swing, 8f) * Mathf.Deg2Rad);
+            phase += dt * Mathf.Min(30f, Mathf.PI * speed / Mathf.Max(0.05f, stride));
+        }
         float s = Mathf.Sin(phase), c = Mathf.Cos(phase);
 
-        float hipL = -s * swing, hipR = s * swing;
-        float kneeL = walking ? Mathf.Max(0f, c) * Mathf.Lerp(35f, 80f, run) : 3f;
-        float kneeR = walking ? Mathf.Max(0f, -c) * Mathf.Lerp(35f, 80f, run) : 3f;
+        float hipL = HipSwing(phase, swing), hipR = HipSwing(phase + Mathf.PI, swing);
+        float kneeBend = Mathf.Lerp(60f, 90f, run);
+        float kneeL = walkAmount > 0f ? KneeSwing(phase, kneeBend) * walkAmount + 3f * (1f - walkAmount) : 3f;
+        float kneeR = walkAmount > 0f ? KneeSwing(phase + Mathf.PI, kneeBend) * walkAmount + 3f * (1f - walkAmount) : 3f;
         float spinePitch = walking ? Mathf.Lerp(3f, 12f, run) : Mathf.Sin(idle * 1.3f) * 1.2f;
         float spineRoll = walking ? 0f : Mathf.Sin(idle * 0.9f) * 1.5f;
         float hipsY = 0f;
-        if (walking) hipsY = -Mathf.Abs(c) * Mathf.Lerp(0.02f, 0.05f, run);
+        // The hips ride the straight stance leg (lowest at foot strike and push-off, highest over the
+        // foot), so the planted foot stays on the ground; running takes some of it in the knees.
+        if (walking)
+        {
+            float stanceHip = c <= 0f ? hipL : hipR;
+            hipsY = -legLength * (1f - Mathf.Cos(stanceHip * Mathf.Deg2Rad)) * Mathf.Lerp(1f, 0.5f, run) / Mathf.Max(0.01f, f.Scale);
+        }
+        GaitDrop = -hipsY * f.Scale;
         float hipsPitch = 0f, hipsRoll = 0f;
         // Heavier bodies sway side to side as they walk and stand with their legs wider apart.
-        if (walking) { spineRoll += s * heavy * 5f; hipsRoll += s * heavy * 3f; }
-        float wide = (CurrentPose == Pose.Normal || CurrentPose == Pose.Cuffed || CurrentPose == Pose.Dragged) ? heavy * 5f : 0f;
+        if (walking && mr != null) { spineRoll += s * heavy * mr.heavySway; hipsRoll += s * heavy * mr.heavyHipRoll; }
+        float wide = mr != null && (CurrentPose == Pose.Normal || CurrentPose == Pose.Cuffed || CurrentPose == Pose.Dragged) ? heavy * mr.heavyStance : 0f;
 
         // Arms (lowered): opposite swing.
         float shL = s * swing * 0.7f, shR = -s * swing * 0.7f, elL = -12f, elR = -12f;
@@ -179,9 +206,9 @@ public class FigureAnimator : MonoBehaviour
         // ---------- apply ----------
         var hips = f.Hips;
         float hipBase = f.HipHeight;
-        hips.localPosition = Vector3.Lerp(hips.localPosition, new Vector3(0f, hipBase + hipsY * f.Scale, 0f), k);
+        hips.localPosition = Vector3.Lerp(hips.localPosition, new Vector3(0f, hipBase + hipsY * f.Scale, 0f), walking && walkAmount >= 1f ? 1f : k);
         Quaternion hipsWorld = Quaternion.Euler(0f, bodyYaw, 0f) * Quaternion.Euler(hipsPitch, 0f, hipsRoll);
-        hips.rotation = Quaternion.Slerp(hips.rotation, hipsWorld, k);
+        hips.rotation = Quaternion.Slerp(hips.rotation, hipsWorld, walking && walkAmount >= 1f ? 1f : k);
 
         // Spine takes some of the vertical look (the head the rest), and leans with speed.
         float spineFromLook = CurrentPose == Pose.Normal || CurrentPose == Pose.Air ? pitchShare * 0.3f : 0f;
@@ -199,17 +226,46 @@ public class FigureAnimator : MonoBehaviour
         Set(f.ShoulderR, Quaternion.Euler(shR, 0f, shRz), k);
         Set(f.ElbowL, Quaternion.Euler(elL, 0f, 0f), k);
         Set(f.ElbowR, Quaternion.Euler(elR, 0f, 0f), k);
-        Set(f.HipL, Quaternion.Euler(hipL, 0f, -wide), k);
-        Set(f.HipR, Quaternion.Euler(hipR, 0f, wide), k);
-        Set(f.KneeL, Quaternion.Euler(kneeL, 0f, 0f), k);
-        Set(f.KneeR, Quaternion.Euler(kneeR, 0f, 0f), k);
+        // Walking: the gait joints follow the cycle exactly (no blend lag, so the stride is what the
+        // cadence assumes); otherwise the usual blend between poses.
+        float kLeg = walking && walkAmount >= 1f ? 1f : k;
+        // The legs counter the hips' roll, so the sway doesn't swing the planted foot sideways.
+        Set(f.HipL, Quaternion.Euler(hipL, 0f, -wide - hipsRoll), kLeg);
+        Set(f.HipR, Quaternion.Euler(hipR, 0f, wide - hipsRoll), kLeg);
+        Set(f.KneeL, Quaternion.Euler(kneeL, 0f, 0f), kLeg);
+        Set(f.KneeR, Quaternion.Euler(kneeR, 0f, 0f), kLeg);
         // Feet stay roughly level.
-        Set(f.AnkleL, Quaternion.Euler(-(hipL + kneeL) * 0.5f, 0f, wide), k);
-        Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, -wide), k);
+        Set(f.AnkleL, Quaternion.Euler(-(hipL + kneeL) * 0.5f, 0f, wide), kLeg);
+        Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, -wide), kLeg);
 
         ExtraArms(f, s, swing, k);
-        if (jit > 0f) JitterLayer(f, jit, dt);
+        if (jit > 0f) JitterLayer(f, jit, dt, mr);
     }
+
+    // Hip angle (deg, negative = forward) of a leg at gait phase p, swing amplitude A. Stance (from
+    // p = pi/2): the leg sweeps from -A to +A with the foot moving back at a constant speed (asin of a
+    // linear sweep) - it stays planted while the body moves on. Swing: back to the front, eased, the
+    // thigh forward by 70% of the swing so the knee can straighten without the foot dipping below the
+    // stance foot (it lands as the other foot leaves).
+    static float HipSwing(float p, float A)
+    {
+        if (A <= 0f) return 0f;
+        float u = GaitU(p);
+        float sinA = Mathf.Sin(A * Mathf.Deg2Rad);
+        if (u < 1f) return Mathf.Asin(Mathf.Lerp(-sinA, sinA, u)) * Mathf.Rad2Deg;
+        float w = Mathf.Min(1f, (u - 1f) / 0.7f);
+        return Mathf.Lerp(A, -A, w * w * (3f - 2f * w));
+    }
+
+    // Knee bend (deg) at gait phase p: straight in stance; in swing it bends to K and is straight
+    // again by 85% of the swing.
+    static float KneeSwing(float p, float K)
+    {
+        float u = GaitU(p);
+        return u < 1f ? 0f : K * Mathf.Sin(Mathf.PI * Mathf.Min(1f, (u - 1f) / 0.85f));
+    }
+
+    static float GaitU(float p) => Mathf.Repeat(p - Mathf.PI * 0.5f, Mathf.PI * 2f) / Mathf.PI; // 0..1 stance, 1..2 swing
 
     // Arms beyond the first pair follow the main arm on their side (centred ones the right),
     // smaller and a beat behind.
@@ -239,24 +295,28 @@ public class FigureAnimator : MonoBehaviour
     }
 
     // DEX twitchiness: fast noise on the head and wrists and occasional quick glances.
-    void JitterLayer(CharacterFigure f, float jit, float dt)
+    void JitterLayer(CharacterFigure f, float jit, float dt, MotionRules mr)
     {
-        float t = Time.time * (9f + 6f * jit) + noiseSeed;
+        float t = Time.time * (mr.jitterSpeed + mr.jitterSpeedGain * jit) + noiseSeed;
         float N(float o) => (Mathf.PerlinNoise(t, o) - 0.5f) * 2f;
         // Glances: every few seconds (more often when twitchier), a quick look aside.
         if (Time.time > nextGlance)
         {
             float r = Mathf.PerlinNoise(noiseSeed, Time.time);
-            glanceYaw = (r < 0.5f ? -1f : 1f) * Mathf.Lerp(20f, 35f, r);
-            glanceUntil = Time.time + Mathf.Lerp(0.3f, 0.6f, r);
-            nextGlance = Time.time + Mathf.Lerp(4f, 1.2f, jit) * (0.6f + r);
+            glanceYaw = (r < 0.5f ? -1f : 1f) * Mathf.Lerp(mr.glanceAngle.x, mr.glanceAngle.y, r);
+            glanceUntil = Time.time + Mathf.Lerp(mr.glanceTime.x, mr.glanceTime.y, r);
+            nextGlance = Time.time + Mathf.Lerp(mr.glanceInterval.x, mr.glanceInterval.y, jit) * (0.6f + r);
         }
         float glance = Time.time < glanceUntil ? glanceYaw : 0f;
         var head = f.HeadJoint;
         if (head != null)
-            head.localRotation = Quaternion.Euler(N(1.3f) * 4f * jit, N(2.7f) * 5f * jit + glance * jit, N(4.1f) * 3f * jit);
-        if (f.WristL != null) f.WristL.localRotation = Quaternion.Euler(N(5.5f) * 10f * jit, N(6.2f) * 6f * jit, N(7.9f) * 8f * jit);
-        if (f.WristR != null) f.WristR.localRotation = Quaternion.Euler(N(8.4f) * 10f * jit, N(9.6f) * 6f * jit, N(10.3f) * 8f * jit);
+        {
+            float h = mr.jitterHead * jit;
+            head.localRotation = Quaternion.Euler(N(1.3f) * h, N(2.7f) * h * 1.25f + glance * jit, N(4.1f) * h * 0.75f);
+        }
+        float w = mr.jitterWrist * jit;
+        if (f.WristL != null) f.WristL.localRotation = Quaternion.Euler(N(5.5f) * w, N(6.2f) * w * 0.6f, N(7.9f) * w * 0.8f);
+        if (f.WristR != null) f.WristR.localRotation = Quaternion.Euler(N(8.4f) * w, N(9.6f) * w * 0.6f, N(10.3f) * w * 0.8f);
     }
 
     // Punches snap faster than the general blend.

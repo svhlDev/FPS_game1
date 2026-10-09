@@ -57,6 +57,7 @@ public class ScenarioTest : MonoBehaviour
             case "anim": yield return AnimTest(); break;
             case "face": yield return FaceTest(); break;
             case "pool": yield return PoolTest(); break;
+            case "feet": yield return FeetTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -464,6 +465,67 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- foot planting: does the stance foot slide? ----------
+
+    IEnumerator FeetTest()
+    {
+        var origin = new Vector3(0f, 1500f, 0f);
+        var bodies = new List<(string name, CharacterFigure f, FigureAnimator a)>();
+        void Add(string name, CharacterFigure f) { var a = f.gameObject.AddComponent<FigureAnimator>(); a.Grounded = true; bodies.Add((name, f, a)); }
+        var specs = new (string, CharacterSheet)[]
+        {
+            ("average man", new CharacterSheet(Sex.Male, 10, 10, 10, 1000)), ("STR 20", new CharacterSheet(Sex.Male, 20, 10, 10, 1000)),
+            ("STR 1", new CharacterSheet(Sex.Male, 1, 10, 10, 1000)), ("heavy (DEX 1)", new CharacterSheet(Sex.Male, 10, 10, 1, 1000)),
+            ("woman", new CharacterSheet(Sex.Female, 10, 10, 10, 1000)),
+        };
+        int col = 0;
+        foreach (var (name, sh) in specs)
+        {
+            var go = new GameObject(name); go.transform.position = origin + new Vector3(col++ * 2f, 0f, 0f);
+            Add(name, CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, false, false));
+            yield return null;
+        }
+        { var go = new GameObject("primitive"); go.transform.position = origin + new Vector3(col++ * 2f, 0f, 0f); Add("primitive", CharacterFigure.Build(go.transform, CharacterFigure.Role.Civilian)); }
+
+        float worst = 0f;
+        foreach (float speed in new[] { 1.4f, 5f })
+        {
+            foreach (var b in bodies) { b.a.Velocity = Vector3.forward * speed; b.f.transform.position = new Vector3(b.f.transform.position.x, origin.y, origin.z); }
+            var slide = new float[bodies.Count]; var planted = new int[bodies.Count]; var samples = new int[bodies.Count];
+            var prev = new Vector3[bodies.Count]; var prevFoot = new int[bodies.Count];
+            for (float t = 0f; t < 4f; t += Time.deltaTime)
+            {
+                float dt = Mathf.Max(Time.deltaTime, 1e-4f);
+                foreach (var b in bodies) b.f.transform.position += Vector3.forward * speed * dt; // the root moves like a walking character's
+                yield return null; // the animator poses in LateUpdate
+                if (t < 1f) { for (int i = 0; i < bodies.Count; i++) prevFoot[i] = -1; continue; }
+                for (int i = 0; i < bodies.Count; i++)
+                {
+                    var f = bodies[i].f;
+                    // The stance foot is the lower ankle; its horizontal speed is how fast it slides.
+                    int foot = f.AnkleL.position.y < f.AnkleR.position.y ? 0 : 1;
+                    Vector3 p = foot == 0 ? f.AnkleL.position : f.AnkleR.position;
+                    if (prevFoot[i] == foot)
+                    {
+                        Vector3 v = (p - prev[i]) / dt; v.y = 0f;
+                        slide[i] += v.magnitude; samples[i]++;
+                        if (v.magnitude < 0.25f * speed) planted[i]++;
+                    }
+                    prev[i] = p; prevFoot[i] = foot;
+                }
+            }
+            var sb = new StringBuilder($"{(speed < 2f ? "walk" : "run")} {speed} m/s, stance foot slide / body speed: ");
+            for (int i = 0; i < bodies.Count; i++)
+            {
+                float r = slide[i] / Mathf.Max(1, samples[i]) / speed;
+                worst = Mathf.Max(worst, r);
+                sb.Append($"{bodies[i].name} {r * 100f:0}% (planted {100f * planted[i] / Mathf.Max(1, samples[i]):0}%), ");
+            }
+            Log(sb.ToString());
+        }
+        Log(worst < 0.2f ? $"PASS feet plant (worst slide {worst * 100f:0}% of body speed)" : $"FAIL feet slide (worst {worst * 100f:0}% of body speed)");
     }
 
     // ---------- generated bodies: phase 8 (pool, async, LOD, perf) ----------

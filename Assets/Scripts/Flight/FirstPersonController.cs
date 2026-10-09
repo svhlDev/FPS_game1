@@ -397,7 +397,8 @@ public class FirstPersonController : MonoBehaviour
         PoseBody();
         // The eyes: just in front of the head's centre, wherever the posed head is now.
         if (Figure != null)
-            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y);
+            // The gait's hip drop is damped: the eyes keep 30% of it (a full stride's dip reads as bouncing).
+            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y) + Vector3.up * (Animator != null ? Animator.GaitDrop * 0.7f : 0f);
 
         var cam = playerCamera.transform;
         if (cam.parent == cameraRoot)
