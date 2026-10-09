@@ -23,10 +23,10 @@ public class HeightFogSettings : MonoBehaviour
     public float districtCellSize = 600f;
     [Tooltip("Sky pixels are treated as this far away, so the horizon sinks into smog.")]
     public float skyDistance = 1200f;
-    [Tooltip("Smog colour near the ground.")]
-    public Color lowColor = new Color(0.08f, 0.05f, 0.07f);
-    [Tooltip("Smog colour near its top: warmer and brighter, the city glow lit from below.")]
-    public Color highColor = new Color(0.42f, 0.24f, 0.2f);
+    [Tooltip("Smog colour near the ground (night: dark blue-green; TimeOfDay drives it at runtime).")]
+    public Color lowColor = new Color(0.015f, 0.045f, 0.05f);
+    [Tooltip("Smog colour near its top (night: a little lighter blue-green, no warm city glow).")]
+    public Color highColor = new Color(0.03f, 0.08f, 0.085f);
 
     void OnEnable() => Active = this;
     void OnDisable() { if (Active == this) Active = null; }

@@ -112,7 +112,7 @@ Shader "Hidden/FPS/HeightFog"
                 float zenithFade = saturate(1.0 - dir.y * 4.0);
                 fog *= lerp(1.0, zenithFade, sky ? 1.0 : saturate(dist / _SkyDistance));
 
-                // Darker near the ground, warmer and brighter toward the smog top.
+                // Darker near the ground, lighter toward the smog top.
                 // Mean height of the ray inside the smog layer, relative to its top.
                 float h = saturate(0.5 * (clamp(camPos.y, 0.0, top) + clamp(posWS.y, 0.0, top)) / max(top, 1.0));
                 float3 smog = lerp(_SmogLowColor.rgb, _SmogHighColor.rgb, h);

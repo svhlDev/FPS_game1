@@ -433,20 +433,27 @@ public static partial class CityDressing
 
     // ---------- atmosphere ----------
 
-    // Night: exponential fog, gradient skybox, dim cool moonlight (the scene's existing directional
-    // light), low ambient, and a global post volume (Bloom, ACES, split toning, vignette).
+    // Night (as the scene starts, 22:00; TimeOfDay takes over at runtime): exponential fog, gradient
+    // skybox, dim cool moonlight (the scene's existing directional light), low ambient, and a global post
+    // volume (Bloom, ACES, a slight teal in the shadows, vignette). Dark blue-green: the neon and the
+    // windows carry the light.
     public static void SetupAtmosphere(Camera cam, string profileName)
     {
-        // Lighter and bluer than the towers so it reads against them. Opaque shaders fog toward this colour;
-        // additive ones (holograms, haze) fade to black, so neon doesn't cut through.
-        var fogColor = new Color(0.10f, 0.08f, 0.17f);
+        // Opaque shaders fog toward this colour; additive ones (holograms, haze) fade to black, so neon
+        // doesn't cut through.
+        var fogColor = new Color(0.02f, 0.05f, 0.06f);
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.Exponential;
         // Only for very long distances now: the smog (HeightFogFeature) does the near work.
         RenderSettings.fogDensity = 0.0015f;
         RenderSettings.fogColor = fogColor;
 
-        var sky = ShaderMaterial("NightSky", "FPS/NightSky", m => m.SetColor("_HorizonColor", fogColor * 1.4f));
+        var sky = ShaderMaterial("NightSky", "FPS/NightSky", m =>
+        {
+            m.SetColor("_HorizonColor", new Color(0.03f, 0.08f, 0.085f));  // the smog top's colour
+            m.SetColor("_TopColor", new Color(0.003f, 0.006f, 0.008f));
+            m.SetColor("_BottomColor", new Color(0.015f, 0.045f, 0.05f));
+        });
         RenderSettings.skybox = sky;
         cam.clearFlags = CameraClearFlags.Skybox;
         cam.allowHDR = true;
@@ -460,7 +467,7 @@ public static partial class CityDressing
         camData.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing;
         camData.antialiasingQuality = AntialiasingQuality.High;
 
-        var ambient = new Color(0.05f, 0.05f, 0.085f);
+        var ambient = new Color(0.03f, 0.04f, 0.05f);
         RenderSettings.ambientMode = AmbientMode.Flat;
         RenderSettings.ambientLight = ambient;
         var sh = new SphericalHarmonicsL2();
@@ -471,8 +478,8 @@ public static partial class CityDressing
         {
             if (l.type != LightType.Directional) continue;
             l.name = "Moon";
-            l.color = new Color(0.6f, 0.7f, 1f);
-            l.intensity = 0.3f;
+            l.color = new Color(0.6f, 0.75f, 0.9f);
+            l.intensity = 0.12f;
             l.shadows = LightShadows.None;
             l.transform.rotation = Quaternion.Euler(40f, 160f, 0f);
         }
@@ -493,9 +500,11 @@ public static partial class CityDressing
         var adjust = AddOverride<ColorAdjustments>(profile);
         adjust.contrast.value = 8f;
         adjust.saturation.value = 8f;
+        adjust.postExposure.value = -0.4f;
+        // A slight teal in the shadows at night only (TimeOfDay fades it out by day); highlights neutral.
         var split = AddOverride<SplitToning>(profile);
-        split.shadows.value = new Color(0.25f, 0.6f, 0.62f);
-        split.highlights.value = new Color(0.8f, 0.4f, 0.75f);
+        split.shadows.value = new Color(0.42f, 0.56f, 0.56f);
+        split.highlights.value = new Color(0.5f, 0.5f, 0.5f);
         var vignette = AddOverride<Vignette>(profile);
         vignette.intensity.value = 0.25f;
         vignette.smoothness.value = 0.4f;
@@ -505,6 +514,14 @@ public static partial class CityDressing
         var vol = new GameObject("PostProcessVolume").AddComponent<Volume>();
         vol.isGlobal = true;
         vol.sharedProfile = profile;
+        AddTimeOfDay();
+    }
+
+    // The scene's day / night cycle (one per scene).
+    public static TimeOfDay AddTimeOfDay()
+    {
+        var existing = Object.FindFirstObjectByType<TimeOfDay>();
+        return existing != null ? existing : new GameObject("TimeOfDay").AddComponent<TimeOfDay>();
     }
 
     // ---------- smog and clouds ----------

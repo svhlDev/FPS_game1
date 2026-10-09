@@ -222,6 +222,7 @@ public static class FlightGrayboxBuilder
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
+        CityDressing.AddTimeOfDay();
         EditorSceneManager.SaveScene(scene, ScenePath);
         Selection.activeGameObject = player;
         Debug.Log($"Flight graybox built: {lanes.Count} lanes, {carIndex} traffic cars.");

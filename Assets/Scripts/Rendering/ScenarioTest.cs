@@ -60,6 +60,7 @@ public class ScenarioTest : MonoBehaviour
             case "feet": yield return FeetTest(); break;
             case "hands": yield return HandsTest(); break;
             case "seats": yield return SeatsTest(); break;
+            case "daynight": yield return DayNightTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -601,6 +602,63 @@ public class ScenarioTest : MonoBehaviour
         yield return Shot("lineup", row, row + new Vector3(0f, 0.1f, -3.4f), 50f);
         cam.fieldOfView = fov;
         foreach (var g in lights) Destroy(g);
+        FlyingVehicle.CameraOverride = false;
+    }
+
+    // ---------- day / night ----------
+
+    IEnumerator DayNightTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        yield return null;
+        var tod = TimeOfDay.Instance;
+        if (tod == null) { Log("FAIL no TimeOfDay in the scene"); yield break; }
+        Log($"clock: starts {tod.startHour:0.0} h, {tod.dayMinutes} min day; now {tod.Hour:0.00} h, day amount {tod.DayAmount:0.00}");
+        Log(Mathf.Abs(tod.Hour - tod.startHour) < 0.2f && tod.DayAmount == 0f ? "PASS starts at night (22:00)" : "FAIL start time");
+
+        // Smooth: the blend never jumps (per game minute) and is flat outside dawn / dusk.
+        float worst = 0f, prev = tod.DayAt(0f);
+        for (float h = 1f / 60f; h <= 24f; h += 1f / 60f) { float v = tod.DayAt(h); worst = Mathf.Max(worst, Mathf.Abs(v - prev)); prev = v; }
+        bool flat = tod.DayAt(3f) == 0f && tod.DayAt(23f) == 0f && tod.DayAt(12f) == 1f && tod.DayAt(7.5f) == 1f && tod.DayAt(17.5f) == 1f;
+        Log($"blend: worst step {worst:0.0000} per game minute (a 2 h ramp: ~0.0125 at its steepest)");
+        Log(worst < 0.02f && flat ? "PASS smooth dawn (05-07) and dusk (18-20), steady night and day" : "FAIL blend");
+
+        // The clock runs at 1 game hour per real minute.
+        float h0 = tod.Hour; yield return new WaitForSeconds(3f); float rate = Mathf.Repeat(tod.Hour - h0, 24f) / 3f * 60f;
+        Log($"clock rate: {rate:0.00} game hours per real minute");
+        Log(Mathf.Abs(rate - 1f) < 0.05f ? "PASS 1 real minute = 1 hour" : "FAIL clock rate");
+
+        // Looks at four times: values and pictures (street level and above the city).
+        var fpc = FirstPersonController.Instance;
+        var cam = Camera.main;
+        var sun = RenderSettings.sun;
+        Light dirLight = null; foreach (var l in FindObjectsByType<Light>()) if (l.type == LightType.Directional) dirLight = l;
+        Vector3 street = fpc != null ? fpc.transform.position : Vector3.zero;
+        cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        if (fpc != null) fpc.enabled = false;
+        IEnumerator Shot(string name, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"daynight_{name}.png"));
+            yield return null; yield return null;
+        }
+        foreach (var (name, hour) in new[] { ("night_22", 22f), ("dawn_06", 6f), ("day_12", 12f), ("dusk_19", 19f) })
+        {
+            tod.SetHour(hour);
+            yield return null;
+            var hf = HeightFogSettings.Active;
+            Log($"{hour:00}:00 day {tod.DayAmount:0.00}: light {(dirLight != null ? dirLight.intensity : 0f):0.00}, ambient {RenderSettings.ambientLight}, fog {RenderSettings.fogColor}, smog low {(hf != null ? hf.lowColor.ToString() : "-")} high {(hf != null ? hf.highColor.ToString() : "-")}");
+            yield return Shot(name + "_street", street + new Vector3(0f, 1.6f, 0f) + Vector3.forward * 40f, street + new Vector3(0f, 1.7f, 0f));
+            yield return Shot(name + "_above", street + new Vector3(0f, 20f, 200f), street + new Vector3(-40f, 90f, -60f));
+        }
+        tod.SetHour(22f);
+        bool nightOk = Mathf.Abs(RenderSettings.ambientLight.g - 0.04f) < 0.005f && dirLight != null && Mathf.Abs(dirLight.intensity - 0.12f) < 0.01f;
+        tod.SetHour(12f);
+        bool dayOk = Mathf.Abs(RenderSettings.ambientLight.g - 0.36f) < 0.005f && dirLight != null && Mathf.Abs(dirLight.intensity - 0.9f) < 0.01f;
+        Log(nightOk && dayOk ? "PASS night and day hit the spec's light, ambient and fog values" : "FAIL look values");
+        tod.SetHour(22f);
+        if (fpc != null) fpc.enabled = true;
         FlyingVehicle.CameraOverride = false;
     }
 

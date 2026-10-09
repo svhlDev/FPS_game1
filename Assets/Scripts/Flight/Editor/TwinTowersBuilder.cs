@@ -222,6 +222,7 @@ public static class TwinTowersBuilder
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
+        CityDressing.AddTimeOfDay();
         EditorSceneManager.SaveScene(scene, ScenePath);
         Selection.activeGameObject = fpc.gameObject;
         Debug.Log($"Twin towers built: {lanes.Count} rings x 3 layers, {carIndex} traffic cars, " +
