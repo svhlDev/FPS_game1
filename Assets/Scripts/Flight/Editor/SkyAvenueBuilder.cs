@@ -69,11 +69,10 @@ public static class SkyAvenueBuilder
     const int MinCarsPerLane = 4;
     const float SpeedMin = 18f, SpeedMax = 20f;
     const float SpacingJitter = 0.1f;
-    const float MinSpawnGap = 15f;
     const float LightSpacing = 30f;
 
     // Derived lane geometry (x of the canyon straights)
-    static readonly float MedianLaneX = MedianGap * 0.5f + CarWidth * 0.5f;   // 6.5: lane next to the median
+    static readonly float MedianLaneX = MedianGap * 0.5f + CarWidth * 0.5f;   // lane next to the median
     static readonly float WallLaneX = MedianLaneX + LaneSpacing;              // 13.5: lane nearer the buildings
 
     // Start deck

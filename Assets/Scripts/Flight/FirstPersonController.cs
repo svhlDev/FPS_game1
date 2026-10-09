@@ -59,7 +59,7 @@ public class FirstPersonController : MonoBehaviour
     [Tooltip("How much of the car's acceleration turns into slide while settling.")]
     public float slipInertia = 1f;
     [Tooltip("Furthest a landing can slide you (m). Caps the touchdown speed mismatch at bootGrip * this. " +
-             "Without a cap, landing on a 35 m/s car from a standstill slides ~9 m: off a 6 m car.")]
+             "Without a cap, landing on a 35 m/s car from a standstill slides ~9 m: off a 4 m car.")]
     public float maxSlideDistance = 1.0f;
 
     float MaxLandingSlip => bootGrip * maxSlideDistance;
@@ -72,7 +72,7 @@ public class FirstPersonController : MonoBehaviour
     [Tooltip("Max assist acceleration (m/s^2). This clamp is what keeps bad jumps bad.")]
     public float assistAccel = 8f;
     [Tooltip("Safe zone inset from the roof's side edges (m). The zone is the front 2/3 of the roof.")]
-    public float assistSideInset = 0.3f;
+    public float assistSideInset = 0.2f;
 
     [Header("Rear grab")]
     [Tooltip("Catch a grab point when your hands come within this distance of it.")]

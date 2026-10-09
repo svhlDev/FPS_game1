@@ -27,7 +27,7 @@ public partial class TrafficSystem
 
     const float DefaultTrafficCull = 1000f;
     const int MaxPerCall = 1023;
-    static readonly Vector3 CarBoundsSize = new Vector3(9f, 5f, 9f);   // covers any heading
+    static readonly Vector3 CarBoundsSize = new Vector3(5f, 3f, 5f);   // covers any heading (car 1.6 x 1.15 x 4)
     static readonly Bounds WorldBounds = new Bounds(Vector3.zero, Vector3.one * 100000f);
 
     static readonly List<FlyingVehicle> drawnCars = new List<FlyingVehicle>();

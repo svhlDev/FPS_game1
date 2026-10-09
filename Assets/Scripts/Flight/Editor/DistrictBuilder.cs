@@ -39,7 +39,7 @@ public static class DistrictBuilder
     // Traffic
     const int TrafficBudget = 350;
     const float StreetCarSpacing = 120f, StreetSpeed = 15f;
-    const float SpeedMin = 18f, SpeedMax = 20f, MinSpawnGap = 15f;
+    const float SpeedMin = 18f, SpeedMax = 20f;
     const int PoliceCount = 4;
 
     // Towers

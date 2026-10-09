@@ -61,9 +61,10 @@ public class PoliceDispatch : MonoBehaviour
 
     [Header("Box-in and tow")]
     public int maxTowUnits = 2;
-    public float boxDistance = 8f;
+    [Tooltip("Box-in units hold this far ahead / behind the car (centre to centre; a car is 4 m long).")]
+    public float boxDistance = 5.5f;
     [Tooltip("Once the car is down, the docked units move out this far sideways to park alongside.")]
-    public float parkAlongside = 7f;
+    public float parkAlongside = 3.5f;
     [Tooltip("Gap between the towed car and a docked unit (m), beyond their half widths.")]
     public float towGap = 0.6f;
     [Tooltip("A docker this close to its slot attaches (blending in over 0.4 s).")]
@@ -700,11 +701,11 @@ public class PoliceDispatch : MonoBehaviour
     // that ram. The rest hold the layers above / below.
     static readonly (float x, float z, int layer, bool ram)[] ChaseSlots =
     {
-        (8f, -8f, 0, true),     // preferred side
-        (-8f, -8f, 0, true),    // other side
-        (0f, -10f, 1, false),   // behind, a layer up
-        (0f, -10f, -1, false),  // behind, a layer down
-        (8f, 4f, 1, false),     // above, alongside
+        (4f, -5f, 0, true),     // preferred side
+        (-4f, -5f, 0, true),    // other side
+        (0f, -7f, 1, false),    // behind, a layer up
+        (0f, -7f, -1, false),   // behind, a layer down
+        (4f, 3f, 1, false),     // above, alongside
     };
 
     void AssignChaseSlots(FlyingVehicle target)
@@ -733,7 +734,7 @@ public class PoliceDispatch : MonoBehaviour
             }
             var def = ChaseSlots[Mathf.Min(s, ChaseSlots.Length - 1)];
             int layer = def.layer < 0 && nearGround ? 2 : def.layer; // no layer below the street
-            u.ApproachSlot = new Vector3(def.x * preferredSide, 0f, def.z - (s >= ChaseSlots.Length ? 6f * (s - ChaseSlots.Length + 1) : 0f));
+            u.ApproachSlot = new Vector3(def.x * preferredSide, 0f, def.z - (s >= ChaseSlots.Length ? 5f * (s - ChaseSlots.Length + 1) : 0f));
             u.LayerOffset = layer;
             u.MayRam = def.ram && s < ChaseSlots.Length;
         }

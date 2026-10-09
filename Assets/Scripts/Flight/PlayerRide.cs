@@ -26,15 +26,10 @@ public class PlayerRide : MonoBehaviour
     public float tieDecay = 0.4f;
     public int punchesToDown = 4;
 
-    // Seat positions in the car's frame, from its body bounds (driver on the left).
-    static Vector3 Seat3(FlyingVehicle car, float x, float y, float z)
-    {
-        Vector3 h = car.BodyHalfExtents, c = car.BodyCenterLocal;
-        return c + new Vector3(h.x * x, h.y * y, h.z * z);
-    }
-    static Vector3 BackSeatOf(FlyingVehicle car) => Seat3(car, 0.27f, 1.13f, -0.47f);
-    static Vector3 PassengerSeatOf(FlyingVehicle car) => Seat3(car, 0.47f, 1.13f, 0.13f);
-    public static Vector3 DriverSeatOf(FlyingVehicle car) => Seat3(car, -0.47f, 0.8f, 0.13f);
+    // Eye positions in the car's frame (FlyingVehicle's seats; the driver's is the punch target).
+    static Vector3 BackSeatOf(FlyingVehicle car) => car.SeatEyeLocal(FlyingVehicle.SeatId.BackRight);
+    static Vector3 PassengerSeatOf(FlyingVehicle car) => car.SeatEyeLocal(FlyingVehicle.SeatId.Passenger);
+    public static Vector3 DriverSeatOf(FlyingVehicle car) => car.SeatEyeLocal(FlyingVehicle.SeatId.Driver);
 
     public FlyingVehicle Car => car;
     public Seat CurrentSeat { get; private set; }
@@ -90,7 +85,8 @@ public class PlayerRide : MonoBehaviour
     {
         var c = car;
         Quaternion rot = c.PlatformRotation;
-        Vector3 pos = c.transform.position + rot * new Vector3(side * (c.BodyHalfExtents.x + 0.9f), -0.6f, (rear ? -0.47f : 0.13f) * c.BodyHalfExtents.z);
+        float z = c.SeatHipsLocal(rear ? FlyingVehicle.SeatId.BackRight : FlyingVehicle.SeatId.Passenger).z;
+        Vector3 pos = c.transform.position + rot * new Vector3(side * (c.BodyHalfExtents.x + 0.6f), -0.6f, z);
         End();
         fpc.gameObject.SetActive(true);
         fpc.PlaceAt(pos, rot, c.Velocity);

@@ -101,10 +101,10 @@ public class FlyingVehicle : MonoBehaviour
     public float impactShake = 0.35f;
 
     [Header("Traffic AI")]
-    [Tooltip("Gap kept to the car in front, in metres (car is 6 m long, so 9 = 1.5 cars).")]
-    public float followGap = 9f;
+    [Tooltip("Gap kept to the car in front, in metres (car is 4 m long, so 6 = 1.5 cars).")]
+    public float followGap = 6f;
     [Tooltip("Below this gap the car brakes to a stop.")]
-    public float minGap = 3f;
+    public float minGap = 2f;
     [Tooltip("How hard it closes or opens the gap toward followGap.")]
     public float followGain = 0.8f;
     [Tooltip("Speed while finding its way back to its lane after being knocked off.")]
@@ -113,7 +113,7 @@ public class FlyingVehicle : MonoBehaviour
     public float recoverLead = 15f;
     public float yieldLookRange = 80f;
     [Tooltip("Cars closer than this at closest approach count as a conflict.")]
-    public float yieldClearance = 7f;
+    public float yieldClearance = 5f;
     [Tooltip("Seconds ahead to look for conflicts.")]
     public float yieldHorizon = 3f;
     [Tooltip("Unoccupied cars farther than this from the camera skip collision and just follow their lane.")]
@@ -127,11 +127,11 @@ public class FlyingVehicle : MonoBehaviour
     [Tooltip("Margin round a stop cone that counts as blocked.")]
     public float coneMargin = 4f;
     [Tooltip("A disabled car without a cone blocks this radius.")]
-    public float disabledCarClearance = 15f;
+    public float disabledCarClearance = 8f;
 
     [Header("Camera")]
     public Transform cockpitAnchor;
-    public float maxCameraDistance = 14f;
+    public float maxCameraDistance = 9f;
     [Tooltip("Same zoom behaviour as the on-foot camera.")]
     public CameraZoom zoom = new CameraZoom();
 
@@ -206,6 +206,25 @@ public class FlyingVehicle : MonoBehaviour
     // Body collider half size and centre, in the car's own frame.
     public Vector3 BodyHalfExtents => colHalf;
     public Vector3 BodyCenterLocal => colCenter;
+
+    // ---------- seats ----------
+    // Five seats from the body: driver front left, passenger front right, three across the back. A seated
+    // figure's hips (hip joints) sit seatHipHeight above the underside; seatEyeHeight above them are the
+    // eyes (an average adult's head top is then just under the roof).
+    public enum SeatId { Driver, Passenger, BackLeft, BackMiddle, BackRight }
+    public const int SeatCount = 5;
+    public const float SeatHipHeight = 0.3f, SeatEyeHeight = 0.6f;
+    static readonly Vector2[] SeatXZ =   // fractions of the half width / half length
+    {
+        new Vector2(-0.48f, 0.12f), new Vector2(0.48f, 0.12f),
+        new Vector2(-0.6f, -0.42f), new Vector2(0f, -0.42f), new Vector2(0.6f, -0.42f),
+    };
+    public static Vector3 SeatHipsFor(Vector3 half, Vector3 centre, SeatId s) =>
+        centre + new Vector3(half.x * SeatXZ[(int)s].x, -half.y + SeatHipHeight, half.z * SeatXZ[(int)s].y);
+    public static Vector3 SeatEyeFor(Vector3 half, Vector3 centre, SeatId s) => SeatHipsFor(half, centre, s) + Vector3.up * SeatEyeHeight;
+    // In the car's own frame.
+    public Vector3 SeatHipsLocal(SeatId s) => SeatHipsFor(colHalf, colCenter, s);
+    public Vector3 SeatEyeLocal(SeatId s) => SeatEyeFor(colHalf, colCenter, s);
     public static IReadOnlyList<FlyingVehicle> Active => All;
     // The car the player is driving, if any.
     public static FlyingVehicle Driven { get; private set; }

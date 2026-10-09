@@ -43,7 +43,6 @@ public static class TwinTowersBuilder
     const int CarsPerLane = 18;
     const float SpeedMin = 18f, SpeedMax = 20f;
     const float SpacingJitter = 0.1f;       // fraction of the even spacing
-    const float MinSpawnGap = 15f;          // followGap (9) + car length (6), centre to centre
 
     // Decks
     const float DeckRingGap = 6f;           // deck stops this short of the innermost ring's centreline

@@ -19,10 +19,13 @@ public static class FlightGrayboxBuilder
     const float Half = Blocks * Pitch * 0.5f;
     const int LaneBaseLayer = 8;         // flyway middle lanes ride at layer 8 (40.5 m); side lanes at 4 / 12
     const int LaneLayerOffset = 4;
-    // Every car's body: the original 3 x 1.5 x 6 m times CarScale. Everything car-shaped (lights, rack,
-    // grab point, cockpit, police band and bar, lane spacing, spawn heights, seats) derives from this.
-    internal const float CarScale = 1.5f;
-    internal static readonly Vector3 CarSize = new Vector3(3f, 1.5f, 6f) * CarScale;   // 4.5 x 2.25 x 9
+    // Every car's body: 1.6 x 1.15 x 4 m (about 2.7 characters long, the roof below shoulder height,
+    // five seats). Everything car-shaped (lights, rack, grab point, cockpit, police band and bar, lane
+    // spacing, spawn heights and gaps) derives from this; seats come from the body at runtime
+    // (FlyingVehicle.SeatHipsLocal).
+    internal static readonly Vector3 CarSize = new Vector3(1.6f, 1.15f, 4f);
+    // Centre to centre between cars spawned on one lane: the traffic AI's follow gap plus a car.
+    internal static float MinSpawnGap => 6f + CarSize.z;
     internal static float CarRootAboveUnderside => CarSize.y * 0.5f; // the body is centred on the root
     const float ParallelGap = 8f;        // spacing between parallel lanes
     const float CornerRadius = 30f;
@@ -461,9 +464,10 @@ public static class FlightGrayboxBuilder
         body.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
         SetMat(body, mat);
 
+        // First-person driving camera: the driver's eyes (front left seat).
         var cockpit = new GameObject("Cockpit").transform;
         cockpit.SetParent(root.transform, false);
-        cockpit.localPosition = new Vector3(0f, CarSize.y * 0.5f + 0.45f, CarSize.z * 0.08f);
+        cockpit.localPosition = FlyingVehicle.SeatEyeFor(CarSize * 0.5f, Vector3.zero, FlyingVehicle.SeatId.Driver);
 
         AddKinematicBody(root);
         var v = root.AddComponent<FlyingVehicle>();
@@ -483,9 +487,9 @@ public static class FlightGrayboxBuilder
         Vector3 h = CarSize * 0.5f;
         LightBox(v.gameObject, "Band", new Vector3(0f, 0.05f, 0f), new Vector3(CarSize.x + 0.04f, CarSize.y * 0.23f, CarSize.z * 0.57f),
                  GetMaterial("PoliceWhite", new Color(0.85f, 0.87f, 0.9f)));
-        LightBox(v.gameObject, "BarBlue", new Vector3(-h.x * 0.3f, h.y + 0.1f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.2f, 0.35f),
+        LightBox(v.gameObject, "BarBlue", new Vector3(-h.x * 0.3f, h.y + 0.06f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.12f, 0.25f),
                  GetUnlitMaterial("PoliceBarBlue", new Color(0.15f, 0.35f, 1f), 4f));
-        LightBox(v.gameObject, "BarRed", new Vector3(h.x * 0.3f, h.y + 0.1f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.2f, 0.35f),
+        LightBox(v.gameObject, "BarRed", new Vector3(h.x * 0.3f, h.y + 0.06f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.12f, 0.25f),
                  GetUnlitMaterial("PoliceBarRed", new Color(1f, 0.1f, 0.08f), 4f));
         SetLayerRecursive(v.gameObject, TrafficLayer());
         var driver = v.gameObject.AddComponent<PoliceDriver>();
@@ -534,10 +538,10 @@ public static class FlightGrayboxBuilder
         var tails = new Renderer[2];
         for (int i = 0; i < 2; i++)
         {
-            float x = (i == 0 ? -1f : 1f) * (h.x - 0.4f);
-            // 0.4 m deep, half inside the body: sticks 0.2 m out of the face so its top reads from above.
-            heads[i] = LightBox(root, "Headlight", new Vector3(x, h.y * 0.2f, h.z), new Vector3(0.45f, 0.22f, 0.4f), headOnMat);
-            tails[i] = LightBox(root, "Taillight", new Vector3(x, h.y * 0.2f, -h.z), new Vector3(0.45f, 0.22f, 0.4f), tailOnMat);
+            float x = (i == 0 ? -1f : 1f) * (h.x - 0.25f);
+            // 0.3 m deep, half inside the body: sticks 0.15 m out of the face so its top reads from above.
+            heads[i] = LightBox(root, "Headlight", new Vector3(x, h.y * 0.2f, h.z), new Vector3(0.3f, 0.15f, 0.3f), headOnMat);
+            tails[i] = LightBox(root, "Taillight", new Vector3(x, h.y * 0.2f, -h.z), new Vector3(0.3f, 0.15f, 0.3f), tailOnMat);
         }
         var lights = root.AddComponent<CarLights>();
         lights.headlights = heads;
@@ -628,13 +632,13 @@ public static class FlightGrayboxBuilder
         rack.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
         rack.gameObject.layer = v.gameObject.layer;
         Vector3 h = CarSize * 0.5f;
-        rack.localPosition = new Vector3(0f, h.y - 0.2f, -h.z - 0.35f);
+        rack.localPosition = new Vector3(0f, h.y - 0.15f, -h.z - 0.25f);
         rack.localRotation = Quaternion.identity;
-        rack.localScale = new Vector3(CarSize.x * 0.53f, 0.3f, 0.7f); // narrower than the car so the tail lights show from above
+        rack.localScale = new Vector3(CarSize.x * 0.53f, 0.2f, 0.5f); // narrower than the car so the tail lights show from above
 
         var grab = new GameObject("GrabPoint").transform;
         grab.SetParent(v.transform, false);
-        grab.localPosition = new Vector3(0f, h.y - 0.05f, -h.z - 0.7f);
+        grab.localPosition = new Vector3(0f, h.y - 0.05f, -h.z - 0.5f);
         grab.gameObject.AddComponent<VehicleGrabPoint>();
         grab.gameObject.layer = v.gameObject.layer;
     }

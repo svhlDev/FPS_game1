@@ -59,6 +59,7 @@ public class ScenarioTest : MonoBehaviour
             case "pool": yield return PoolTest(); break;
             case "feet": yield return FeetTest(); break;
             case "hands": yield return HandsTest(); break;
+            case "seats": yield return SeatsTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -600,6 +601,99 @@ public class ScenarioTest : MonoBehaviour
         yield return Shot("lineup", row, row + new Vector3(0f, 0.1f, -3.4f), 50f);
         cam.fieldOfView = fov;
         foreach (var g in lights) Destroy(g);
+        FlyingVehicle.CameraOverride = false;
+    }
+
+    // ---------- car size and seats ----------
+
+    IEnumerator SeatsTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        yield return null;
+        FlyingVehicle car = null;
+        foreach (var c in FlyingVehicle.Active) if (!c.IsOccupied) { car = c; break; }
+        if (car == null) { Log("FAIL no car in the scene"); yield break; }
+        // A test car of our own, far from traffic: the scene's car, copied and parked in the sky.
+        var origin = new Vector3(0f, 1500f, 0f);
+        var copy = Instantiate(car.gameObject);
+        foreach (var mb in copy.GetComponentsInChildren<MonoBehaviour>()) if (!(mb is CarLights)) mb.enabled = false;
+        var v = copy.GetComponent<FlyingVehicle>();
+        copy.transform.SetPositionAndRotation(origin, Quaternion.identity);
+        foreach (var r in copy.GetComponentsInChildren<Renderer>(true)) r.enabled = true; // (traffic is drawn instanced)
+        var col = copy.GetComponentInChildren<BoxCollider>();
+        Vector3 half = Vector3.Scale(col.size, col.transform.lossyScale) * 0.5f, centre = copy.transform.InverseTransformPoint(col.transform.TransformPoint(col.center));
+        Vector3 size = half * 2f;
+        float roof = origin.y + centre.y + half.y, under = origin.y + centre.y - half.y;
+        Log($"car body {size.x:0.00} x {size.y:0.00} x {size.z:0.00} m");
+
+        // Standing average man beside it: car length in characters, roof against the shoulders.
+        var sgo = new GameObject("Standing");
+        sgo.transform.position = new Vector3(origin.x + 2f, under, origin.z);
+        var sf = CharacterFigure.BuildGenerated(sgo.transform, new CharacterSheet(Sex.Male, 10, 10, 10, 1000), CharacterFigure.Role.Civilian, true, false);
+        var sa = sgo.AddComponent<FigureAnimator>(); sa.Grounded = true;
+        yield return new WaitForSeconds(0.3f);
+        float shoulder = (sf.ShoulderL.position.y + sf.ShoulderR.position.y) * 0.5f - under;
+        float lengthInChars = size.z / sf.Height;
+        Log($"standing average man {sf.Height:0.00} m, shoulders {shoulder:0.00} m: car is {lengthInChars:0.00} characters long, roof {size.y:0.00} m");
+        Log(lengthInChars > 2.5f && lengthInChars < 2.9f && size.y < shoulder ? "PASS about 2.7 characters long, roof below shoulder height" : "FAIL car proportions");
+
+        // Five seated figures (a spread of sheets): hips at the seat, head top under the roof, inside the sides.
+        var sheets = new[]
+        {
+            new CharacterSheet(Sex.Male, 10, 10, 10, 1001), new CharacterSheet(Sex.Female, 10, 10, 10, 1002),
+            new CharacterSheet(Sex.Male, 20, 10, 10, 1003), new CharacterSheet(Sex.Female, 12, 10, 4, 1004), new CharacterSheet(Sex.Male, 6, 10, 15, 1005),
+        };
+        var seated = new List<(CharacterFigure f, FlyingVehicle.SeatId seat)>();
+        for (int i = 0; i < FlyingVehicle.SeatCount; i++)
+        {
+            var go = new GameObject("Seat" + i);
+            go.transform.SetPositionAndRotation(origin, Quaternion.identity);
+            var f = CharacterFigure.BuildGenerated(go.transform, sheets[i], CharacterFigure.Role.Civilian, true, false);
+            var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.CurrentPose = FigureAnimator.Pose.Seated;
+            seated.Add((f, (FlyingVehicle.SeatId)i));
+            yield return null;
+        }
+        yield return new WaitForSeconds(0.6f);
+        bool ok = true;
+        var sb = new StringBuilder("seated: ");
+        foreach (var (f, seat) in seated)
+        {
+            Vector3 hips = copy.transform.TransformPoint(FlyingVehicle.SeatHipsFor(half, centre, seat));
+            // Hip joints (the thighs' joints) onto the seat.
+            Vector3 hipJoints = (f.HipL.position + f.HipR.position) * 0.5f;
+            f.transform.position += hips - hipJoints;
+            yield return null;
+            var sk = f.GetComponent<BodySkeleton>();
+            float headTop = sk.Bones[f.Plan.Index("Head")].End.y;
+            float hipsAbove = (f.HipL.position.y + f.HipR.position.y) * 0.5f - under;
+            float clear = roof - headTop;
+            float halfW = 0f;
+            foreach (var r in f.Renderers) { var b = r.bounds; halfW = Mathf.Max(halfW, Mathf.Max(Mathf.Abs(b.max.x - origin.x), Mathf.Abs(b.min.x - origin.x))); }
+            sb.Append($"{seat} ({f.Plan.sheet.sex.ToString()[0]} S{f.Plan.sheet.STR} D{f.Plan.sheet.DEX}) hips {hipsAbove:0.00} m, head top {headTop - under:0.00} m ({clear * 100f:0} cm under the roof); ");
+            if (clear < 0f || Mathf.Abs(hipsAbove - FlyingVehicle.SeatHipHeight) > 0.02f) ok = false;
+        }
+        Log(sb.ToString());
+        Log(ok ? "PASS five seats: hips 0.3 m above the underside, heads under the roof" : "FAIL seated figures don't fit");
+
+        // Pictures: the car with its body hidden (who sits where), and the car beside the standing man.
+        var cam = Camera.main; cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        var lg = new GameObject("SeatKey"); var l = lg.AddComponent<Light>(); l.type = LightType.Directional; l.intensity = 1.2f;
+        lg.transform.rotation = Quaternion.LookRotation(new Vector3(0.3f, -0.6f, 0.8f));
+        IEnumerator Shot(string name, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"seats_{name}.png"));
+            yield return null; yield return null;
+        }
+        Vector3 mid = origin + Vector3.up * 0.1f;
+        yield return Shot("car_and_man", mid, mid + new Vector3(-6f, 1.2f, -2.5f));
+        var bodyR = copy.transform.Find("Body").GetComponent<Renderer>();
+        bodyR.enabled = false;
+        yield return Shot("seated_side", mid, mid + new Vector3(-5f, 0.8f, 0f));
+        yield return Shot("seated_top", mid, mid + new Vector3(-1.5f, 4.5f, -1.5f));
+        bodyR.enabled = true;
+        Destroy(lg);
         FlyingVehicle.CameraOverride = false;
     }
 
@@ -1620,7 +1714,20 @@ public class ScenarioTest : MonoBehaviour
         if (home == null) { Log("WARN no unit for the officer test"); yield break; }
         Vector3 me = fpc.transform.position;
         Vector3 side = Vector3.ProjectOnPlane(cam.right, Vector3.up).normalized;
+        // The side with a clear line and room round the spot (the start plaza is next to podiums).
         Vector3 spot = me + side * 8f;
+        bool Clear(Vector3 at)
+        {
+            foreach (float h in new[] { 0.6f, 1.2f, 1.7f })
+                if (Physics.Linecast(me + Vector3.up * h, at + Vector3.up * h, ~0, QueryTriggerInteraction.Ignore)) return false;
+            if (Physics.Linecast(cam.position, at + Vector3.up * 1f, ~0, QueryTriggerInteraction.Ignore)) return false; // the shot's own line
+            return !Physics.CheckSphere(at + Vector3.up * 1.2f, 0.8f, ~0, QueryTriggerInteraction.Ignore);
+        }
+        for (int k = 1; k < 8 && !Clear(spot); k++)
+        {
+            Vector3 d = Quaternion.Euler(0f, k * 45f, 0f) * side;
+            if (Clear(me + d * 8f)) { spot = me + d * 8f; side = d; }
+        }
         home.Car.DebugPlace(spot + Vector3.up * 4f, Quaternion.identity, Vector3.zero);
         var off = OfficerAgent.SpawnFrom(home, 0f);
         for (float t = 0f; t < 15f && !(off.State == OfficerAgent.Phase.Foot && off.AtGoal); t += Time.deltaTime)
