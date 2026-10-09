@@ -200,7 +200,22 @@ public class BodySDF
                             AddBlob(i, MuscleGroup.Abdominals, t, s * 14f, 0.26f, 0.3f, 0.5f);
                     break;
                 case BoneKind.Pelvis:
-                    foreach (float s in new[] { -1f, 1f }) AddBlob(i, MuscleGroup.Glutes, 0.6f, s * 148f, 1.3f, 0.5f, 1.2f);
+                    foreach (float s in new[] { -1f, 1f })
+                    {
+                        AddBlob(i, MuscleGroup.Glutes, 0.6f, s * 148f, 1.3f, 0.5f, 1.2f);
+                        // Like breasts: how far the buttock stands out grows with its size (glute
+                        // thickness + buttock fat): lean ones sit close to the body, heavy ones project.
+                        if (blobs.Count > 0 && blobs[blobs.Count - 1].group == MuscleGroup.Glutes)
+                        {
+                            var rules = BodyRules.Default;
+                            var bl = blobs[blobs.Count - 1];
+                            float size = bl.r.z + (plan.dna != null ? plan.dna.Fat(FatRegion.Buttocks) : 0f);
+                            float k = Mathf.Lerp(rules.buttProjection.x, rules.buttProjection.y,
+                                                 Mathf.InverseLerp(rules.buttProjectionSizes.x, rules.buttProjectionSizes.y, size));
+                            bl.f.o += bl.f.z * (k - 1.15f) * bl.r.z; // AddBlob leaves it standing out 1.15 x its depth
+                            blobs[blobs.Count - 1] = bl;
+                        }
+                    }
                     break;
                 case BoneKind.Neck:
                     foreach (float s in new[] { -1f, 1f }) AddBlob(i, MuscleGroup.Trapezius, 0.2f, s * 140f, 0.9f, 0.6f, 0.8f);
@@ -505,6 +520,20 @@ public class BodySDF
     }
 
     public int BlobCount => blobs.Count;
+
+    // How far the buttocks stand out behind the pelvis core (skin, at the glute centre height).
+    public string ButtReport()
+    {
+        var g = blobs.FindAll(b => b.group == MuscleGroup.Glutes);
+        if (g.Count == 0) return "no glutes";
+        int pel = plan.Index("Hips");
+        var pb = plan.bones[pel];
+        Vector3 c = g[0].f.o;
+        float coreBack = start[pel].z - pb.girth.y * depthRatio[pel];
+        float z = -0.5f;
+        while (z < 0.3f && Eval(new Vector3(c.x, c.y, z)) > 0f) z += 0.002f;
+        return $"buttock size {(g[0].r.z + plan.dna.Fat(FatRegion.Buttocks)) * 100f:0.0} cm, skin {(coreBack - z) * 100f:0.0} cm behind the pelvis core";
+    }
 
     // Breast size, how far its tip stands out from the chest's front surface, and the pec centre spacing.
     public string BreastReport()

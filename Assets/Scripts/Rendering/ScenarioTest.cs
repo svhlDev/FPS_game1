@@ -578,6 +578,8 @@ public class ScenarioTest : MonoBehaviour
             Log($"abs definition (RMS bumps on the belly's front, mm): DEX 20 {lean:0.000}, DEX 10 {avg:0.000}, DEX 1 {heavy:0.000}; belly front at z {zLean * 100f:0.0} / {zAvg * 100f:0.0} / {zHeavy * 100f:0.0} cm");
             foreach (int dex in new[] { 20, 10, 1 }) Log($"  F DEX {dex}: " + new BodySDF(P(Sex.Female, 10, 10, dex)).BreastReport());
             Log("  M avg: " + new BodySDF(P(Sex.Male, 10, 10, 10)).BreastReport());
+            foreach (var sx in new[] { Sex.Male, Sex.Female })
+                foreach (int dex in new[] { 20, 10, 1 }) Log($"  {sx} DEX {dex}: " + new BodySDF(P(sx, 10, 10, dex)).ButtReport());
             Log(lean > heavy * 2f && zHeavy > zLean + 0.03f ? "PASS muscle definition shows at high DEX and is smoothed over at low DEX" : "FAIL definition doesn't follow DEX");
         }
 
@@ -675,6 +677,20 @@ public class ScenarioTest : MonoBehaviour
             cam.transform.SetPositionAndRotation(body + vv, Quaternion.LookRotation(-vv));
             yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"body_torso_{label}.png"));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+        }
+        // Side view of the STR 10 row (women, DEX 1 / 10 / 20): breasts and buttocks in profile.
+        {
+            Vector3 rowF = go.transform.position + new Vector3(-5f, -2f * lineup.rowHeight + 0.9f, 0f);
+            Vector3 vs = new Vector3(2.6f, 0.2f, -1.4f);
+            cam.transform.SetPositionAndRotation(rowF + vs, Quaternion.LookRotation(-vs));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_profile_female.png"));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            Vector3 rowM = go.transform.position + new Vector3(-1f, -2f * lineup.rowHeight + 0.9f, 0f);
+            cam.transform.SetPositionAndRotation(rowM + vs, Quaternion.LookRotation(-vs));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, "body_profile_male.png"));
             yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
         }
         Vector3 heads = go.transform.position + new Vector3(-2f, -4f * lineup.rowHeight + 1.45f, 0f);

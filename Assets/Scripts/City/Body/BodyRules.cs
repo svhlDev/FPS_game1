@@ -71,6 +71,10 @@ public class BodyRules : ScriptableObject
     public Vector2 breastProjection = new Vector2(0.3f, 0.95f);
     [Tooltip("Breast radius (m) that counts as small (x) and large (y) for the projection.")]
     public Vector2 breastProjectionSizes = new Vector2(0.04f, 0.12f);
+    [Tooltip("How far a buttock (glute) stands out, as a fraction of its depth: x for small (lean), y for large (heavy).")]
+    public Vector2 buttProjection = new Vector2(0.4f, 1.5f);
+    [Tooltip("Buttock size (glute thickness + buttock fat, m) that counts as small (x) and large (y).")]
+    public Vector2 buttProjectionSizes = new Vector2(0.03f, 0.11f);
     [Tooltip("Men's pec centres move this far (m) toward the midline each (0.01 = 2 cm closer together).")]
     public float malePecInset = 0.01f;
     public float faceNoise = 0.15f;
