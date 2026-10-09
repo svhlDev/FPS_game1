@@ -55,6 +55,7 @@ public class ScenarioTest : MonoBehaviour
             case "bodies": yield return BodiesTest(); break;
             case "skin": yield return SkinTest(); break;
             case "anim": yield return AnimTest(); break;
+            case "face": yield return FaceTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -462,6 +463,93 @@ public class ScenarioTest : MonoBehaviour
             return v;
         }
         return null;
+    }
+
+    // ---------- generated bodies: phase 7 (eyes, INT glow, skin) ----------
+
+    IEnumerator FaceTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        var sh = BodyMaterials.SkinShader;
+        Log($"skin shader: {(sh != null ? sh.name + (sh.isSupported ? " (supported)" : " (NOT supported)") : "missing")}");
+        Log(sh != null && sh.isSupported ? "PASS skin shader loads in the player build" : "FAIL skin shader missing");
+
+        var sheets = new (string name, CharacterSheet sh)[]
+        {
+            ("INT 10", new CharacterSheet(Sex.Male, 10, 10, 10, 1000)), ("INT 16", new CharacterSheet(Sex.Male, 10, 16, 10, 1003)),
+            ("INT 20", new CharacterSheet(Sex.Male, 10, 20, 10, 1004)), ("woman INT 20", new CharacterSheet(Sex.Female, 10, 20, 14, 1005)),
+            ("dark tone", new CharacterSheet(Sex.Female, 12, 10, 10, 1011)),
+        };
+        var figs = new List<CharacterFigure>();
+        for (int i = 0; i < sheets.Length; i++)
+        {
+            var go = new GameObject(sheets[i].name);
+            go.transform.position = origin + new Vector3(i * 0.9f, 0f, 0f);
+            go.transform.rotation = Quaternion.Euler(0f, 180f, 0f); // facing -z, toward the camera
+            var f = CharacterFigure.BuildGenerated(go.transform, sheets[i].sh, CharacterFigure.Role.Civilian, true, false);
+            var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
+            figs.Add(f);
+            yield return null;
+        }
+        var sb = new StringBuilder("eyes: ");
+        foreach (var f in figs)
+        {
+            var iris = f.EyeL.Find("Iris").GetComponent<Renderer>().sharedMaterial;
+            sb.Append($"{f.name} glow {f.Plan.dna.eyeGlow:0.00} iris '{iris.name}' ({iris.shader.name}); ");
+        }
+        Log(sb.ToString());
+        Log($"skin: {figs[0].Renderers[0].sharedMaterial.name} on {figs[0].Renderers[0].sharedMaterial.shader.name}, tones {string.Join(", ", figs.ConvertAll(f => f.Renderers[0].sharedMaterial.name))}");
+        bool glowOk = figs[0].Plan.dna.eyeGlow == 0f && figs[2].Plan.dna.eyeGlow == 1f && figs[2].EyeL.Find("Iris").GetComponent<Renderer>().sharedMaterial.shader.name.Contains("Unlit");
+        Log(glowOk ? "PASS INT 20 eyes glow (HDR), INT 10 don't" : "FAIL eye glow");
+
+        // Eyes follow a target to the side (within reach).
+        var target = new GameObject("LookTarget").transform;
+        foreach (var f in figs) f.LookTarget = null;
+        yield return new WaitForSeconds(0.3f);
+        var f0 = figs[0];
+        target.position = f0.EyeL.position + f0.transform.forward * 2f + f0.transform.right * 0.6f + Vector3.up * 0.3f;
+        f0.LookTarget = target.position;
+        yield return new WaitForSeconds(0.4f);
+        float errL = Vector3.Angle(f0.EyeL.forward, target.position - f0.EyeL.position), errR = Vector3.Angle(f0.EyeR.forward, target.position - f0.EyeR.position);
+        Log($"eyes on a target 18 deg aside: off by {errL:0.0} / {errR:0.0} deg");
+        Log(errL < 3f && errR < 3f ? "PASS eyeballs look at their target" : "FAIL eye look");
+        foreach (var f in figs) f.LookTarget = null;
+
+        // Neon: a magenta and a cyan point light (additional lights), a dim key light.
+        var lights = new List<GameObject>();
+        GameObject L(LightType t, Color c, float intensity, Vector3 pos, Quaternion rot, float range = 4f)
+        {
+            var g = new GameObject("FaceLight"); var l = g.AddComponent<Light>();
+            l.type = t; l.color = c; l.intensity = intensity; l.range = range;
+            g.transform.SetPositionAndRotation(pos, rot); lights.Add(g); return g;
+        }
+        Vector3 faces = origin + new Vector3(1.8f, 1.4f, 0f);
+        L(LightType.Directional, new Color(1f, 0.95f, 0.9f), 0.6f, Vector3.zero, Quaternion.LookRotation(new Vector3(0.3f, -0.4f, 1f)));
+        L(LightType.Point, new Color(1f, 0.2f, 0.85f), 6f, faces + new Vector3(-2.4f, 0.2f, -0.8f), Quaternion.identity, 4f);
+        L(LightType.Point, new Color(0.2f, 0.85f, 1f), 6f, faces + new Vector3(2.4f, 0.1f, -0.8f), Quaternion.identity, 4f);
+
+        var cam = Camera.main;
+        cam.transform.SetParent(null);
+        FlyingVehicle.CameraOverride = true;
+        IEnumerator Shot(string name, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"face_{name}.png"));
+            yield return null; yield return null;
+        }
+        yield return Shot("row", faces + new Vector3(0f, -0.1f, 0f), faces + new Vector3(0f, 0.05f, -2.6f));
+        for (int i = 0; i < 4; i++)
+        {
+            var f = figs[i];
+            Vector3 h = f.Head.position;
+            yield return Shot("close" + i, h, h - f.transform.forward * -0.55f + new Vector3(0.12f, 0.03f, 0f));
+        }
+        Vector3 body = figs[3].transform.position + Vector3.up * 1.0f;
+        yield return Shot("body_neon", body, body + new Vector3(0.6f, 0.2f, -1.9f));
+        foreach (var g in lights) Destroy(g);
+        FlyingVehicle.CameraOverride = false;
     }
 
     // ---------- generated bodies: phase 6 (animation) ----------

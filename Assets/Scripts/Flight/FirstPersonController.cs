@@ -220,7 +220,7 @@ public class FirstPersonController : MonoBehaviour
         Animator.FollowLook = true;
         if (GetComponent<PlayerWeapon>() == null) gameObject.AddComponent<PlayerWeapon>();
         // First person hides only the head (the camera is inside it); everything else stays visible.
-        bodyRenderers = new[] { Figure.HeadRenderer };
+        bodyRenderers = Figure.FaceRenderers.Count > 0 ? Figure.FaceRenderers.ToArray() : new[] { Figure.HeadRenderer };
         bodyShown = true;
         playerCamera.nearClipPlane = 0.05f;
         int playerLayer = LayerMask.NameToLayer("Player");

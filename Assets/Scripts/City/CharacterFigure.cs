@@ -53,6 +53,11 @@ public class CharacterFigure : MonoBehaviour
     public Transform Chest;
     // Generated bodies: the head joint (the head's pivot; Head is its centre) and arms beyond the first pair.
     public Transform HeadJoint;
+    // Where the eyes look (EyeLook), if anywhere; the head mesh plus the eyeballs (hidden together in
+    // first person).
+    public Vector3? LookTarget { get; set; }
+    public readonly List<Renderer> FaceRenderers = new List<Renderer>();
+    public Transform EyeL, EyeR;
     public readonly List<(Transform shoulder, Transform elbow, Transform wrist, int side)> ExtraArms = new List<(Transform, Transform, Transform, int)>();
 
     // Joints
@@ -176,6 +181,37 @@ public class CharacterFigure : MonoBehaviour
             f.eyeForward = Mathf.Max(0.02f, (sdf.EyeL.z + sdf.EyeR.z) * 0.5f - headCentreRoot.z);
             f.eyeHeight = (sdf.EyeL.y + sdf.EyeR.y) * 0.5f;
             f.eyeFromNeck = (sdf.EyeL + sdf.EyeR) * 0.5f - sdf.start[plan.Index("Neck")];
+            // Eyeballs in the carved sockets, on the head joint (they turn with the head; EyeLook aims them).
+            var rules = BodyRules.Default;
+            float er = sdf.EyeRadius * rules.eyeballScale;
+            var irisCol = BodyMaterials.IrisColors[new PcgRandom(sheet.seed, "iris").Range(0, BodyMaterials.IrisColors.Length)];
+            var irisMat = BodyMaterials.Iris(irisCol, plan.dna != null ? plan.dna.eyeGlow : 0f);
+            Transform Eye(string name, Vector3 centre)
+            {
+                var e = new GameObject(name).transform;
+                e.SetParent(sk.Head, false);
+                e.localPosition = centre - sdf.start[hi] - Vector3.forward * sdf.EyeRadius * 0.15f;
+                e.gameObject.layer = layer;
+                var ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                Destroy(ball.GetComponent<Collider>());
+                ball.name = "Sclera"; ball.layer = layer;
+                ball.transform.SetParent(e, false);
+                ball.transform.localScale = Vector3.one * er * 2f;
+                var br = ball.GetComponent<Renderer>(); br.sharedMaterial = BodyMaterials.Sclera();
+                br.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                var iris = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                Destroy(iris.GetComponent<Collider>());
+                iris.name = "Iris"; iris.layer = layer;
+                iris.transform.SetParent(e, false);
+                iris.transform.localPosition = Vector3.forward * er * 0.82f;
+                iris.transform.localScale = new Vector3(er * 1.05f, er * 1.05f, er * 0.4f);
+                var ir = iris.GetComponent<Renderer>(); ir.sharedMaterial = irisMat;
+                ir.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                f.FaceRenderers.Add(br); f.FaceRenderers.Add(ir);
+                return e;
+            }
+            f.EyeL = Eye("EyeL", sdf.EyeL);
+            f.EyeR = Eye("EyeR", sdf.EyeR);
             if (stats != null) { stats.mesh = r; stats.triangles = r.triangles; stats.vertices = r.vertices; }
             Object.Destroy(r.mesh);
         }
@@ -184,12 +220,14 @@ public class CharacterFigure : MonoBehaviour
 
         var bones = new Transform[sk.Bones.Count];
         for (int i = 0; i < bones.Length; i++) bones[i] = sk.Bones[i].joint;
-        var rng = new System.Random(sheet.seed);
-        var skin = Mat(Skins[rng.Next(Skins.Length)]);
+        var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(sheet.seed));
         var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", body, bones, sk.Hips, skin, shadows);
         var headR = BodySkinner.AddRenderer(root, "HeadMesh", head, bones, sk.Hips, skin, shadows);
         f.Renderers.Add(bodyR); f.Renderers.Add(headR);
         f.HeadRenderer = headR;
+        f.FaceRenderers.Insert(0, headR);
+        var look = root.gameObject.AddComponent<EyeLook>();
+        look.eyeL = f.EyeL; look.eyeR = f.EyeR;
 
         // Hit colliders per bone (triggers tagged with their location), from the generated girths.
         for (int i = 0; i < plan.bones.Count; i++)

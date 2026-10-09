@@ -45,6 +45,11 @@ public class BodyRules : ScriptableObject
     public float intHeadScale = 0.10f;
     public float intElongation = 0.15f;
     public float eyeGlowStart = 16f, eyeGlowFull = 20f;
+    [Tooltip("Glowing eyes (INT): emission colour and HDR intensity at full glow.")]
+    [ColorUsage(false, true)] public Color eyeGlowColor = new Color(0.25f, 0.95f, 1f);
+    public float eyeGlowIntensity = 6f;
+    [Tooltip("Eyeball radius as a fraction of the carved socket.")]
+    public float eyeballScale = 0.92f;
 
     [Header("DEX: fat and jitter")]
     [Tooltip("Fat thickness multiplier by DEX (x = DEX, y = x sex base fat), linear between keys.")]
