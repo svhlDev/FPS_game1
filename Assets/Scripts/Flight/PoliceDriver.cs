@@ -294,12 +294,13 @@ public class PoliceDriver : MonoBehaviour
             end = hit.point;
             hitCar = hit.collider.GetComponentInParent<FlyingVehicle>();
         }
-        if (tc < laserWarmup) ShowLaser(origin, end, 0.03f, false);
+        if (tc < laserWarmup) ShowLaser(origin, end, LaserWeapon.CarBeamWidth, false);
         else if (tc < laserWarmup + laserBurst)
         {
             LaserFireFrames++;
             LastLaserHit = best < float.MaxValue ? $"{hit.collider.name} ({(hitCar != null ? hitCar.name : "no car")}) at {best:0.0} m, target {target.name} at {dist:0.0} m" : $"nothing (target {target.name} at {dist:0.0} m)";
             ShowLaser(origin, end, 0.22f, true);
+            if (traced && Time.time >= nextBeamMark) { nextBeamMark = Time.time + 0.12f; BurnMarks.MarkOnly(hit, Weapon.Mode.Lethal); }
             if (hitCar != null && hitCar == target && target.Health != null)
             {
                 target.Health.Damage(laserDamagePerSecond * dt, hit.point, hit.normal);
@@ -310,7 +311,7 @@ public class PoliceDriver : MonoBehaviour
         else HideLaser();
     }
 
-    float laserCycleStart = -1f;
+    float laserCycleStart = -1f, nextBeamMark;
     public static int LaserHitFrames, LaserFireFrames;
     public static string LastLaserHit = "";
     Vector3 laserDir;

@@ -324,6 +324,21 @@ public class CharacterFigure : MonoBehaviour
         Generated = false; Plan = null; Asset = null;
     }
 
+    // The body has been taken away (Ragdoll.FromFigure moved the skeleton and renderers to a corpse):
+    // forget it without destroying anything, so the figure can be built again on this root.
+    public void Release()
+    {
+        var sk = GetComponent<BodySkeleton>(); if (sk != null) Destroy(sk);
+        var el = GetComponent<EyeLook>(); if (el != null) Destroy(el);
+        Renderers.Clear(); FaceRenderers.Clear(); ExtraArms.Clear(); Digits.Clear();
+        Hips = Spine = Chest = Neck = Head = HeadJoint = null;
+        ShoulderL = ShoulderR = ElbowL = ElbowR = WristL = WristR = HandL = HandR = null;
+        HipL = HipR = KneeL = KneeR = AnkleL = AnkleR = null;
+        EyeL = EyeR = null; HeadRenderer = null;
+        eyeForward = eyeHeight = hipHeight = armLength = -1f; eyeFromNeck = null;
+        Generated = false; Plan = null; Asset = null;
+    }
+
     static Transform Joint(string name, Transform parent, Vector3 localPos)
     {
         var t = new GameObject(name).transform;

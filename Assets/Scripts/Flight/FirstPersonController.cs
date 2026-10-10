@@ -220,6 +220,9 @@ public class FirstPersonController : MonoBehaviour
         Flammable.Add(gameObject, Flammable.Kind.Character);
         Animator.FollowLook = true;
         if (GetComponent<PlayerWeapon>() == null) gameObject.AddComponent<PlayerWeapon>();
+        CharacterHealth.Add(gameObject, CharacterFigure.Role.Player);
+        if (GetComponent<PlayerGrenades>() == null) gameObject.AddComponent<PlayerGrenades>();
+        if (GetComponent<PlayerInteract>() == null) gameObject.AddComponent<PlayerInteract>();
         // First person hides only the head (the camera is inside it); everything else stays visible.
         bodyRenderers = Figure.FaceRenderers.Count > 0 ? Figure.FaceRenderers.ToArray() : new[] { Figure.HeadRenderer };
         bodyShown = true;
@@ -286,6 +289,9 @@ public class FirstPersonController : MonoBehaviour
         if (hang != null) { animVel = Vector3.zero; UpdateHanging(kb, dt); return; }
 
         Vector3 carVel = platform != null ? Carry(dt) : Vector3.zero;
+
+        // Killed by anything but police gunfire (that's Busted, PoliceDispatch): back at the station.
+        if (Health <= 0f) { Die(lastCause ?? "Killed"); return; }
 
         bool noInput = Frozen || Restrained || Stunned || Time.time < staggerUntil;
         if (fists != null) fists.CanHit = !Restrained && !Stunned;
@@ -842,20 +848,24 @@ public class FirstPersonController : MonoBehaviour
         camShake = Mathf.Max(camShake, 0.4f);
     }
 
-    public void Damage(float amount)
+    public void Damage(float amount) => Damage(amount, null);
+
+    public void Damage(float amount, string cause)
     {
+        if (cause != null) lastCause = cause;
         Health = Mathf.Max(0f, Health - amount);
         lastHurt = Time.time;
         camShake = Mathf.Max(camShake, 0.3f);
     }
 
     public void Heal() => Health = maxHealth;
+    string lastCause;
 
     // Killed (an exploding car with you in it): placeholder death screen, back at the police station
     // (or the start deck without one).
     public void Die(string message)
     {
-        Restrained = false; burningUntil = -1f;
+        Restrained = false; burningUntil = -1f; lastCause = null;
         var station = PoliceStation.Find();
         if (station != null && station.door != null) { PlaceAt(station.door.position, station.door.rotation); Heal(); Flash("WASTED  -  " + message); }
         else Respawn("WASTED  -  " + message);
@@ -886,7 +896,7 @@ public class FirstPersonController : MonoBehaviour
     void UpdateBurning(float dt, Vector3 move)
     {
         if (!OnFire) return;
-        Damage(12f * dt);
+        Damage(CharacterHealth.FireDamagePerSecond * dt, "Burned to death");
         Effects.Flame(transform.position + Vector3.up * 1f, 1.2f);
         if (move.sqrMagnitude < 0.01f && grounded)
         {

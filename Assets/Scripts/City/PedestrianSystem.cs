@@ -16,6 +16,9 @@ using UnityEngine;
 //   Bodies: each pedestrian has a seed; promotion assembles the pooled generated body for it
 //     (BodyPool.Civilian), or the primitive figure while the pool is still filling.
 //   Promotion at nearRadius, demotion at farRadius (hysteresis).
+// Health (CharacterHealth, 60, near tier only, full again on promotion): stun shots knock down, lethal
+// hits make them run; at 0 the body becomes a ragdoll and the pedestrian leaves the crowd (a new one
+// appears out of view later).
 // The near tier is the crowd for blending in (NearAgents).
 [DefaultExecutionOrder(120)]
 public class PedestrianSystem : MonoBehaviour
@@ -82,12 +85,17 @@ public class PedestrianSystem : MonoBehaviour
         dangers.Add((p, radius, Time.time));
     }
 
-    // A T-gun shot hit `c`: if it's a near pedestrian, it goes down (stun: stunTime s, then flees from
-    // `from`; lethal: stays down, then is gone). True if it was a pedestrian.
+    // A T-gun shot hit `c`: if it's a near pedestrian, stun: down stunTime s, then flees from `from`;
+    // lethal: runs from `from` (CharacterHealth decides whether it dies). True if it was a pedestrian.
     public static bool Shot(Collider c, bool lethal, float stunTime, Vector3 from)
     {
         var p = Find(c);
         if (p == null) return false;
+        if (lethal)
+        {
+            if (p.state != State.Down) { p.state = State.Fleeing; p.until = Time.time + 6f; p.fleeFrom = from; }
+            return true;
+        }
         p.state = State.Down;
         p.downLethal = p.downLethal || lethal;
         p.until = Time.time + (p.downLethal ? 30f : stunTime);
@@ -269,6 +277,10 @@ public class PedestrianSystem : MonoBehaviour
         p.cc = t.GetComponent<CharacterController>();
         p.anim = t.GetComponent<FigureAnimator>();
         Dress(p, t);
+        var health = t.GetComponent<CharacterHealth>();
+        if (health != null) health.ResetHealth();
+        var flam = t.GetComponent<Flammable>();
+        if (flam != null) flam.Extinguish();
         p.vy = 0f;
         nearList.Add(p);
     }
@@ -291,10 +303,10 @@ public class PedestrianSystem : MonoBehaviour
         var asset = BodyAsset(p);
         if (asset != null)
         {
-            if (fig == null || fig.Asset != asset) fig = CharacterFigure.Assemble(t, asset, CharacterFigure.Role.Civilian, false, false, p.seed);
+            if (fig == null || fig.Hips == null || fig.Asset != asset) fig = CharacterFigure.Assemble(t, asset, CharacterFigure.Role.Civilian, false, false, p.seed);
             else fig.Renderers[0].sharedMaterials = BodyMaterials.Clothes(CharacterFigure.Role.Civilian, p.seed, fig.HeadRenderer.sharedMaterial);
         }
-        else if (fig == null || fig.Generated)
+        else if (fig == null || fig.Generated || fig.Hips == null)
             fig = CharacterFigure.Build(t, CharacterFigure.Role.Civilian, rand, CharacterFigure.DefaultHeight, false, false);
         p.cc.height = fig.Height;
         p.cc.center = new Vector3(0f, fig.Height * 0.5f, 0f);
@@ -342,8 +354,27 @@ public class PedestrianSystem : MonoBehaviour
         CharacterFigure.Build(go.transform, CharacterFigure.Role.Civilian, rand, h, false, false);
         go.AddComponent<FigureAnimator>();
         Flammable.Add(go, Flammable.Kind.Character);
+        CharacterHealth.Add(go, CharacterFigure.Role.Civilian).Died = OnDied;
         return go.transform;
     }
+
+    // Killed: the body falls as a ragdoll, the pedestrian leaves the crowd (its agent goes back to the
+    // pool and is dressed again when reused).
+    bool OnDied(CharacterHealth h, DamageInfo d)
+    {
+        Ped p = null;
+        foreach (var x in nearList) if (x.near == h.transform) { p = x; break; }
+        var fig = h.GetComponent<CharacterFigure>();
+        if (fig != null && fig.Hips != null)
+        {
+            if (fig.Generated && p != null) GeneratedNear--;
+            Ragdoll.FromFigure(fig, h.Velocity, d);
+        }
+        PedestriansKilled++;
+        if (p != null) Despawn(p); else h.gameObject.SetActive(false);
+        return true;
+    }
+    public static int PedestriansKilled;
 
     // ---------- update ----------
 

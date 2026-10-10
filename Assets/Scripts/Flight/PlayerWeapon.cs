@@ -2,7 +2,8 @@ using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// The player's T-gun on the real right arm.
+// The player's T-gun on the real right arm. The player starts unarmed (fists) and picks a gun up from a
+// dead officer (GunPickup, E); startWithGun gives one at the start for testing.
 //   1 draws (arm rises into view), H holsters (gun back on the right hip, visible in third person).
 //   Drawn: LMB fires, RMB steadies (gun just under the eye line, less sway, slight zoom), B toggles
 //   Stun / Lethal (0.3 s before it fires again, a short tone; the strips and emitter change colour).
@@ -12,13 +13,16 @@ using UnityEngine.InputSystem;
 //   3. If the barrel ray hits something more than 0.5 m before the aim point, a hollow marker shows
 //      where the shot will really land.
 // Shots travel the actual barrel (LaserWeapon.Fire). Stun: people down stunTime s, cars hiccup (thrust
-// cut, lights flicker), no damage. Lethal: damage (head x2, body x1, limbs x0.6), cars through
-// VehicleHealth.
+// cut, lights flicker), no damage. Lethal: damage (CharacterHealth: head x2, body x1, limbs x0.6), cars
+// through VehicleHealth.
 // Drawn = brandishing (police see the mode: PoliceDispatch).
 [DefaultExecutionOrder(105)] // after FigureAnimator (50) and FirstPersonController (100) LateUpdates
 [RequireComponent(typeof(FirstPersonController))]
 public class PlayerWeapon : MonoBehaviour
 {
+    [Tooltip("Start with a T-gun (testing); otherwise fists until one is picked up.")]
+    public bool startWithGun = false;
+    public static bool ForceStartWithGun;  // ScenarioTest: the older scenarios expect a gun
     public float steadyZoom = 0.85f;       // fov multiplier
     public float switchDelay = 0.3f;
 
@@ -56,8 +60,23 @@ public class PlayerWeapon : MonoBehaviour
 
     void Start()
     {
-        Gun = Weapon.BuildTGun(transform, gameObject.layer, Weapon.Mode.Stun);
+        if (startWithGun || ForceStartWithGun) Gun = Weapon.BuildTGun(transform, gameObject.layer, Weapon.Mode.Stun);
         Holster();
+    }
+
+    public bool HasGun => Gun != null;
+
+    // A dropped gun picked up: on the hip, 1 to draw. Ignored if we already have one (charge later).
+    public bool Give(GunPickup pickup)
+    {
+        if (Gun != null || pickup == null) return false;
+        var gun = pickup.Take();
+        if (gun == null) return false;
+        foreach (var t in gun.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = gameObject.layer;
+        Gun = gun;
+        Holster();
+        fpc.Flash("Picked up a T-gun  -  1 to draw");
+        return true;
     }
 
     public void Draw()
@@ -188,14 +207,15 @@ public class PlayerWeapon : MonoBehaviour
         }
         else
         {
-            dmg = Gun.damage;
-            var part = c.GetComponent<BodyPart>();
-            if (part != null)
-                dmg *= part.location == BodyPart.Location.Head ? 2f : part.location == BodyPart.Location.Body ? 1f : 0.6f;
+            dmg = Gun.damage * CharacterHealth.LaserMultiplier(c);
             if (car != null && car.Health != null) { dmg = Gun.carDamage; car.Health.Damage(dmg, h.point, h.normal); }
+            // Police hear about it while the victim still stands (an officer shot dead is still an officer).
+            ShotHit?.Invoke(c, h.point, dmg, mode);
             PedestrianSystem.Shot(c, true, 0f, transform.position);
-            var rb = c.attachedRigidbody;
+            CharacterHealth.LaserHit(h, dir, Gun.damage, true);
+            var rb = c != null ? c.attachedRigidbody : null;
             if (rb != null && !rb.isKinematic) rb.AddForceAtPosition(dir * 4f, h.point, ForceMode.Impulse);
+            return;
         }
         ShotHit?.Invoke(c, h.point, dmg, mode);
     }

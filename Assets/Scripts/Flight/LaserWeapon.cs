@@ -7,12 +7,14 @@ using UnityEngine;
 //            people's hit triggers count), with the beam, muzzle flash and impact burst in the mode
 //            colour, and the gunfire report for the crowd. Returns what it hit; the caller applies it.
 //   Trace  : the same ray without visuals (continuous beams).
-//   Beam   : a fading beam line (pooled LineRenderers).
+//   Beam   : a fading beam line (pooled LineRenderers), HandBeamWidth wide for hand guns.
+// Every shot that hits leaves a burn mark and feeds the target's burn chain (BurnMarks).
 // Shared materials: the mode colours (strips, emitter), the bright beams and the thin aiming line.
 public static class LaserWeapon
 {
     public static readonly Color StunColor = new Color(0.2f, 0.6f, 1f);
     public static readonly Color LethalColor = new Color(1f, 0.12f, 0.08f);
+    public const float HandBeamWidth = 0.03f, CarBeamWidth = 0.06f;
 
     // Test readouts.
     public static int Shots;
@@ -62,13 +64,14 @@ public static class LaserWeapon
         LastHit = didHit ? hit.collider : null;
         LastShooter = shooter;
 
-        Beam(muzzle, end, mode, 0.012f, 0.08f);
+        Beam(muzzle, end, mode, HandBeamWidth, 0.08f);
         Effects.Glow(muzzle + dir * 0.02f, 0.025f, stun, 0.06f);
         if (didHit)
         {
             Effects.Glow(hit.point + hit.normal * 0.03f, 0.14f, stun, 0.15f);
             for (int i = 0; i < 3; i++)
                 Effects.Debris(hit.point + hit.normal * 0.05f, (hit.normal + Random.insideUnitSphere * 0.8f) * Random.Range(2f, 5f), 0.025f);
+            BurnMarks.Hit(hit, dir, mode);
         }
         PedestrianSystem.ReportDanger(muzzle, 40f);
         return didHit;

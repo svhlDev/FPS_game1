@@ -163,6 +163,7 @@ public class FlyingVehicle : MonoBehaviour
     public enum VehicleKind { Standard, Police, Pink }
     public VehicleProfile Profile => kind == VehicleKind.Pink ? VehicleProfile.Pink : kind == VehicleKind.Police ? VehicleProfile.Police : VehicleProfile.Standard;
     public VehicleHealth Health { get; private set; }
+    public CarTrunk Trunk { get; private set; }
     static FlyingVehicle pinkAlive;
     public static FlyingVehicle PinkCar => pinkAlive;
     float criticalStart;
@@ -380,6 +381,7 @@ public class FlyingVehicle : MonoBehaviour
         SyncLaneRegistration();
         lights = GetComponent<CarLights>();
         if (lights != null) lights.SetOn(!parked);
+        Trunk = CarTrunk.Setup(this);      // before instancing takes the renderers over
         TrafficSystem.AddRenderable(this); // drawn instanced from here on
     }
 

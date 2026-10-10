@@ -29,8 +29,8 @@ Material:
     - _StarBrightness: 0.8
     - _StarDensity: 0.004
     m_Colors:
-    - _BottomColor: {r: 0.015, g: 0.045, b: 0.05, a: 1}
-    - _HorizonColor: {r: 0.03, g: 0.08, b: 0.085, a: 1}
+    - _BottomColor: {r: 0.015, g: 0.04499995, b: 0.049999967, a: 1}
+    - _HorizonColor: {r: 0.03, g: 0.079999946, b: 0.084999956, a: 1}
     - _TopColor: {r: 0.003, g: 0.006, b: 0.008, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

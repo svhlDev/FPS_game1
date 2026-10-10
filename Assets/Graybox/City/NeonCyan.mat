@@ -52,7 +52,7 @@ Material:
     - _XRMotionVectorsPass: 1
     - _ZWrite: 1
     m_Colors:
-    - _BaseColor: {r: 0.8, g: 3.6, b: 4, a: 1}
+    - _BaseColor: {r: 0.8, g: 3.6000004, b: 4, a: 1}
     - _Color: {r: 0.8, g: 3.6000001, b: 4, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

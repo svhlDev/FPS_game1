@@ -6,8 +6,9 @@ using UnityEngine.InputSystem;
 //   Arms are lowered by default (out of view when looking ahead). Any punch, or the guard key (Q),
 //   raises them into a guard; they drop again lowerAfter seconds after the last combat action, or at
 //   once on Q (holster). Raised arms are visible to everyone.
-//   Left mouse = left hand, right mouse = right hand. The punch travels the real arm, and the hit check
-//   runs from the shoulder along the aim at full extension (hit colliders included: BodyPart triggers).
+//   Left mouse = left hand, right mouse = right hand. A punch is a straight jab along the view
+//   (FigureAnimator's IK); the hit check is a 0.12 m sphere at the posed fist the moment it reaches full
+//   extension (hit colliders included: BodyPart triggers). 8 damage, 12 to the head (CharacterHealth).
 //   Restrained: the hands are cuffed behind the back; presses still count (mashing free) and make the
 //   arms strain, but nothing is hit.
 // Hooks for the police logic:
@@ -24,9 +25,8 @@ public class PlayerFists : MonoBehaviour
     public float cooldown = 0.3f;        // per hand
     [Tooltip("Lowered arms come up and stay up this long after the last punch or guard.")]
     public float lowerAfter = 4f;
-    [Tooltip("Reach past the hand (a punch lands a little beyond the fully extended fist).")]
-    public float extraReach = 0.35f;
-    public float hitRadius = 0.22f;
+    [Tooltip("Radius of the hit check around the fully extended fist.")]
+    public float hitRadius = 0.12f;
     public float hitForce = 6f;          // impulse on rigidbodies
     public LayerMask hitMask = ~0;
 
@@ -40,9 +40,31 @@ public class PlayerFists : MonoBehaviour
     readonly float[] punchStart = { -10f, -10f };
     readonly bool[] hitDone = { true, true };
     float lastCombat = -100f, lastPress = -100f;
-    static readonly RaycastHit[] hits = new RaycastHit[16];
+    static readonly Collider[] hits = new Collider[16];
+    FigureAnimator subscribed;
 
-    void Start() { fpc = GetComponent<FirstPersonController>(); weapon = GetComponent<PlayerWeapon>(); }
+    void Start()
+    {
+        fpc = GetComponent<FirstPersonController>();
+        weapon = GetComponent<PlayerWeapon>();
+    }
+
+    // The animator reports each jab at full extension, where the fist really is.
+    void Subscribe()
+    {
+        var anim = fpc != null ? fpc.Animator : null;
+        if (anim == subscribed) return;
+        if (subscribed != null) subscribed.PunchExtended -= OnExtended;
+        subscribed = anim;
+        if (anim != null) anim.PunchExtended += OnExtended;
+    }
+
+    void OnExtended(int hand, Vector3 fist)
+    {
+        if (hitDone[hand]) return;
+        hitDone[hand] = true;
+        if (CanHit) DoHit(hand, fist);
+    }
 
     // Test hook: guard up as if a punch was just thrown.
     public void DebugRaise() { ArmsRaised = true; lastCombat = Time.time; }
@@ -50,12 +72,17 @@ public class PlayerFists : MonoBehaviour
     public static int HitsLanded;
     static void CountHit(Collider c) => HitsLanded++;
     void OnEnable() => PunchHit += CountHit;
-    void OnDisable() => PunchHit -= CountHit;
+    void OnDisable()
+    {
+        PunchHit -= CountHit;
+        if (subscribed != null) { subscribed.PunchExtended -= OnExtended; subscribed = null; }
+    }
 
     void Update()
     {
         var anim = fpc != null ? fpc.Animator : null;
         if (anim == null) return;
+        Subscribe();
         var mouse = Mouse.current;
         var kb = Keyboard.current;
         bool usable = !fpc.IsHanging;
@@ -83,13 +110,6 @@ public class PlayerFists : MonoBehaviour
 
         anim.ArmMode = ArmsRaised ? FigureAnimator.Arms.Guard : FigureAnimator.Arms.Lowered;
         anim.Straining = fpc.Restrained && Time.time - lastPress < 0.3f;
-
-        for (int h = 0; h < 2; h++)
-            if (!hitDone[h] && anim.PunchAmount(h) >= 0.99f)
-            {
-                hitDone[h] = true;
-                if (CanHit) DoHit(h);
-            }
     }
 
     void TryPunch(int hand, FigureAnimator anim)
@@ -105,33 +125,37 @@ public class PlayerFists : MonoBehaviour
         anim.Punch(hand);
     }
 
-    // From the shoulder along the aim, as far as the arm reaches (plus a little): the nearest thing
-    // that isn't us. Body-part triggers count.
-    void DoHit(int hand)
+    // A 0.12 m sphere at the fully extended fist: the nearest thing that isn't us (body-part triggers
+    // count, other triggers don't).
+    void DoHit(int hand, Vector3 fist)
     {
-        var fig = fpc.Figure;
-        Transform shoulder = hand == 0 ? fig.ShoulderL : fig.ShoulderR;
-        Vector3 origin = shoulder.position;
         Vector3 dir = fpc.playerCamera.transform.forward;
-        float reach = fig.ArmLength + extraReach;
-        int n = Physics.SphereCastNonAlloc(origin, hitRadius, dir, hits, reach, hitMask, QueryTriggerInteraction.Collide);
-
+        int n = Physics.OverlapSphereNonAlloc(fist, hitRadius, hits, hitMask, QueryTriggerInteraction.Collide);
         Collider best = null;
         float bestDist = float.MaxValue;
-        Vector3 bestPoint = default;
         for (int i = 0; i < n; i++)
         {
-            var c = hits[i].collider;
+            var c = hits[i];
             if (c == null || c.transform.IsChildOf(transform)) continue; // ourselves
             if (c.isTrigger && c.GetComponent<BodyPart>() == null) continue; // other triggers aren't things to hit
-            float d = hits[i].distance;
-            if (d < bestDist) { bestDist = d; best = c; bestPoint = hits[i].point; }
+            Vector3 cp = Closest(c, fist);
+            float d = (cp - fist).sqrMagnitude;
+            if (d < bestDist) { bestDist = d; best = c; }
         }
+        LastFist = fist;
         if (best == null) return;
+        Vector3 point = Closest(best, fist);
 
         var rb = best.attachedRigidbody;
         if (rb != null && !rb.isKinematic)
-            rb.AddForceAtPosition(dir * hitForce, bestPoint == Vector3.zero ? best.bounds.center : bestPoint, ForceMode.Impulse);
-        PunchHit?.Invoke(best);
+            rb.AddForceAtPosition(dir * hitForce, point, ForceMode.Impulse);
+        PunchHit?.Invoke(best);                                   // police react to the victim still standing
+        CharacterHealth.PunchHit(best, point, dir, true);
     }
+
+    public static Vector3 LastFist;
+
+    // Collider.ClosestPoint handles primitives and convex meshes only.
+    static Vector3 Closest(Collider c, Vector3 p) =>
+        c is BoxCollider || c is SphereCollider || c is CapsuleCollider || (c is MeshCollider m && m.convex) ? c.ClosestPoint(p) : c.bounds.ClosestPoint(p);
 }

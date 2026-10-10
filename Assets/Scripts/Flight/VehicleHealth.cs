@@ -79,6 +79,14 @@ public class VehicleHealth : MonoBehaviour
 
     public void SetBaseMaterial(Material m) { baseMat = m; colourStep = -1; ApplyColour(); }
 
+    // Another part painted like the body (the trunk hatch).
+    readonly List<Renderer> tinted = new List<Renderer>();
+    public void TintAlso(Renderer r)
+    {
+        tinted.Add(r);
+        if (bodyRend != null) r.sharedMaterial = bodyRend.sharedMaterial;
+    }
+
     public void Init(float max)
     {
         maxHealth = max;
@@ -172,6 +180,7 @@ public class VehicleHealth : MonoBehaviour
         if (step == colourStep) return;
         colourStep = step;
         bodyRend.sharedMaterial = StepMaterial(baseMat, step);
+        foreach (var r in tinted) if (r != null) r.sharedMaterial = bodyRend.sharedMaterial;
     }
 
     static Material StepMaterial(Material baseMat, int step)
@@ -194,7 +203,7 @@ public class VehicleHealth : MonoBehaviour
         if (bodyFilter == null) return;
         if (dentMesh == null)
         {
-            dentMesh = Instantiate(BoxTemplate());
+            dentMesh = Instantiate(GetComponent<CarTrunk>() != null ? CarTrunk.BodyMesh(body.localScale, true) : BoxTemplate());
             dentVerts = dentMesh.vertices;
             bodyFilter.sharedMesh = dentMesh;
             TrafficSystem.RefreshRenderable(car);

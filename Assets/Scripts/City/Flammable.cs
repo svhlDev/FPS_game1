@@ -1,6 +1,7 @@
 using UnityEngine;
 
 // Something that can catch fire: cars (heat 4), characters (2), props like crates and stalls (3).
+// Burning characters take 12 damage a second (CharacterHealth; the player on FirstPersonController).
 public class Flammable : MonoBehaviour
 {
     public enum Kind { Car, Character, Prop }
@@ -30,10 +31,18 @@ public class Flammable : MonoBehaviour
         if (kind == Kind.Character)
         {
             var fpc = GetComponent<FirstPersonController>();
-            if (fpc != null) fpc.Damage(damage);
+            if (fpc != null) fpc.Damage(damage, "Burned to death");
+            else
+            {
+                var h = GetComponent<CharacterHealth>();
+                if (h != null) h.Damage(new DamageInfo { amount = damage, kind = DamageKind.Fire, point = transform.position + Vector3.up });
+            }
         }
         if (extraHeat >= ignitionHeat) Ignite();
     }
+
+    // Out (a pooled pedestrian reused for someone else).
+    public void Extinguish() { Burning = false; Exposure = 0f; extraHeat = 0f; }
 
     public void Ignite()
     {

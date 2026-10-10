@@ -10,7 +10,11 @@ using UnityEngine;
 //   cycle), the stance leg sweeps so the foot moves back at a constant speed (an asin profile, not a
 //   sine), and the gait joints are set directly while walking (the general pose blend would lag them
 //   and shorten the stride); a short ramp eases into and out of walking.
-//   Arms: Lowered (at the sides), Guard (fists up, aimed along the look), punches from the guard,
+//   Arms: Lowered (at the sides), Guard (fight stance, two-bone IK: both fists just under the eye line,
+//   guardSide either side of the look's centre, elbows tucked, forearms angled up), jabs from the guard
+//   (the fist goes in a straight line along the look to 0.97 of the arm's reach and straight back:
+//   PunchOut / PunchHold / PunchBack s; PunchExtended reports the posed fist at full extension, the
+//   other fist stays up), Throw (grenade: right arm drawn back while ThrowReady, Throw() swings it over),
 //   Behind (cuffed, straining while struggling), Aim (right arm left to PlayerWeapon's IK; the body
 //   turns once the aim is more than 70 degrees off it, and leans for aim pitch beyond 60 degrees).
 //   Whole-body poses: glide, hang, seated, stunned (lying), officer cuffing / dragging, scooter.
@@ -37,6 +41,13 @@ public class FigureAnimator : MonoBehaviour
     public float LookPitch { get; set; }   // degrees, + = down
     public bool FollowLook { get; set; }
     public bool Straining { get; set; }    // mashing against restraints
+    public bool ThrowReady { get; set; }   // grenade: right arm drawn back
+
+    // Fight stance (metres at figure height 1.5, from the eyes along the look).
+    public float guardForward = 0.2f, guardDrop = 0.07f, guardSide = 0.12f;
+    public const float PunchReach = 0.97f;
+    // A jab reached full extension: hand (0 left, 1 right), fist position as posed this frame.
+    public event System.Action<int, Vector3> PunchExtended;
 
     public float turnThreshold = 60f;
     public float blend = 12f;
@@ -58,7 +69,11 @@ public class FigureAnimator : MonoBehaviour
     // How far (m) the gait has lowered the hips this frame (the first-person camera keeps only part of it).
     public float GaitDrop { get; private set; }
     float[] punchStart = { -10f, -10f };
-    const float PunchOut = 0.08f, PunchHold = 0.05f, PunchBack = 0.16f;
+    readonly bool[] extended = { true, true };
+    public const float PunchOut = 0.07f, PunchHold = 0.03f, PunchBack = 0.12f;
+    float guardW, throwStart = -10f;
+    const float ThrowSwing = 0.3f;
+    public Vector3 LastPunchTarget { get; private set; }
     bool init;
 
     void Awake()
@@ -71,8 +86,14 @@ public class FigureAnimator : MonoBehaviour
     public float Punch(int hand)
     {
         punchStart[hand] = Time.time;
+        extended[hand] = false;
+        guardW = 1f; // a punch from lowered arms snaps up into the jab
         return PunchOut;
     }
+
+    // Grenade: the drawn-back right arm swings over and forward.
+    public void Throw() { throwStart = Time.time; ThrowReady = false; }
+    public bool Throwing => Time.time - throwStart < ThrowSwing;
 
     // 0 at rest, 1 at full extension.
     public float PunchAmount(int hand)
@@ -203,6 +224,18 @@ public class FigureAnimator : MonoBehaviour
             float strain = Straining ? Mathf.Sin(Time.time * 30f) * 6f : 0f;
             shL = 35f + strain; shR = 35f - strain; elL = elR = -70f; shLz = 22f; shRz = -22f;
         }
+        // Grenade: drawn back over the shoulder, then an overhand swing (past straight up to forward).
+        bool throwing = Throwing, throwArm = (ThrowReady || throwing) && armMode != Arms.Behind && CurrentPose != Pose.Hang;
+        if (throwArm)
+        {
+            if (throwing)
+            {
+                float u = Mathf.Clamp01((Time.time - throwStart) / ThrowSwing);
+                u = u * u * (3f - 2f * u);
+                shR = Mathf.Lerp(150f, 300f, u); elR = Mathf.Lerp(-100f, -10f, u); shRz = -8f;
+            }
+            else { shR = 150f; elR = -100f; shRz = -12f; }
+        }
 
         // ---------- apply ----------
         var hips = f.Hips;
@@ -224,9 +257,9 @@ public class FigureAnimator : MonoBehaviour
         Set(f.Neck, Quaternion.Euler(headPitch, headYaw, 0f), k);
 
         Set(f.ShoulderL, Quaternion.Euler(shL, 0f, shLz), k);
-        Set(f.ShoulderR, Quaternion.Euler(shR, 0f, shRz), k);
+        Set(f.ShoulderR, Quaternion.Euler(shR, 0f, shRz), throwArm ? Mathf.Max(k, 0.5f) : k);
         Set(f.ElbowL, Quaternion.Euler(elL, 0f, 0f), k);
-        Set(f.ElbowR, Quaternion.Euler(elR, 0f, 0f), k);
+        Set(f.ElbowR, Quaternion.Euler(elR, 0f, 0f), throwArm ? Mathf.Max(k, 0.5f) : k);
         // Walking: the gait joints follow the cycle exactly (no blend lag, so the stride is what the
         // cadence assumes); otherwise the usual blend between poses.
         float kLeg = walking && walkAmount >= 1f ? 1f : k;
@@ -239,9 +272,72 @@ public class FigureAnimator : MonoBehaviour
         Set(f.AnkleL, Quaternion.Euler(-(hipL + kneeL) * 0.5f, 0f, wide), kLeg);
         Set(f.AnkleR, Quaternion.Euler(-(hipR + kneeR) * 0.5f, 0f, -wide), kLeg);
 
+        bool guard = armMode == Arms.Guard && CurrentPose != Pose.Hang && CurrentPose != Pose.Glide;
+        GuardArms(f, guard, throwArm, dt);
+
         ExtraArms(f, s, swing, k);
         HandCurl(f, armMode, dt);
         if (jit > 0f) JitterLayer(f, jit, dt, mr);
+    }
+
+    // Fight stance by two-bone IK (after the body and head are posed, so the eyes are where the camera
+    // will be): each fist's guard point is in front of the eyes along the look, just under the eye line
+    // and guardSide to its side; a jab moves it in a straight line along the look until the wrist is at
+    // PunchReach of the arm's reach, then back. Elbow pole down and out (elbows tucked; they lift as the
+    // arm extends). Blended in and out with the guard.
+    void GuardArms(CharacterFigure f, bool guard, bool throwArm, float dt)
+    {
+        guardW = Mathf.MoveTowards(guardW, guard ? 1f : 0f, dt * 12f);
+        float s = f.Scale;
+        Quaternion look = Quaternion.Euler(Mathf.Clamp(LookPitch, -60f, 70f), LookYaw, 0f);
+        Vector3 F = look * Vector3.forward, U = look * Vector3.up, R = look * Vector3.right;
+        Vector3 eye = f.EyePosition(LookYaw);
+        Vector3 bodyRight = Quaternion.Euler(0f, bodyYaw, 0f) * Vector3.right;
+        for (int hand = 0; hand < 2; hand++)
+        {
+            Transform sh = hand == 0 ? f.ShoulderL : f.ShoulderR, el = hand == 0 ? f.ElbowL : f.ElbowR, wr = hand == 0 ? f.WristL : f.WristR;
+            if (sh == null || el == null || wr == null) continue;
+            if (guardW > 0f && !(hand == 1 && throwArm))
+            {
+                float side = hand == 0 ? -1f : 1f;
+                Vector3 S = sh.position;
+                float upper = Vector3.Distance(S, el.position), fore = Vector3.Distance(el.position, wr.position);
+                float reach = upper + fore;
+                Vector3 target = eye + F * guardForward * s - U * guardDrop * s + R * side * guardSide * s;
+                float p = PunchAmount(hand);
+                if (p > 0f)
+                {
+                    // Full extension along the look: |G + F L - S| = PunchReach x reach.
+                    Vector3 o = target - S;
+                    float b = Vector3.Dot(o, F), c = o.sqrMagnitude - (PunchReach * reach) * (PunchReach * reach);
+                    float disc = b * b - c;
+                    float L = disc > 0f ? Mathf.Max(0f, -b + Mathf.Sqrt(disc)) : 0f;
+                    target += F * L * p;
+                    if (p >= 1f) LastPunchTarget = target;
+                }
+                Vector3 pole = S + (Vector3.down + bodyRight * side * 0.6f) * reach;
+                Vector3 elbow = AimSolver.TwoBone(S, target, upper, fore, pole, out Vector3 reached);
+                Vector3 axis = Vector3.Cross(reached - S, pole - S);
+                if (axis.sqrMagnitude < 1e-8f) axis = bodyRight;
+                axis.Normalize();
+                Quaternion sh0 = sh.rotation, el0 = el.localRotation;
+                AimSolver.PointBone(sh, elbow, axis);
+                AimSolver.PointBone(el, reached, axis);
+                if (guardW < 1f)
+                {
+                    Quaternion el1 = el.localRotation;
+                    sh.rotation = Quaternion.Slerp(sh0, sh.rotation, guardW);
+                    el.localRotation = Quaternion.Slerp(el0, el1, guardW);
+                }
+            }
+            // Full extension reached: report where the fist actually is.
+            if (!extended[hand] && Time.time - punchStart[hand] >= PunchOut)
+            {
+                extended[hand] = true;
+                Transform fist = hand == 0 ? f.HandL : f.HandR;
+                PunchExtended?.Invoke(hand, fist != null ? fist.position : wr.position);
+            }
+        }
     }
 
     // Hands: fists for the guard, punches and the gun hand; otherwise a relaxed half-curl.

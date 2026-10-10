@@ -227,6 +227,61 @@ public class PoliceDispatch : MonoBehaviour
         return false;
     }
 
+    // ---------- combat events (officers killed, grenades, trunk theft) ----------
+
+    // An officer died: off the pursuit (and off the player, if it had hands on them). Killed by the
+    // player in sight of police (or with force already out), force stays / goes Lethal.
+    public void OnOfficerDown(OfficerAgent o, DamageInfo d)
+    {
+        officers.Remove(o);
+        if (cuffer == o)
+        {
+            var fpc = FirstPersonController.Instance;
+            if (fpc != null && arrest != Arrest.None) ReleasePlayer(fpc);
+            cuffer = null;
+        }
+        OfficersKilled++;
+        if (!d.byPlayer) return;
+        Vector3 p = o.transform.position + Vector3.up;
+        if (PoliceSees(p, triggerRange, out var by) || ForceLevel != Force.None)
+        {
+            EnsureWanted(2, by != null ? by : o.Home);
+            Escalate(Force.Lethal, "Officer down");
+        }
+    }
+    public static int OfficersKilled;
+
+    // A grenade thrown: landing near police (an officer or a police car within nearPolice m), or the
+    // throw seen, is lethal force.
+    public void ReportGrenadeThrown(Vector3 from, Vector3 landing, float nearPolice = 12f)
+    {
+        bool near = false;
+        float r2 = nearPolice * nearPolice;
+        foreach (var o in OfficerAgent.All) if (o != null && (o.transform.position - landing).sqrMagnitude < r2) { near = true; break; }
+        if (!near) foreach (var u in units) if (u != null && u.isActiveAndEnabled && (u.transform.position - landing).sqrMagnitude < r2) { near = true; break; }
+        if (!near && !PoliceSees(from + Vector3.up, triggerRange, out _)) return;
+        EnsureWanted(2, null);
+        Escalate(Force.Lethal, "Grenade!");
+    }
+
+    // An explosion the player caused, in sight of police: wanted 2 and lethal force.
+    public void ReportExplosion(Vector3 at)
+    {
+        if (!PoliceSees(at + Vector3.up, triggerRange, out var by)) return;
+        EnsureWanted(2, by);
+        Escalate(Force.Lethal, "Explosion");
+    }
+
+    // Opened a police car's trunk: in sight of an officer, wanted 1 (theft).
+    public void ReportTrunkTheft(Vector3 at)
+    {
+        if (!PoliceSees(at, triggerRange, out var by)) return;
+        EnsureWanted(1, by);
+        Show("POLICE: Theft from a patrol car");
+    }
+
+    public bool Sees(Vector3 p, float range) => PoliceSees(p, range, out _);
+
     // ---------- events from cars, the player and the ride ----------
 
     // Player's car hit something static.

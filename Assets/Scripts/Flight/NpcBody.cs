@@ -3,7 +3,8 @@ using UnityEngine;
 // A driver thrown out of a car (placeholder person: capsule + visor). Drivers are data only
 // (FlyingVehicle.hasDriver) until they're ejected; then this is spawned with the car's velocity plus a
 // shove out of the door. Falls under gravity, tracking its peak height: landing after a fall of
-// deadlyFall m or more kills it (lies flat, despawns after a minute). A shorter fall: it gets up and
+// deadlyFall m or more kills it (CharacterHealth: a ragdoll). Knocked out: lies flat, despawns after a
+// minute. Shots, fire, blasts and cars can kill it too (officer 100, civilian 60). A shorter fall: it gets up and
 // walks away from the player, despawning once out of view. Landing on a car's roof counts as landing
 // (and it rides along). Lives on the Player layer, so cars never push it.
 // Runs after the player (whose Update syncs the moved cars' colliders).
@@ -64,6 +65,7 @@ public class NpcBody : MonoBehaviour
         var npc = go.AddComponent<NpcBody>();
         npc.anim = go.AddComponent<FigureAnimator>();
         Flammable.Add(go, Flammable.Kind.Character);
+        CharacterHealth.Add(go, role);
         npc.bodyRend = fig.Renderers[0];
         return npc;
     }
@@ -146,7 +148,17 @@ public class NpcBody : MonoBehaviour
             platformYaw = car.PlatformRotation.eulerAngles.y;
             platformLocal = Quaternion.Inverse(car.PlatformRotation) * (transform.position - car.PlatformPosition);
         }
-        // A deadly fall, or knocked out: lies flat (a knocked-out body just stays down, placeholder).
+        // A deadly fall: dead (a ragdoll from here). Knocked out: lies flat (placeholder).
+        if (peakY - transform.position.y >= deadlyFall)
+        {
+            var health = GetComponent<CharacterHealth>();
+            if (health != null)
+            {
+                health.Velocity = new Vector3(velocity.x, -2f, velocity.z);
+                health.Kill(new DamageInfo { kind = DamageKind.Fall, point = transform.position, velocityChange = Vector3.zero });
+                return;
+            }
+        }
         if (peakY - transform.position.y >= deadlyFall || unconscious)
         {
             Dead = true;

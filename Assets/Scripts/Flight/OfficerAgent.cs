@@ -16,6 +16,9 @@ using UnityEngine;
 // Weapon: a T-gun on the hip; while PoliceDispatch calls AimAt it is drawn and aimed with the shared
 // arm IK (ArmAim) at the target plus an error that shrinks the longer it tracks, and shots leave the
 // muzzle along the barrel (LaserWeapon), so cover stops them. Stun(s) drops it like the player.
+// Health (CharacterHealth, 100): at 0 the gun drops (GunPickup, thrown with the hand's velocity), the
+// dispatcher is told (PoliceDispatch.OnOfficerDown) and the body becomes a ragdoll. A fall of 10 m or
+// more is fatal.
 // Lives on the Player layer: cars never push it; the player's fists hit it.
 // Runs after the player (whose Update syncs the moved cars' colliders), so it stands on cars cleanly.
 [DefaultExecutionOrder(110)]
@@ -74,6 +77,10 @@ public class OfficerAgent : MonoBehaviour
     float trackTime, seed;
     float stunUntil;
     public bool Stunned => Time.time < stunUntil;
+    public float deadlyFall = 10f;
+    float peakY;
+    Vector3 lastWrist, handVelocity;
+    public CharacterHealth Health { get; private set; }
 
     // ---------- spawning ----------
 
@@ -93,6 +100,15 @@ public class OfficerAgent : MonoBehaviour
         o.State = Phase.Foot;
         o.DropScooter(false);
         o.SetPlatform(car);
+        return o;
+    }
+
+    // Test hook: an officer standing on foot at `pos` (no unit, not part of a pursuit).
+    public static OfficerAgent DebugSpawn(Vector3 pos, Quaternion rot)
+    {
+        var o = Create(pos, rot, null);
+        o.State = Phase.Foot;
+        o.DropScooter(false);
         return o;
     }
 
@@ -117,6 +133,7 @@ public class OfficerAgent : MonoBehaviour
         cc.height = fig.Height; cc.center = new Vector3(0f, fig.Height * 0.5f, 0f);
         go.AddComponent<FigureAnimator>();
         Flammable.Add(go, Flammable.Kind.Character);
+        CharacterHealth.Add(go, CharacterFigure.Role.Police);
         var board = GameObject.CreatePrimitive(PrimitiveType.Cube);
         board.name = "Scooter";
         Object.Destroy(board.GetComponent<Collider>());
@@ -156,6 +173,22 @@ public class OfficerAgent : MonoBehaviour
     {
         fig = GetComponent<CharacterFigure>();
         if (fig != null) { gun = Weapon.BuildTGun(transform, gameObject.layer); HolsterGun(); }
+        Health = GetComponent<CharacterHealth>();
+        if (Health != null) Health.Died = OnDied;
+    }
+
+    // Killed: the gun drops, the dispatcher is told, the body falls as a ragdoll, the officer is gone.
+    bool OnDied(CharacterHealth h, DamageInfo d)
+    {
+        if (gun != null)
+        {
+            GunPickup.Drop(gun, handVelocity + Vector3.up * 0.5f);
+            gun = null;
+        }
+        PoliceDispatch.Instance?.OnOfficerDown(this, d);
+        if (fig != null && fig.Hips != null) Ragdoll.FromFigure(fig, h.Velocity, d);
+        Destroy(gameObject);
+        return true;
     }
 
     // Stun shot: down (Stunned pose) for `seconds`, no moving or shooting.
@@ -330,8 +363,16 @@ public class OfficerAgent : MonoBehaviour
 
         verticalVelocity = Grounded ? -2f : verticalVelocity + gravity * dt;
         groundCollider = null;
+        bool wasGrounded = Grounded;
+        if (!wasGrounded) peakY = Mathf.Max(peakY, transform.position.y);
         var flags = cc.Move((move + Vector3.up * verticalVelocity) * dt);
         Grounded = (flags & CollisionFlags.Below) != 0;
+        if (Grounded && !wasGrounded && peakY - transform.position.y >= deadlyFall && Health != null)
+        {
+            Health.Kill(new DamageInfo { kind = DamageKind.Fall, point = transform.position });
+            return;
+        }
+        if (Grounded) peakY = transform.position.y;
         if (Grounded)
         {
             var car = groundCollider != null ? groundCollider.GetComponentInParent<FlyingVehicle>() : null;
@@ -429,6 +470,8 @@ public class OfficerAgent : MonoBehaviour
             else if (car.Health != null) car.Health.Damage(gun.carDamage, h.point, h.normal);
         }
         PedestrianSystem.Shot(h.collider, mode == Weapon.Mode.Lethal, gun.stunTime, m);
+        if (mode == Weapon.Mode.Lethal) CharacterHealth.LaserHit(h, dir, gun.damage, false);
+        else { var other = h.collider.GetComponentInParent<OfficerAgent>(); if (other != null) other.Stun(gun.stunTime); }
         return false;
     }
 
@@ -436,6 +479,13 @@ public class OfficerAgent : MonoBehaviour
 
     void LateUpdate()
     {
+        if (fig != null && fig.WristR != null && Time.deltaTime > 0f)
+        {
+            Vector3 w = fig.WristR.position;
+            handVelocity = (w - lastWrist) / Time.deltaTime;
+            if (handVelocity.sqrMagnitude > 400f) handVelocity = Vector3.zero; // first frame / teleport
+            lastWrist = w;
+        }
         if (gun == null || fig == null) return;
         bool want = Aiming;
         if (want != gunDrawn)

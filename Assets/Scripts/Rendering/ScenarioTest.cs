@@ -12,7 +12,9 @@ using UnityEngine;
 //   push     : the player's car shoves a civilian off its line; it must be pulled back.
 //   district : spawn sanity, traffic lights obeyed (no street car enters a box on red), no gridlock,
 //              sky traffic stays on its lanes.
-public class ScenarioTest : MonoBehaviour
+//   combat   : officer health and ragdolls, burn marks, ignition chains, guard and jab, gun pickup,
+//              trunks, grenades (ScenarioCombat.cs).
+public partial class ScenarioTest : MonoBehaviour
 {
     readonly StringBuilder log = new StringBuilder();
     string scenarioName;
@@ -28,6 +30,7 @@ public class ScenarioTest : MonoBehaviour
             var go = new GameObject("ScenarioTest");
             DontDestroyOnLoad(go);
             go.AddComponent<ScenarioTest>().scenarioName = args[i + 1];
+            PlayerWeapon.ForceStartWithGun = args[i + 1] != "combat"; // the older scenarios expect a gun
             return;
         }
     }
@@ -62,6 +65,7 @@ public class ScenarioTest : MonoBehaviour
             case "seats": yield return SeatsTest(); break;
             case "daynight": yield return DayNightTest(); break;
             case "garments": yield return GarmentsTest(); break;
+            case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
