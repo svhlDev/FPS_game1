@@ -106,24 +106,24 @@ public static class SkyAvenueBuilder
         ta.hoverHeight = 0.5f;
         ta.maxLayer = 70;                                  // above the giants
 
-        var groundMat = GetMaterial("UnderworldGround", new Color(0.05f, 0.05f, 0.06f));
+        var groundMat = Surf(SurfaceType.Asphalt, MaterialLibrary.Variant.City, new Color(0.05f, 0.05f, 0.06f));
         var kit = CityDressing.CreateKit(LayerSpacing, TrafficBandMinLayer, TrafficBandMaxLayer);
-        var platformMat = GetMaterial("Platform", new Color(0.42f, 0.44f, 0.48f));
-        var propMat = GetMaterial("Prop", new Color(0.75f, 0.6f, 0.3f));
+        var platformMat = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.42f, 0.44f, 0.48f));
+        var propMat = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.Object, new Color(0.75f, 0.6f, 0.3f));
         var parkedMats = new[]
         {
-            GetMaterial("ParkedCar", new Color(0.2f, 0.8f, 0.3f)),
-            GetMaterial("ParkedCarRed", new Color(0.85f, 0.15f, 0.15f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.2f, 0.8f, 0.3f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.85f, 0.15f, 0.15f)),
         };
         var trafficMats = new[]
         {
-            GetMaterial("TrafficCar", new Color(0.95f, 0.55f, 0.1f)),
-            GetMaterial("TrafficCarYellow", new Color(0.95f, 0.85f, 0.2f)),
-            GetMaterial("TrafficCarTeal", new Color(0.1f, 0.7f, 0.7f)),
-            GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.95f, 0.55f, 0.1f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.95f, 0.85f, 0.2f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.1f, 0.7f, 0.7f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.55f, 0.3f, 0.8f)),
         };
-        var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
-        var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
+        var rackMat = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.City, new Color(0.15f, 0.15f, 0.17f));
+        var playerMat = Surf(SurfaceType.Rubber, MaterialLibrary.Variant.Object, new Color(0.9f, 0.9f, 0.9f));
 
         // Layout + traffic use `rng` (same sequence as before the look pass); setbacks and decoration
         // use their own stream, so both are deterministic per seed.

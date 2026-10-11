@@ -92,9 +92,9 @@ public static partial class CityDressing
             m.SetFloat("_EmissionStrength", 3.5f);
             m.SetVector("_BandLit", new Vector4(0.5f, 1.2f, 0.7f, 0f));
         });
-        kit.decoDark = LitMaterial("DecoDark", new Color(0.12f, 0.12f, 0.13f));
-        kit.bridge = LitMaterial("BridgeDeck", new Color(0.2f, 0.21f, 0.24f));
-        kit.padPaint = LitMaterial("LandingPadPaint", new Color(0.26f, 0.27f, 0.3f));
+        kit.decoDark = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.City, new Color(0.12f, 0.12f, 0.13f));
+        kit.bridge = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.2f, 0.21f, 0.24f));
+        kit.padPaint = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.City, new Color(0.26f, 0.27f, 0.3f));
         kit.neon = new[]
         {
             Neon("NeonCyan", new Color(0.2f, 0.9f, 1f), 4f),
@@ -774,13 +774,6 @@ public static partial class CityDressing
         EditorUtility.SetDirty(mat);
         return mat;
     }
-
-    static Material LitMaterial(string name, Color c) => ShaderMaterial(name, "Universal Render Pipeline/Lit", m =>
-    {
-        m.SetColor("_BaseColor", c);
-        m.SetFloat("_Smoothness", 0.3f);
-        m.enableInstancing = true;
-    });
 
     // Unlit emissive colour; intensity > 1 makes it bloom.
     static Material Neon(string name, Color c, float intensity) => ShaderMaterial(name, "Universal Render Pipeline/Unlit", m =>

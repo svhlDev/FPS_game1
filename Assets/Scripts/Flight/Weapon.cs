@@ -54,11 +54,9 @@ public class Weapon : MonoBehaviour
         root.gameObject.layer = layer;
         if (gunmetal == null)
         {
-            gunmetal = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = "Gunmetal", enableInstancing = true };
-            gunmetal.SetColor("_BaseColor", new Color(0.2f, 0.21f, 0.23f));
-            gunmetal.SetFloat("_Metallic", 0.6f);
-            gunmetal.SetFloat("_Smoothness", 0.55f);
-            stemBlack = CharacterFigure.Mat(new Color(0.03f, 0.03f, 0.035f));
+            // Gunmetal: dark painted finish worn to bare metal on the edges (surface library).
+            gunmetal = MaterialLibrary.Get(SurfaceType.PaintedMetal, new Color(0.2f, 0.21f, 0.23f), MaterialLibrary.Variant.Object);
+            stemBlack = MaterialLibrary.Get(SurfaceType.Rubber, new Color(0.03f, 0.03f, 0.035f), MaterialLibrary.Variant.Object);
         }
         var w = root.gameObject.AddComponent<Weapon>();
         w.grip = root;

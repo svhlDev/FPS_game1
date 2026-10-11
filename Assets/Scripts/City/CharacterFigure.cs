@@ -411,7 +411,6 @@ public class CharacterFigure : MonoBehaviour
     static readonly Color[] Skins = { new Color(0.86f, 0.68f, 0.55f), new Color(0.62f, 0.44f, 0.32f), new Color(0.42f, 0.29f, 0.2f), new Color(0.93f, 0.78f, 0.66f) };
     static readonly Color[] Shirts = { new Color(0.32f, 0.3f, 0.34f), new Color(0.38f, 0.26f, 0.24f), new Color(0.22f, 0.3f, 0.32f), new Color(0.4f, 0.37f, 0.3f), new Color(0.26f, 0.27f, 0.36f), new Color(0.3f, 0.33f, 0.26f) };
     static readonly Color[] Pants = { new Color(0.14f, 0.14f, 0.16f), new Color(0.2f, 0.19f, 0.17f), new Color(0.16f, 0.18f, 0.22f) };
-    static readonly Dictionary<Color, Material> mats = new Dictionary<Color, Material>();
 
     static Look Palette(Role role, System.Random rng)
     {
@@ -427,17 +426,8 @@ public class CharacterFigure : MonoBehaviour
         }
     }
 
-    // One shared lit material per colour (SRP batcher / instancing friendly).
-    public static Material Mat(Color c)
-    {
-        if (mats.TryGetValue(c, out var m) && m != null) return m;
-        var shader = Shader.Find("Universal Render Pipeline/Lit");
-        m = new Material(shader) { name = "Figure " + ColorUtility.ToHtmlStringRGB(c), enableInstancing = true };
-        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c); else m.color = c;
-        if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", 0.2f);
-        mats[c] = m;
-        return m;
-    }
+    // One shared material per colour (surface library: matte plastic, SRP batcher / instancing friendly).
+    public static Material Mat(Color c) => MaterialLibrary.Get(SurfaceType.Rubber, c, MaterialLibrary.Variant.Object);
 
     // ---------- far-tier mesh ----------
 

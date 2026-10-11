@@ -41,8 +41,8 @@ public static partial class CityDressing
     {
         var root = new GameObject("Streets").transform;
         root.SetParent(parent, false);
-        var asphalt = LitMaterial("StreetAsphalt", new Color(0.06f, 0.06f, 0.07f));
-        var paving = LitMaterial("StreetPaving", new Color(0.2f, 0.2f, 0.21f));
+        var asphalt = Surf(SurfaceType.Asphalt, MaterialLibrary.Variant.City, new Color(0.06f, 0.06f, 0.07f));
+        var paving = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.2f, 0.2f, 0.21f));
         var marking = Neon("StreetMarking", new Color(0.75f, 0.75f, 0.7f), 0.6f);
         var centerLine = Neon("StreetCenterLine", new Color(0.9f, 0.65f, 0.15f), 0.7f);
         var lampHead = Neon("StreetLamp", new Color(1f, 0.82f, 0.6f), 3f);
@@ -244,8 +244,8 @@ public static partial class CityDressing
     {
         return new SkywalkKit
         {
-            deck = LitMaterial("SkywalkDeck", new Color(0.28f, 0.29f, 0.32f)),
-            rail = LitMaterial("SkywalkRail", new Color(0.12f, 0.13f, 0.15f)),
+            deck = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.28f, 0.29f, 0.32f)),
+            rail = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.City, new Color(0.12f, 0.13f, 0.15f)),
             taxiPad = Neon("TaxiPad", new Color(1f, 0.75f, 0.15f), 1.5f),
         };
     }
@@ -474,7 +474,7 @@ public static partial class CityDressing
             Flat(plaza, "PadEdge", padCenter + o * 8f + Vector3.up * 0.04f, sz, edge, false);
         }
         var benchMat = kit.decoDark;
-        var planterMat = LitMaterial("Planter", new Color(0.12f, 0.3f, 0.14f));
+        var planterMat = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.12f, 0.3f, 0.14f));
         for (int i = 0; i < 26; i++)
         {
             Vector3 p = new Vector3(Mathf.Lerp(atrium.xMin + 3f, atrium.xMax - 3f, (float)rng.NextDouble()), yF,

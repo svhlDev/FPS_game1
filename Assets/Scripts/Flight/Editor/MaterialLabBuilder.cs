@@ -12,23 +12,22 @@ using static FlightGrayboxBuilder;
 //   - characters in each outfit (spawned at play: generation needs the runtime), the T-gun on a stand;
 //   - a car and a police car, a road section with lane markings, a tower facade block;
 //   - orbiting neon point and spot lights, a shaft-beam light (preset), a reflection probe.
-// Placeholder materials (URP Lit with each preset's colour, metallic, smoothness) until the surface
-// library replaces them (Phase 2).
+// Materials come from the surface library (MaterialLibrary, FPS/Surface): one row per material type.
 public static class MaterialLabBuilder
 {
     const string ScenePath = "Assets/Scenes/MaterialLab.unity";
     const string Folder = "Assets/Graybox/Lab";
 
-    // Material presets (Graphics spec Phase 2 table): name, colour, metallic, smoothness.
-    public static readonly (string name, Color color, float metallic, float smooth)[] Presets =
+    // One row per material type (Graphics spec Phase 2 table), with a typical colour.
+    public static readonly (string name, Color color)[] Presets =
     {
-        ("Concrete", new Color(0.5f, 0.5f, 0.48f), 0f, 0.15f), ("Asphalt", new Color(0.12f, 0.12f, 0.13f), 0f, 0.2f),
-        ("PaintedMetal", new Color(0.55f, 0.12f, 0.1f), 0.3f, 0.45f), ("BrushedMetal", new Color(0.7f, 0.7f, 0.72f), 1f, 0.55f),
-        ("Chrome", new Color(0.9f, 0.9f, 0.92f), 1f, 0.95f), ("Glass", new Color(0.05f, 0.07f, 0.08f), 0f, 0.95f),
-        ("Rubber", new Color(0.05f, 0.05f, 0.05f), 0f, 0.25f), ("CarPaint", new Color(0.1f, 0.25f, 0.6f), 0.5f, 0.8f),
-        ("Cotton", new Color(0.75f, 0.72f, 0.68f), 0f, 0.2f), ("Denim", new Color(0.18f, 0.24f, 0.38f), 0f, 0.25f),
-        ("Wool", new Color(0.4f, 0.3f, 0.25f), 0f, 0.1f), ("Leather", new Color(0.25f, 0.15f, 0.08f), 0f, 0.45f),
-        ("Vinyl", new Color(0.08f, 0.08f, 0.09f), 0f, 0.85f),
+        ("Concrete", new Color(0.5f, 0.5f, 0.48f)), ("Asphalt", new Color(0.12f, 0.12f, 0.13f)),
+        ("PaintedMetal", new Color(0.55f, 0.12f, 0.1f)), ("BrushedMetal", new Color(0.7f, 0.7f, 0.72f)),
+        ("Chrome", new Color(0.9f, 0.9f, 0.92f)), ("Glass", new Color(0.05f, 0.07f, 0.08f)),
+        ("Rubber", new Color(0.05f, 0.05f, 0.05f)), ("CarPaint", new Color(0.1f, 0.25f, 0.6f)),
+        ("Cotton", new Color(0.75f, 0.72f, 0.68f)), ("Denim", new Color(0.18f, 0.24f, 0.38f)),
+        ("Wool", new Color(0.4f, 0.3f, 0.25f)), ("Leather", new Color(0.25f, 0.15f, 0.08f)),
+        ("Vinyl", new Color(0.08f, 0.08f, 0.09f)),
     };
 
     [MenuItem("Tools/Build Material Lab")]
@@ -41,7 +40,7 @@ public static class MaterialLabBuilder
         var root = new GameObject("Lab").transform;
 
         // Ground and the city's night.
-        var ground = Slab(root, "Ground", new Vector3(0f, -0.05f, 10f), new Vector3(120f, 0.1f, 90f), GetMaterial("LabGround", new Color(0.09f, 0.09f, 0.1f)));
+        var ground = Slab(root, "Ground", new Vector3(0f, -0.05f, 10f), new Vector3(120f, 0.1f, 90f), Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.09f, 0.09f, 0.1f)));
         ground.gameObject.isStatic = true;
         var fog = CityDressing.AddHeightFog();
         fog.smogTop = 30f; fog.smogTopVariation = 0f; fog.smogDensity = 0.004f;
@@ -53,8 +52,8 @@ public static class MaterialLabBuilder
         var exhibits = new List<Transform>();
         for (int r = 0; r < Presets.Length; r++)
         {
-            var (name, color, metal, smooth) = Presets[r];
-            var mat = LabMaterial(name, color, metal, smooth);
+            var (name, color) = Presets[r];
+            var mat = LabMaterial(name, color, MaterialLibrary.Variant.Smooth);
             var row = new GameObject(name).transform; row.SetParent(shapes, false);
             row.localPosition = new Vector3(-12f + (r % 7) * 4f, 0f, r < 7 ? 0f : 4.5f);
             for (int s = 0; s < meshes.Length; s++)
@@ -75,20 +74,20 @@ public static class MaterialLabBuilder
         var chars = new GameObject("Characters").transform; chars.SetParent(root, false);
         chars.localPosition = new Vector3(-3f, 0f, 12f);
         chars.localRotation = Quaternion.Euler(0f, 180f, 0f);
-        var stand = Slab(root, "GunStand", new Vector3(5f, 0.5f, 12f), new Vector3(0.6f, 1f, 0.6f), LabMaterial("Concrete", Presets[0].color, 0f, 0.15f));
+        var stand = Slab(root, "GunStand", new Vector3(5f, 0.5f, 12f), new Vector3(0.6f, 1f, 0.6f), LabMaterial("Concrete", Presets[0].color, MaterialLibrary.Variant.City));
         var gunAt = new GameObject("Gun").transform; gunAt.SetParent(stand, false); gunAt.localPosition = new Vector3(0f, 0.65f, 0f);
 
         // Cars.
-        var car = CreateVehicle("LabCar", GetMaterial("TrafficCar", new Color(0.95f, 0.55f, 0.1f)));
+        var car = CreateVehicle("LabCar", Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.95f, 0.55f, 0.1f)));
         car.transform.SetParent(root, false); car.transform.position = new Vector3(9f, CarRootAboveUnderside + 0.2f, 12f);
         car.enabled = false;
-        var police = CreateVehicle("LabPoliceCar", GetMaterial("PoliceBody", new Color(0.04f, 0.07f, 0.2f)));
+        var police = CreateVehicle("LabPoliceCar", Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.04f, 0.07f, 0.2f)));
         police.transform.SetParent(root, false); police.transform.position = new Vector3(12f, CarRootAboveUnderside + 0.2f, 12f);
         police.enabled = false;
         exhibits.Add(car.transform);
 
         // Road section with lane markings, and a facade block.
-        var road = Slab(root, "Road", new Vector3(0f, 0.01f, 24f), new Vector3(40f, 0.02f, 12f), LabMaterial("Asphalt", Presets[1].color, 0f, 0.2f));
+        var road = Slab(root, "Road", new Vector3(0f, 0.01f, 24f), new Vector3(40f, 0.02f, 12f), LabMaterial("Asphalt", Presets[1].color, MaterialLibrary.Variant.City));
         var paint = GetUnlitMaterial("LabLanePaint", new Color(0.8f, 0.8f, 0.75f), 0.6f);
         for (int i = -4; i <= 4; i++)
         {
@@ -149,15 +148,8 @@ public static class MaterialLabBuilder
         EditorApplication.Exit(ok ? 0 : 1);
     }
 
-    // Placeholder until the surface library (Phase 2): URP Lit with the preset's look.
-    static Material LabMaterial(string name, Color c, float metallic, float smooth)
-    {
-        var m = GetMaterial("Lab_" + name, c);
-        m.SetFloat("_Metallic", metallic);
-        m.SetFloat("_Smoothness", smooth);
-        EditorUtility.SetDirty(m);
-        return m;
-    }
+    static Material LabMaterial(string name, Color c, MaterialLibrary.Variant variant) =>
+        MaterialLibrary.Get((SurfaceType)System.Enum.Parse(typeof(SurfaceType), name), c, variant);
 
     static void Label(Transform parent, string text, Vector3 local)
     {

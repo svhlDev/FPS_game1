@@ -29,8 +29,8 @@ public static partial class CityDressing
     {
         var root = new GameObject("Street").transform;
         root.SetParent(parent, false);
-        var asphalt = LitMaterial("StreetAsphalt", new Color(0.06f, 0.06f, 0.07f));
-        var paving = LitMaterial("StreetPaving", new Color(0.2f, 0.2f, 0.21f));
+        var asphalt = Surf(SurfaceType.Asphalt, MaterialLibrary.Variant.City, new Color(0.06f, 0.06f, 0.07f));
+        var paving = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.2f, 0.2f, 0.21f));
         var marking = Neon("StreetMarking", new Color(0.75f, 0.75f, 0.7f), 0.6f);       // under the bloom threshold
         var centerLine = Neon("StreetCenterLine", new Color(0.9f, 0.65f, 0.15f), 0.7f);
         var lampHead = Neon("StreetLamp", new Color(1f, 0.82f, 0.6f), 3f);

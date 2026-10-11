@@ -735,6 +735,16 @@ public partial class ScenarioTest : MonoBehaviour
             View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot(pr + "_materials");
             View(people, people + new Vector3(0.5f, 0.6f, -5f)); yield return Shot(pr + "_people");
         }
+        // Close-ups under the overcast preset (neutral light): the detail of each type.
+        lab.SetPreset(MaterialLab.Preset.Overcast);
+        foreach (var n in new[] { "Concrete", "Asphalt", "PaintedMetal", "BrushedMetal", "CarPaint", "Cotton", "Denim", "Wool", "Leather" })
+        {
+            var mats = GameObject.Find("Materials");
+            var row = mats != null ? mats.transform.Find(n) : null;
+            if (row == null) continue;
+            Vector3 c = row.transform.position + new Vector3(0f, 0.6f, -0.8f);
+            View(c, c + new Vector3(0.6f, 0.9f, -2.2f)); yield return Shot("close_" + n);
+        }
         lab.SetPreset(MaterialLab.Preset.NightNeon);
         lab.SetWet(true); View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot("wet"); lab.SetWet(false);
         // Phase 1 before / after: SSAO and film grain off, Neutral tonemapping.

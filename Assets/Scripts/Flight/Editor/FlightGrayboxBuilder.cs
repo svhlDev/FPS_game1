@@ -55,30 +55,30 @@ public static class FlightGrayboxBuilder
         mainCam.clearFlags = CameraClearFlags.SolidColor;
         mainCam.backgroundColor = fogColor;
 
-        var groundMat = GetMaterial("Ground", new Color(0.3f, 0.32f, 0.3f));
+        var groundMat = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.3f, 0.32f, 0.3f));
         var towerMats = new[]
         {
-            GetMaterial("TowerA", new Color(0.62f, 0.62f, 0.65f)),
-            GetMaterial("TowerB", new Color(0.5f, 0.52f, 0.56f)),
-            GetMaterial("TowerC", new Color(0.7f, 0.68f, 0.64f)),
+            Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.62f, 0.62f, 0.65f)),
+            Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.5f, 0.52f, 0.56f)),
+            Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.7f, 0.68f, 0.64f)),
         };
-        var platformMat = GetMaterial("Platform", new Color(0.42f, 0.44f, 0.48f));
-        var propMat = GetMaterial("Prop", new Color(0.75f, 0.6f, 0.3f));
+        var platformMat = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.42f, 0.44f, 0.48f));
+        var propMat = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.Object, new Color(0.75f, 0.6f, 0.3f));
         var parkedMats = new[]
         {
-            GetMaterial("ParkedCar", new Color(0.2f, 0.8f, 0.3f)),
-            GetMaterial("ParkedCarRed", new Color(0.85f, 0.15f, 0.15f)),
-            GetMaterial("ParkedCarWhite", new Color(0.92f, 0.92f, 0.95f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.2f, 0.8f, 0.3f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.85f, 0.15f, 0.15f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.92f, 0.92f, 0.95f)),
         };
         var trafficMats = new[]
         {
-            GetMaterial("TrafficCar", new Color(0.95f, 0.55f, 0.1f)),
-            GetMaterial("TrafficCarYellow", new Color(0.95f, 0.85f, 0.2f)),
-            GetMaterial("TrafficCarTeal", new Color(0.1f, 0.7f, 0.7f)),
-            GetMaterial("TrafficCarPurple", new Color(0.55f, 0.3f, 0.8f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.95f, 0.55f, 0.1f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.95f, 0.85f, 0.2f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.1f, 0.7f, 0.7f)),
+            Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.55f, 0.3f, 0.8f)),
         };
-        var rackMat = GetMaterial("Rack", new Color(0.15f, 0.15f, 0.17f));
-        var playerMat = GetMaterial("Player", new Color(0.9f, 0.9f, 0.9f));
+        var rackMat = Surf(SurfaceType.PaintedMetal, MaterialLibrary.Variant.City, new Color(0.15f, 0.15f, 0.17f));
+        var playerMat = Surf(SurfaceType.Rubber, MaterialLibrary.Variant.Object, new Color(0.9f, 0.9f, 0.9f));
 
         var rng = new System.Random(7);
 
@@ -483,11 +483,11 @@ public static class FlightGrayboxBuilder
     // Patrols `path` like traffic until PoliceDispatch sends it after the player.
     internal static FlyingVehicle CreatePoliceCar(string name, Transform parent, LanePath path, float distance, int level, float speed)
     {
-        var v = CreateVehicle(name, GetMaterial("PoliceBody", new Color(0.04f, 0.07f, 0.2f)));
+        var v = CreateVehicle(name, Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.04f, 0.07f, 0.2f)));
         // The band is just proud of the body's sides, the bar sits on the roof.
         Vector3 h = CarSize * 0.5f;
         LightBox(v.gameObject, "Band", new Vector3(0f, 0.05f, 0f), new Vector3(CarSize.x + 0.04f, CarSize.y * 0.23f, CarSize.z * 0.57f),
-                 GetMaterial("PoliceWhite", new Color(0.85f, 0.87f, 0.9f)));
+                 Surf(SurfaceType.CarPaint, MaterialLibrary.Variant.Object, new Color(0.85f, 0.87f, 0.9f)));
         LightBox(v.gameObject, "BarBlue", new Vector3(-h.x * 0.3f, h.y + 0.06f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.12f, 0.25f),
                  GetUnlitMaterial("PoliceBarBlue", new Color(0.15f, 0.35f, 1f), 4f));
         LightBox(v.gameObject, "BarRed", new Vector3(h.x * 0.3f, h.y + 0.06f, -h.z * 0.13f), new Vector3(h.x * 0.57f, 0.12f, 0.25f),
@@ -647,6 +647,10 @@ public static class FlightGrayboxBuilder
     internal static void SetMat(GameObject go, Material m) => go.GetComponent<Renderer>().sharedMaterial = m;
     internal static void SetMat(Transform t, Material m) => SetMat(t.gameObject, m);
 
+    // Surface library material (Graphics Phase 2), saved as an asset under Assets/Graybox/Surfaces.
+    internal static Material Surf(SurfaceType type, MaterialLibrary.Variant variant, Color color) => MaterialLibrary.Get(type, color, variant);
+
+    // Plain URP Lit by name: only for the few special materials (emissive thrusters, the goal pad).
     internal static Material GetMaterial(string name, Color color)
     {
         string assetPath = $"{MaterialFolder}/{name}.mat";
