@@ -37,7 +37,7 @@ public class PedestrianSystem : MonoBehaviour
 
     public static PedestrianSystem Instance { get; private set; }
 
-    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone, Down }
+    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone, Down, Shocked }
 
     public class Ped
     {
@@ -55,6 +55,9 @@ public class PedestrianSystem : MonoBehaviour
         internal FigureAnimator anim;
         internal float bob, vy, lastStare;
         internal bool downLethal;
+        internal Vector3 knock;           // displacement still to apply (eased out)
+        internal float staggerUntil, lastShock = -100f, shockStart;
+        internal bool facing;             // backing away: keep facing fleeFrom
         public int seed;
         internal BodyAsset body;   // cached once the pool is full
         public bool IsNear => near != null;
@@ -104,6 +107,20 @@ public class PedestrianSystem : MonoBehaviour
     }
 
     public static bool IsPedestrian(Collider c) => Find(c) != null;
+
+    // A near pedestrian (by its agent object) shoved `displacement` and staggered for `seconds`.
+    public static bool Knock(Transform agent, Vector3 displacement, float seconds)
+    {
+        if (Instance == null) return false;
+        foreach (var p in Instance.nearList)
+            if (p.near == agent)
+            {
+                p.knock += new Vector3(displacement.x, 0f, displacement.z);
+                p.staggerUntil = Mathf.Max(p.staggerUntil, Time.time + seconds);
+                return true;
+            }
+        return false;
+    }
 
     public static Ped Find(Collider c)
     {
@@ -374,7 +391,18 @@ public class PedestrianSystem : MonoBehaviour
         if (p != null) Despawn(p); else h.gameObject.SetActive(false);
         return true;
     }
-    public static int PedestriansKilled;
+    public static int PedestriansKilled, SawBodies;
+    int bodyCursor;
+
+    // Pedestrians near `p` (within `radius`, in the near tier): who could have seen something.
+    public static int Witnesses(Vector3 p, float radius)
+    {
+        if (Instance == null) return 0;
+        int n = 0;
+        foreach (var x in Instance.nearList)
+            if ((x.pos - p).sqrMagnitude < radius * radius && PoliceDispatch.LineOfSight(x.pos + Vector3.up * 1.5f, p + Vector3.up)) n++;
+        return n;
+    }
 
     // ---------- update ----------
 
@@ -410,6 +438,24 @@ public class PedestrianSystem : MonoBehaviour
             if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<Ped>();
             list.Add(p);
         }
+
+        // Bodies: pedestrians who come near one stop, back away and flee (a few each frame).
+        if (Ragdoll.All.Count > 0 && nearList.Count > 0)
+            for (int k = 0; k < Mathf.Min(8, nearList.Count); k++)
+            {
+                bodyCursor = (bodyCursor + 1) % nearList.Count;
+                var p = nearList[bodyCursor];
+                if (p.state == State.Down || p.state == State.Fleeing || p.state == State.Shocked || Time.time - p.lastShock < 30f) continue;
+                foreach (var r in Ragdoll.All)
+                {
+                    if (r == null || r.HipsBody == null) continue;
+                    Vector3 d = r.HipsBody.position - p.pos;
+                    if (Mathf.Abs(d.y) > 3f || d.x * d.x + d.z * d.z > 10f * 10f) continue;
+                    p.state = State.Shocked; p.shockStart = Time.time; p.lastShock = Time.time; p.fleeFrom = r.HipsBody.position;
+                    SawBodies++;
+                    break;
+                }
+            }
 
         var fpc = FirstPersonController.Instance;
         bool roofRider = fpc != null && fpc.isActiveAndEnabled && fpc.Platform != null;
@@ -461,6 +507,18 @@ public class PedestrianSystem : MonoBehaviour
     // Desired velocity: along the path (with a lane offset), waiting at crosswalks, fleeing, staring.
     Vector3 Steer(Ped p, float dt, Vector3? roofRider)
     {
+        p.facing = false;
+        if (Time.time < p.staggerUntil && p.state != State.Down) return Vector3.zero;
+        // A body nearby: stop and stare, back away from it, then run.
+        if (p.state == State.Shocked)
+        {
+            float t = Time.time - p.shockStart;
+            Vector3 from = p.pos - p.fleeFrom; from.y = 0f;
+            if (from.sqrMagnitude > 0.01f && t < 2.1f) { p.facing = true; p.yaw = Mathf.MoveTowardsAngle(p.yaw, Mathf.Atan2(-from.x, -from.z) * Mathf.Rad2Deg, 360f * Time.deltaTime); }
+            if (t < 0.6f) return Vector3.zero;
+            if (t < 2.1f) return from.sqrMagnitude > 0.01f ? from.normalized * 1f : Vector3.zero;
+            p.state = State.Fleeing; p.until = Time.time + 5f;
+        }
         // Shot: on the ground, then up and running (or gone).
         if (p.state == State.Down)
         {
@@ -553,7 +611,13 @@ public class PedestrianSystem : MonoBehaviour
             if (d < 2f && d > 0.01f) push += r / d * (2f - d) * 2f;
         }
         Vector3 vel = want + push;
-        if (vel.sqrMagnitude > 0.01f) p.yaw = Mathf.MoveTowardsAngle(p.yaw, Mathf.Atan2(vel.x, vel.z) * Mathf.Rad2Deg, 360f * dt);
+        if (!p.facing && vel.sqrMagnitude > 0.01f) p.yaw = Mathf.MoveTowardsAngle(p.yaw, Mathf.Atan2(vel.x, vel.z) * Mathf.Rad2Deg, 360f * dt);
+        if (p.knock.sqrMagnitude > 1e-6f && dt > 0f)
+        {
+            Vector3 step = p.knock * (1f - Mathf.Exp(-10f * dt));
+            p.knock -= step;
+            vel += step / dt;
+        }
 
         p.vy = p.cc.isGrounded ? -2f : p.vy + gravity * dt;
         p.cc.Move((vel + Vector3.up * p.vy) * dt);
@@ -566,7 +630,8 @@ public class PedestrianSystem : MonoBehaviour
             p.anim.Grounded = p.cc.isGrounded;
             p.anim.LookYaw = p.yaw;
             p.anim.LookPitch = p.state == State.Staring ? -35f : 0f;
-            p.anim.CurrentPose = p.state == State.Down ? (p.downLethal ? FigureAnimator.Pose.Fallen : FigureAnimator.Pose.Stunned) : FigureAnimator.Pose.Normal;
+            p.anim.CurrentPose = p.state == State.Down ? (p.downLethal ? FigureAnimator.Pose.Fallen : FigureAnimator.Pose.Stunned)
+                               : Time.time < p.staggerUntil ? FigureAnimator.Pose.Staggered : FigureAnimator.Pose.Normal;
         }
         // Fell off something: back to the nearest node.
         if (p.pos.y < -5f) Despawn(p);

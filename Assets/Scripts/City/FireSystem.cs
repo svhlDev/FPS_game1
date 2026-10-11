@@ -6,7 +6,10 @@ using UnityEngine;
 //   a wall (normal.y < 0.5) : stick and run down it at slideSpeed until the surface below is horizontal,
 //                             or the wall ends (then fall again);
 //   a floor                 : land;
-//   a car or a character    : 15 fire damage and heat, then drop and land beneath it.
+//   a car                   : 15 fire damage and heat; on its roof (normal up) the chunk lands and the
+//                             patch rides the car, on a side it slides off and keeps falling from there;
+//   a character             : (its BodyPart triggers only; CharacterControllers are ignored) 15 fire
+//                             damage and heat, then it falls on past that body.
 // Landing makes a fire patch that burns patchLife s. Landing within mergeRadius of a patch pools into
 // it instead (bigger, hotter). Patches on a car ride along with it.
 // Heat: a 2 m spatial hash refreshed every 0.25 s; each patch adds its intensity to its cell (half to
@@ -24,7 +27,7 @@ public class FireSystem : MonoBehaviour
     public float activeRadius = 250f;
     const float Cell = 2f;
 
-    struct Chunk { public Vector3 pos, vel, wallNormal; public bool sliding; public float age; }
+    struct Chunk { public Vector3 pos, vel, wallNormal; public bool sliding; public float age; public Transform passed; }
     public class Patch
     {
         public Vector3 pos;              // world, or local to `car`
@@ -170,22 +173,35 @@ public class FireSystem : MonoBehaviour
         for (int i = 0; i < n; i++)
         {
             var col = hits[i].collider;
+            if (col is CharacterController) continue;                         // people only by their body parts
             if (col.isTrigger && col.GetComponent<BodyPart>() == null) continue;
+            if (c.passed != null && col.transform.IsChildOf(c.passed)) continue; // the body it already burned
             if (hits[i].distance < bd) { bd = hits[i].distance; best = i; }
         }
         if (best < 0) { c.pos += step; return c.pos.y < -10f; }
 
         var h = hits[best];
-        // A car or a character: burn it, then drop beneath it.
+        // A car: burn it; on the roof the chunk stays (the patch rides along), off a side it slides away.
         var car = h.collider.GetComponentInParent<FlyingVehicle>();
         var flam = h.collider.GetComponentInParent<Flammable>();
-        if (car != null || (flam != null && flam.kind == Flammable.Kind.Character))
+        if (car != null)
         {
-            if (car != null && car.Health != null) car.Health.Damage(chunkDamage, h.point, h.normal);
+            if (car.Health != null) car.Health.Damage(chunkDamage, h.point, h.normal);
             if (flam != null) flam.AddHeat(1f, chunkDamage);
-            float drop = car != null ? car.BodyHalfExtents.y * 2f + 0.3f : 2f;
-            c.pos = new Vector3(h.point.x, (car != null ? car.transform.position.y : h.point.y) - drop, h.point.z);
-            c.vel = new Vector3(0f, Mathf.Min(c.vel.y, -2f), 0f);
+            if (h.normal.y > 0.5f) { Land(h.point, h.collider); return true; }
+            Vector3 side = new Vector3(h.normal.x, 0f, h.normal.z);
+            side = side.sqrMagnitude > 1e-4f ? side.normalized : Vector3.zero;
+            c.pos = h.point + h.normal * 0.06f;
+            c.vel = side * 0.8f + Vector3.up * Mathf.Min(c.vel.y, 0f);
+            return false;
+        }
+        // A character's body part: burn them, fall on past.
+        if (flam != null && flam.kind == Flammable.Kind.Character)
+        {
+            flam.AddHeat(1f, chunkDamage);
+            c.passed = flam.transform;
+            c.pos = h.point;
+            c.vel = new Vector3(c.vel.x * 0.3f, Mathf.Min(c.vel.y, -1f), c.vel.z * 0.3f);
             return false;
         }
         if (h.normal.y < 0.5f)

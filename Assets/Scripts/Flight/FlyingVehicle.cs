@@ -1490,25 +1490,70 @@ public class FlyingVehicle : MonoBehaviour
         transform.SetPositionAndRotation(pos, rot);
     }
 
-    // A wreck: no hover, full gravity, keeps its momentum, tumbles a little; once at rest it lies there
-    // burning (VehicleHealth), then smoulders and stops updating.
+    // A wreck: no hover, full gravity, keeps its momentum. Falling fast it noses down toward 35 deg;
+    // within 3 m of a surface below it levels out to -4 deg (nose slightly up) over 0.3 s. At rest the
+    // underside is snapped onto the surface (no hover): it lies flat, trunk at normal height, burning
+    // (VehicleHealth), then smoulders and stops updating.
+    public const float WreckRestPitch = -4f;
+    bool wreckSettled;
+
     void UpdateWreck()
     {
-        if (Health.Smouldering && velocity.sqrMagnitude < 0.01f) return;
+        if (wreckSettled && velocity.sqrMagnitude < 0.01f) return;
         float dt = Time.deltaTime;
         velocity += Physics.gravity * dt;
         velocity.x *= Mathf.Exp(-0.1f * dt); velocity.z *= Mathf.Exp(-0.1f * dt);
-        pitch = Mathf.MoveTowards(pitch, 35f, 20f * dt);
+        bool low = GroundBelow(3f, out _);
+        if (low) pitch = Mathf.MoveTowards(pitch, WreckRestPitch, 130f * dt);       // 35 deg to -4 in 0.3 s
+        else if (velocity.y < -8f) pitch = Mathf.MoveTowards(pitch, 35f, 20f * dt);
         Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
         Vector3 before = transform.position;
         Vector3 pos = MoveAndCollide(before, velocity * dt, rot);
         transform.SetPositionAndRotation(pos, rot);
-        if ((pos - before).sqrMagnitude < 0.0004f && velocity.y > -1f)
+        // At rest only when something is under it (a wreck dropped from a standstill isn't).
+        if ((pos - before).sqrMagnitude < 0.0004f && velocity.y > -1f && GroundBelow(0.3f + Mathf.Abs(pitch) * 0.04f, out _))
         {
             velocity = Vector3.zero;
+            SettleFlat(WreckRestPitch);
+            wreckSettled = true;
             Health.OnRest();
         }
     }
+
+    // Distance from the body's underside to a surface below (not this car), within `range`.
+    bool GroundBelow(float range, out float surfaceAt)
+    {
+        surfaceAt = 0f;
+        Vector3 c = transform.TransformPoint(colCenter);
+        float under = colHalf.y + 0.05f;
+        var hits = Physics.RaycastAll(c, Vector3.down, under + range, collisionMask, QueryTriggerInteraction.Ignore);
+        float best = float.MaxValue;
+        foreach (var h in hits)
+        {
+            if (h.collider.transform.IsChildOf(transform) || h.collider.attachedRigidbody != null && !h.collider.attachedRigidbody.isKinematic) continue;
+            if (h.distance < best) { best = h.distance; surfaceAt = h.point.y; }
+        }
+        return best < float.MaxValue;
+    }
+
+    // Lie flat at `restPitch` with the lowest corner of the underside on the surface below.
+    void SettleFlat(float restPitch)
+    {
+        if (!GroundBelow(2f, out float y)) return;
+        pitch = restPitch;
+        Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
+        float lowest = float.MaxValue;
+        for (int i = 0; i < 4; i++)
+        {
+            Vector3 corner = colCenter + new Vector3(((i & 1) == 0 ? -1f : 1f) * colHalf.x, -colHalf.y, ((i & 2) == 0 ? -1f : 1f) * colHalf.z);
+            lowest = Mathf.Min(lowest, (rot * corner).y);
+        }
+        Vector3 p = transform.position;
+        transform.SetPositionAndRotation(new Vector3(p.x, y - lowest, p.z), rot);
+    }
+
+    // Test hook.
+    public float DebugPitch => pitch;
 
     // No propulsion: the velocity dies out over disableStopTime. The backup hover holds altitude,
     // unless the police are towing it down (or nobody is in it: then it sinks slowly). It comes to
@@ -1558,7 +1603,9 @@ public class FlyingVehicle : MonoBehaviour
             if (OnSurface) ghostCars = false;
         }
 
-        Quaternion rot = PlatformRotation;
+        // Downed cars level out (0 deg over 0.3 s).
+        pitch = Mathf.MoveTowards(pitch, 0f, 100f * dt);
+        Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
         Vector3 pos = MoveAndCollide(transform.position, velocity * dt, rot);
         transform.SetPositionAndRotation(pos, rot);
         SyncAttached(); // dockers ride along

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 // Procedural poses for a CharacterFigure (no imported animations). The owner sets the inputs each
@@ -18,6 +19,10 @@ using UnityEngine;
 //   Behind (cuffed, straining while struggling), Aim (right arm left to PlayerWeapon's IK; the body
 //   turns once the aim is more than 70 degrees off it, and leans for aim pitch beyond 60 degrees).
 //   Whole-body poses: glide, hang, seated, stunned (lying), officer cuffing / dragging, scooter.
+// Hit reactions (additive, after the pose): a hit kicks the joint above the hit part away along the
+// hit (React), and a damped spring (4 Hz, damping 0.45: it wobbles back once) returns it:
+//   head -> neck 35 deg back, body -> spine 15, arm -> shoulder 40, leg -> hip 20, hand / foot -> wrist /
+//   ankle 30. Lasers react at half strength. A killing hit hands the spinning joints to the ragdoll.
 // Generated bodies (CharacterFigure.Generated) add a procedural layer from their DNA:
 //   Size and fat: heavier bodies sway more and walk with their legs wider apart; STR lengthens the
 //   stride (bigger swing, slower cadence).
@@ -74,6 +79,105 @@ public class FigureAnimator : MonoBehaviour
     float guardW, throwStart = -10f;
     const float ThrowSwing = 0.3f;
     public Vector3 LastPunchTarget { get; private set; }
+
+    // ---------- hit reactions ----------
+    public const float ReactHz = 4f, ReactDamping = 0.45f;
+    public class Reaction { public Transform joint; public Vector3 axisLocal; public float angle, speed; } // axis in the joint's parent frame, deg, deg/s
+    readonly List<Reaction> reactions = new List<Reaction>();
+    public IReadOnlyList<Reaction> Reactions => reactions;
+    public float ReactionAngle(Transform j) { float a = 0f; foreach (var r in reactions) if (r.joint == j) a += r.angle; return a; }
+
+    // Peak angle (deg) per hit location, full strength.
+    public static float ReactAngle(BodyPart.Location loc) => loc switch
+    {
+        BodyPart.Location.Head => 35f, BodyPart.Location.Body => 15f, BodyPart.Location.Arm => 40f,
+        BodyPart.Location.Leg => 20f, _ => 30f,
+    };
+
+    // A hit at `point` along `dir` on the part at `loc` (`part`: the hit collider's transform, for the
+    // side). strength 1 = a punch, 0.5 = a laser. The joint's spring gets the speed that peaks at the
+    // angle (underdamped: peak = v / w x exp(-z / sqrt(1 - z^2) x atan(sqrt(1 - z^2) / z))).
+    public void React(BodyPart.Location loc, Transform part, Vector3 point, Vector3 dir, float strength = 1f)
+    {
+        var f = Figure != null ? Figure : GetComponent<CharacterFigure>();
+        if (f == null || f.Hips == null || dir.sqrMagnitude < 1e-6f) return;
+        Transform joint = ReactJoint(f, loc, part, point);
+        if (joint == null) return;
+        Vector3 lever = point - joint.position;
+        if (lever.sqrMagnitude < 1e-4f) lever = (f.Head != null ? f.Head.position : joint.position + Vector3.up) - joint.position;
+        Vector3 axis = Vector3.Cross(lever, dir);
+        if (axis.sqrMagnitude < 1e-8f) axis = Vector3.Cross(Vector3.up, dir);
+        if (axis.sqrMagnitude < 1e-8f) return;
+        axis.Normalize();
+        Transform parent = joint.parent != null ? joint.parent : transform;
+        float w = 2f * Mathf.PI * ReactHz, rz = Mathf.Sqrt(1f - ReactDamping * ReactDamping);
+        float peak = Mathf.Exp(-ReactDamping / rz * Mathf.Atan2(rz, ReactDamping));
+        reactions.Add(new Reaction { joint = joint, axisLocal = Quaternion.Inverse(parent.rotation) * axis, speed = ReactAngle(loc) * strength * w / peak });
+        if (reactions.Count > 12) reactions.RemoveAt(0);
+    }
+
+    // A body blow without a hit location (a hard landing): the spine pitched along `dir`.
+    public void Stumble(Vector3 dir, float degrees)
+    {
+        var f = Figure != null ? Figure : GetComponent<CharacterFigure>();
+        if (f == null || f.Spine == null) return;
+        Vector3 axis = Vector3.Cross(Vector3.up, dir);
+        if (axis.sqrMagnitude < 1e-8f) return;
+        Transform parent = f.Spine.parent;
+        float w = 2f * Mathf.PI * ReactHz, rz = Mathf.Sqrt(1f - ReactDamping * ReactDamping);
+        float peak = Mathf.Exp(-ReactDamping / rz * Mathf.Atan2(rz, ReactDamping));
+        reactions.Add(new Reaction { joint = f.Spine, axisLocal = Quaternion.Inverse(parent.rotation) * axis.normalized, speed = degrees * w / peak });
+    }
+
+    static Transform ReactJoint(CharacterFigure f, BodyPart.Location loc, Transform part, Vector3 point)
+    {
+        bool left = part != null ? Under(part, f.ShoulderL) || Under(part, f.HipL)
+                                 : Vector3.Dot(point - f.Hips.position, f.Hips.right) < 0f;
+        switch (loc)
+        {
+            case BodyPart.Location.Head: return f.Neck;
+            case BodyPart.Location.Body: return f.Spine;
+            case BodyPart.Location.Arm: return left ? f.ShoulderL : f.ShoulderR;
+            case BodyPart.Location.Leg: return left ? f.HipL : f.HipR;
+            case BodyPart.Location.Hand: return left ? f.WristL : f.WristR;
+            default: return left ? f.AnkleL : f.AnkleR;
+        }
+    }
+
+    static bool Under(Transform t, Transform ancestor) => ancestor != null && t != null && t.IsChildOf(ancestor);
+
+    // Springs back, added on top of whatever pose was set this frame. The joints get their unreacted
+    // rotation back before the next pose (the pose blends from it), so the offset never accumulates.
+    readonly Dictionary<Transform, Quaternion> unreacted = new Dictionary<Transform, Quaternion>();
+
+    void RestoreUnreacted()
+    {
+        foreach (var kv in unreacted) if (kv.Key != null) kv.Key.localRotation = kv.Value;
+        unreacted.Clear();
+    }
+
+    void ApplyReactions(float dt)
+    {
+        if (reactions.Count == 0) return;
+        foreach (var r in reactions) if (r.joint != null && !unreacted.ContainsKey(r.joint)) unreacted[r.joint] = r.joint.localRotation;
+        float w = 2f * Mathf.PI * ReactHz;
+        for (int i = reactions.Count - 1; i >= 0; i--)
+        {
+            var r = reactions[i];
+            if (r.joint == null) { reactions.RemoveAt(i); continue; }
+            // Semi-implicit steps (stable at any frame rate).
+            int n = Mathf.Max(1, Mathf.CeilToInt(dt / 0.005f));
+            float h = dt / n;
+            for (int k = 0; k < n; k++)
+            {
+                r.speed += (-w * w * r.angle - 2f * ReactDamping * w * r.speed) * h;
+                r.angle += r.speed * h;
+            }
+            if (Mathf.Abs(r.angle) < 0.05f && Mathf.Abs(r.speed) < 1f) { reactions.RemoveAt(i); continue; }
+            Transform parent = r.joint.parent != null ? r.joint.parent : transform;
+            r.joint.rotation = Quaternion.AngleAxis(r.angle, parent.rotation * r.axisLocal) * r.joint.rotation;
+        }
+    }
     bool init;
 
     void Awake()
@@ -111,6 +215,7 @@ public class FigureAnimator : MonoBehaviour
         if (Figure == null) Figure = GetComponent<CharacterFigure>();
         var f = Figure;
         if (f == null || f.Hips == null) return;
+        RestoreUnreacted();
         float dt = Time.deltaTime;
         float k = 1f - Mathf.Exp(-blend * dt);
         Vector3 hv = new Vector3(Velocity.x, 0f, Velocity.z);
@@ -278,6 +383,7 @@ public class FigureAnimator : MonoBehaviour
         ExtraArms(f, s, swing, k);
         HandCurl(f, armMode, dt);
         if (jit > 0f) JitterLayer(f, jit, dt, mr);
+        ApplyReactions(dt);
     }
 
     // Fight stance by two-bone IK (after the body and head are posed, so the eyes are where the camera

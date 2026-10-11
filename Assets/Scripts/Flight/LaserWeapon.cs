@@ -72,6 +72,7 @@ public static class LaserWeapon
             for (int i = 0; i < 3; i++)
                 Effects.Debris(hit.point + hit.normal * 0.05f, (hit.normal + Random.insideUnitSphere * 0.8f) * Random.Range(2f, 5f), 0.025f);
             BurnMarks.Hit(hit, dir, mode);
+            CharacterHealth.LaserReaction(hit, dir);
         }
         PedestrianSystem.ReportDanger(muzzle, 40f);
         return didHit;

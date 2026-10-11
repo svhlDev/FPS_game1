@@ -9,7 +9,8 @@ using UnityEngine.InputSystem;
 // Cars with a rear rack (VehicleGrabPoint) can be caught from the air (swept test, timing is
 // everything): you hang off the back and mash Space to climb up.
 // Boot thrusters: one extra jump in the air, and holding Space while falling glides.
-// Falling has no limit: you land on the street. A hard landing (no glide) staggers you for a moment.
+// Falling has no limit: you land on the street. A hard landing (no glide) staggers you for a moment,
+// and hurts by impact speed relative to what you land on (FallDamage), shown as a camera dip.
 // Scroll zooms from first person out to a third-person shoulder boom (same feel as the car).
 // The player is a real body (CharacterFigure, posed by FigureAnimator): the camera sits in its head
 // (the head itself hidden from that view), looking turns the head first and the body follows, and
@@ -346,9 +347,18 @@ public class FirstPersonController : MonoBehaviour
         bool wasGrounded = grounded;
         grounded = (flags & CollisionFlags.Below) != 0;
         if (grounded && !wasGrounded && fallSpeed > staggerFallSpeed)
-        {
             staggerUntil = Time.time + staggerTime;
-            camShake = Mathf.Max(camShake, 0.5f);
+        if (grounded && !wasGrounded)
+        {
+            var under = groundCollider != null ? groundCollider.GetComponentInParent<FlyingVehicle>() : null;
+            float impact = fallSpeed + (under != null ? under.Velocity.y : 0f);
+            float dmg = gliding ? 0f : FallDamage(impact, gravity);
+            if (dmg > 0f)
+            {
+                LastFallDamage = dmg;
+                Damage(dmg, "Fell to your death", false);
+                dipVel = -Mathf.Lerp(1.5f, 6f, Mathf.Clamp01(dmg / 100f)); // the head drops and comes back
+            }
         }
 
         if (grounded)
@@ -400,12 +410,16 @@ public class FirstPersonController : MonoBehaviour
     void LateUpdate()
     {
         zoom.HandleScroll(Mouse.current);
+        // Landing dip: a damped spring back to 0 (one dip, no shaking).
+        float ldt = Time.deltaTime;
+        dipVel += (-dip * 120f - dipVel * 18f) * ldt;
+        dip = Mathf.Clamp(dip + dipVel * ldt, -0.5f, 0.1f);
         float z = zoom.Tick(Time.deltaTime);
         PoseBody();
         // The eyes: just in front of the head's centre, wherever the posed head is now.
         if (Figure != null)
             // The gait's hip drop is damped: the eyes keep 30% of it (a full stride's dip reads as bouncing).
-            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y) + Vector3.up * (Animator != null ? Animator.GaitDrop * 0.7f : 0f);
+            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y) + Vector3.up * ((Animator != null ? Animator.GaitDrop * 0.7f : 0f) + dip);
 
         var cam = playerCamera.transform;
         if (cam.parent == cameraRoot)
@@ -851,13 +865,27 @@ public class FirstPersonController : MonoBehaviour
 
     public void Damage(float amount) => Damage(amount, null);
 
-    public void Damage(float amount, string cause)
+    // shake: false for damage over time (burning) and falls (they show their own way).
+    public void Damage(float amount, string cause, bool shake = true)
     {
         if (cause != null) lastCause = cause;
         Health = Mathf.Max(0f, Health - amount);
         lastHurt = Time.time;
-        camShake = Mathf.Max(camShake, 0.3f);
+        if (shake) camShake = Mathf.Max(camShake, 0.3f);
     }
+
+    // Landing damage from the impact speed relative to the surface (a car roof moving down with you
+    // counts as less). The table is in drop heights at real gravity (our gravity is stronger, so the
+    // speed is converted back to the height it fell from): max(0, v - 10) x 6 with v = sqrt(2 x 9.81 x h)
+    // gives ~24 at 10 m, ~59 at 20 m, ~85 at 30 m, death from ~38 m. Gliding (~3 m/s) never hurts.
+    public static float FallDamage(float impactSpeed, float gravity)
+    {
+        float h = impactSpeed * impactSpeed / (2f * Mathf.Max(0.1f, Mathf.Abs(gravity)));
+        float v = Mathf.Sqrt(2f * 9.81f * h);
+        return Mathf.Max(0f, v - 10f) * 6f;
+    }
+    public float LastFallDamage { get; private set; }
+    float dip, dipVel;
 
     public void Heal() => Health = maxHealth;
     string lastCause;
@@ -897,7 +925,7 @@ public class FirstPersonController : MonoBehaviour
     void UpdateBurning(float dt, Vector3 move)
     {
         if (!OnFire) return;
-        Damage(CharacterHealth.FireDamagePerSecond * dt, "Burned to death");
+        Damage(CharacterHealth.FireDamagePerSecond * dt, "Burned to death", false);
         Effects.Flame(transform.position + Vector3.up * 1f, 1.2f);
         if (move.sqrMagnitude < 0.01f && grounded)
         {
@@ -978,8 +1006,35 @@ public class FirstPersonController : MonoBehaviour
         grounded = false;
     }
 
+    static Texture2D vignette;
+
+    // Orange screen edges pulsing while on fire (no camera shake).
+    void DrawBurnVignette()
+    {
+        if (!OnFire) return;
+        if (vignette == null)
+        {
+            const int n = 64;
+            vignette = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = (x + 0.5f) / n * 2f - 1f, dy = (y + 0.5f) / n * 2f - 1f;
+                    float e = Mathf.Clamp01((Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) - 0.55f) / 0.45f);
+                    vignette.SetPixel(x, y, new Color(1f, 1f, 1f, e * e));
+                }
+            vignette.Apply();
+        }
+        var prev = GUI.color;
+        float pulse = 0.55f + 0.3f * Mathf.Sin(Time.time * 7f);
+        GUI.color = new Color(1f, 0.45f, 0.08f, pulse);
+        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), vignette, ScaleMode.StretchToFill, true);
+        GUI.color = prev;
+    }
+
     void OnGUI()
     {
+        DrawBurnVignette();
         float cx = Screen.width / 2f, cy = Screen.height / 2f;
         if (Time.time < flashUntil) GUI.Label(new Rect(cx - 100, cy - 60, 400, 25), flash);
 

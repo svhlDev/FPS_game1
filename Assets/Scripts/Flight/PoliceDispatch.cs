@@ -176,6 +176,7 @@ public class PoliceDispatch : MonoBehaviour
         PlayerWeapon.ShotHit += OnShotHit;
         PlayerWeapon.ShotFired += OnShotFired;
         FirstPersonController.CarJump += OnCarJump;
+        CharacterHealth.AnyDied += OnCharacterDied;
     }
 
     void OnDisable()
@@ -185,6 +186,7 @@ public class PoliceDispatch : MonoBehaviour
         PlayerWeapon.ShotHit -= OnShotHit;
         PlayerWeapon.ShotFired -= OnShotFired;
         FirstPersonController.CarJump -= OnCarJump;
+        CharacterHealth.AnyDied -= OnCharacterDied;
     }
 
     void OnDestroy() { if (Instance == this) Instance = null; }
@@ -250,6 +252,40 @@ public class PoliceDispatch : MonoBehaviour
         }
     }
     public static int OfficersKilled;
+
+    // A civilian killed by the player. Seen by police: wanted 2 and lethal force. Seen only by
+    // pedestrians: they scream and run (ReportDanger), and with a police unit within reportRange the
+    // call comes in reportDelay s later: wanted 1.
+    public float reportRange = 150f, reportDelay = 5f, witnessRange = 40f;
+    float reportAt = -1f;
+    public static int CiviliansKilled, Reports;
+
+    void OnCharacterDied(CharacterHealth h, DamageInfo d)
+    {
+        if (h == null || h.Role != CharacterFigure.Role.Civilian || !d.byPlayer) return;
+        CiviliansKilled++;
+        Vector3 p = h.transform.position;
+        if (PoliceSees(p + Vector3.up, triggerRange, out var by))
+        {
+            EnsureWanted(2, by);
+            Escalate(Force.Lethal, "Civilian killed");
+            return;
+        }
+        if (PedestrianSystem.Witnesses(p, witnessRange) == 0) return;
+        PedestrianSystem.ReportDanger(p, witnessRange);
+        bool unitNear = false;
+        foreach (var u in units) if (u != null && u.isActiveAndEnabled && (u.transform.position - p).sqrMagnitude < reportRange * reportRange) { unitNear = true; break; }
+        if (unitNear && reportAt < 0f) reportAt = Time.time + reportDelay;
+    }
+
+    void UpdateReports()
+    {
+        if (reportAt < 0f || Time.time < reportAt) return;
+        reportAt = -1f;
+        Reports++;
+        EnsureWanted(1, null);
+        Show("Witnesses reported a killing  -  WANTED");
+    }
 
     // A grenade thrown: landing near police (an officer or a police car within nearPolice m), or the
     // throw seen, is lethal force.
@@ -407,10 +443,7 @@ public class PoliceDispatch : MonoBehaviour
     void OnPunchHit(Collider c)
     {
         var o = c.GetComponentInParent<OfficerAgent>();
-        if (o == null) return;
-        Vector3 away = o.transform.position - FirstPersonController.Instance.transform.position;
-        away.y = 0f;
-        o.Stagger(0.8f, away.normalized * 1f);
+        if (o == null) return; // the shove and stagger are CharacterHealth.PunchHit's
         EnsureWanted(2, o.Home);
         Escalate(Force.Lethal, "Assaulted an officer");
     }
@@ -594,6 +627,7 @@ public class PoliceDispatch : MonoBehaviour
             if (dockers[i] == null || !pursuing.Contains(dockers[i])) { UndockUnit(dockers[i]); dockers.RemoveAt(i); }
         officers.RemoveAll(o => o == null || o.State == OfficerAgent.Phase.Return);
         CheckBrandishing();
+        UpdateReports();
         foreach (var o in officers)
         {
             o.ActionPose = o != cuffer ? FigureAnimator.Pose.Normal

@@ -9,14 +9,14 @@ using UnityEngine;
 // A hatch panel exactly the size of the opening covers it. Opening slides it straight down along the
 // outside of the rear face, over the lower half, in 0.4 s; closing slides it back up. The tail lights
 // sit beside the opening and a rear rack moves back a little, so the hatch passes clear of both.
-// Opened by the player on foot (PlayerInteract: E within 1.5 m of the rear, looking at it, the car
-// slower than 1 m/s). Contents: police cars hold 2 grenades; civilian trunks are empty for now. Items
+// Opened by the player on foot (PlayerInteract: E with the camera ray going into the opening within
+// 2.5 m, the car slower than 1 m/s; wrecks too). Contents: police cars hold 2 grenades; civilian trunks are empty for now. Items
 // in an open trunk show on its floor and are picked up with E. Opening a police trunk in sight of
 // police: wanted 1 (PoliceDispatch.ReportTrunkTheft).
 public class CarTrunk : MonoBehaviour
 {
     public const float SlideTime = 0.4f;
-    public const float OpenRange = 1.5f, MaxSpeed = 1f;
+    public const float OpenRange = 2.5f, MaxSpeed = 1f;   // from the camera to the opening
     // Opening on the reference 1.6 x 1.15 x 4.0 body (scaled per axis for other sizes).
     static readonly Vector3 RefBody = new Vector3(1.6f, 1.15f, 4f);
     const float OpenW = 1.2f, OpenH = 0.5f, Depth = 0.7f, TopGap = 0.05f;
@@ -99,7 +99,29 @@ public class CarTrunk : MonoBehaviour
     public Vector3 FloorPoint(float x, float z) =>
         Car.transform.TransformPoint(bodyCentre + new Vector3(x * openW * 0.4f, yc - openH * 0.5f, -half.z + depth * Mathf.Lerp(0.2f, 0.8f, z)));
 
-    public bool CanOpen => Car != null && Car.Velocity.magnitude < MaxSpeed && !(Car.Health != null && Car.Health.Wrecked);
+    public bool CanOpen => Car != null && Car.Velocity.magnitude < MaxSpeed;
+
+    // Does `ray` go into the opening (from behind the car, nothing else in the way) within `range`?
+    public bool RayHitsOpening(Ray ray, float range, out float dist)
+    {
+        dist = 0f;
+        var t = Car.transform;
+        Vector3 o = t.InverseTransformPoint(ray.origin), d = t.InverseTransformDirection(ray.direction);
+        float face = bodyCentre.z - half.z;
+        if (d.z <= 1e-4f || o.z >= face) return false;                // must come from behind, heading in
+        float k = (face - o.z) / d.z;
+        Vector3 p = o + d * k;
+        const float margin = 0.08f;
+        if (Mathf.Abs(p.x - bodyCentre.x) > openW * 0.5f + margin) return false;
+        float y = p.y - bodyCentre.y - yc;
+        if (Mathf.Abs(y) > openH * 0.5f + margin) return false;
+        dist = k * ray.direction.magnitude;
+        if (dist > range) return false;
+        // Something closer in the way (not this car)?
+        if (Physics.Raycast(ray.origin, ray.direction, out var h, dist - 0.05f, Physics.DefaultRaycastLayers & ~(1 << Mathf.Max(0, LayerMask.NameToLayer("Player"))), QueryTriggerInteraction.Ignore)
+            && !h.collider.transform.IsChildOf(t)) return false;
+        return true;
+    }
 
     // ---------- open / close ----------
 

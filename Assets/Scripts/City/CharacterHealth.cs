@@ -93,7 +93,7 @@ public class CharacterHealth : MonoBehaviour
         if (IsPlayer)
         {
             // In a car the car takes the hits (VehicleHealth).
-            if (fpc != null && fpc.isActiveAndEnabled) fpc.Damage(d.amount, Cause(d.kind));
+            if (fpc != null && fpc.isActiveAndEnabled) fpc.Damage(d.amount, Cause(d.kind), d.kind != DamageKind.Fire && d.kind != DamageKind.Fall);
             return;
         }
         Health = Mathf.Max(0f, Health - d.amount);
@@ -152,15 +152,59 @@ public class CharacterHealth : MonoBehaviour
         return true;
     }
 
-    // A punch: 8 (head 12).
+    // A punch: 8 to the body, 12 to the head, 6 to a limb; the figure is shoved 0.6 m (head 0.8 m)
+    // along the punch and staggers 0.35 s, the hit joint snaps away (FigureAnimator.React).
+    public const float PunchBody = 8f, PunchHead = 12f, PunchLimb = 6f;
     public static bool PunchHit(Collider c, Vector3 point, Vector3 dir, bool byPlayer)
     {
         var ch = Of(c);
         if (ch == null) return false;
-        var part = c.GetComponent<BodyPart>();
-        bool head = part != null && part.location == BodyPart.Location.Head;
-        ch.Damage(new DamageInfo { amount = head ? 12f : 8f, kind = DamageKind.Punch, point = point, part = c, impulse = dir.normalized * 6f, byPlayer = byPlayer });
+        var loc = ch.LocationOf(c, point);
+        bool head = loc == BodyPart.Location.Head;
+        float dmg = head ? PunchHead : loc == BodyPart.Location.Body ? PunchBody : PunchLimb;
+        dir.Normalize();
+        ch.React(loc, c, point, dir, 1f);
+        if (!ch.IsPlayer) ch.Knock(dir * (head ? 0.8f : 0.6f), 0.35f);
+        ch.Damage(new DamageInfo { amount = dmg, kind = DamageKind.Punch, point = point, part = c, impulse = dir * 6f, byPlayer = byPlayer });
         return true;
+    }
+
+    // Where on the body a hit landed: the BodyPart, or by height for a capsule-only figure.
+    public BodyPart.Location LocationOf(Collider c, Vector3 point)
+    {
+        var bp = c != null ? c.GetComponent<BodyPart>() : null;
+        if (bp != null) return bp.location;
+        var fig = GetComponent<CharacterFigure>();
+        if (fig != null && fig.Neck != null && point.y > fig.Neck.position.y) return BodyPart.Location.Head;
+        if (fig != null && fig.Hips != null && point.y < fig.Hips.position.y - 0.05f) return BodyPart.Location.Leg;
+        return BodyPart.Location.Body;
+    }
+
+    // The hit joint kicked away along `dir` (strength 1 punch, 0.5 laser). Not the player (the camera
+    // rides the neck).
+    public void React(BodyPart.Location loc, Collider c, Vector3 point, Vector3 dir, float strength)
+    {
+        if (IsPlayer || Dead) return;
+        var anim = GetComponent<FigureAnimator>();
+        if (anim != null) anim.React(loc, c != null && c.GetComponent<BodyPart>() != null ? c.transform : null, point, dir, strength);
+    }
+
+    // Laser hits of either mode: the half-strength reaction.
+    public static void LaserReaction(RaycastHit h, Vector3 dir)
+    {
+        var ch = Of(h.collider);
+        if (ch != null) ch.React(ch.LocationOf(h.collider, h.point), h.collider, h.point, dir.normalized, 0.5f);
+    }
+
+    // Shoved `displacement` and staggered for `seconds` (officers, ejected drivers, pedestrians).
+    public void Knock(Vector3 displacement, float seconds)
+    {
+        if (Dead) return;
+        var o = GetComponent<OfficerAgent>();
+        if (o != null) { o.Knock(displacement, seconds); return; }
+        var npc = GetComponent<NpcBody>();
+        if (npc != null) { npc.Knock(displacement, seconds); return; }
+        PedestrianSystem.Knock(transform, displacement, seconds);
     }
 }
 

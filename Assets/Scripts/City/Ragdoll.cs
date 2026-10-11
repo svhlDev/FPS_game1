@@ -83,6 +83,17 @@ public class Ragdoll : MonoBehaviour
         var restJoints = new List<Transform> { fig.Spine, fig.Chest, fig.Neck, fig.HeadJoint, fig.ShoulderL, fig.ShoulderR, fig.ElbowL, fig.ElbowR,
                                                fig.WristL, fig.WristR, fig.HipL, fig.HipR, fig.KneeL, fig.KneeR, fig.AnkleL, fig.AnkleR };
 
+        // Joints still spinning from hit reactions (the killing punch): the ragdoll keeps that spin.
+        var spins = new List<(Transform, Vector3)>();
+        var anim = fig.GetComponent<FigureAnimator>();
+        if (anim != null)
+            foreach (var r in anim.Reactions)
+                if (r.joint != null)
+                {
+                    Transform par = r.joint.parent != null ? r.joint.parent : fig.transform;
+                    spins.Add((r.joint, par.rotation * r.axisLocal * (r.speed * Mathf.Deg2Rad)));
+                }
+
         // Take the body: skeleton and the root-level (skinned) renderers.
         var rends = new List<Renderer>(fig.Renderers);
         rends.AddRange(fig.FaceRenderers);
@@ -148,6 +159,12 @@ public class Ragdoll : MonoBehaviour
         foreach (var (t, q) in posed) if (t != null) t.localRotation = q;
         Physics.SyncTransforms();
         foreach (var rb in bodies) rb.linearVelocity = velocity + kill.velocityChange * 0.8f;
+        foreach (var (j, w) in spins)
+        {
+            var rb = j.GetComponent<Rigidbody>();
+            if (rb == null) rb = j.GetComponentInParent<Rigidbody>();
+            if (rb != null && rd.Bodies.Contains(rb)) rb.angularVelocity += w;
+        }
         if (kill.impulse.sqrMagnitude > 0f || kill.velocityChange.sqrMagnitude > 0f)
         {
             var hit = kill.part != null ? kill.part.attachedRigidbody : null;

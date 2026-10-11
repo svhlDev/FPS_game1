@@ -324,6 +324,175 @@ public partial class ScenarioTest
         yield return new WaitForSeconds(2f);
         yield return Shot("grenade_fire");
         Log($"ragdolls alive {Ragdoll.All.Count}, burn marks {BurnMarks.LiveCount}, car-hit events {CombatSystem.Hits}");
+        yield return CombatPass2();
+    }
+
+    // Round 2: burning without shake, chunks past capsules, punch snap and shove, fall damage, flat
+    // wrecks, trunk priority from further away.
+    IEnumerator CombatPass2()
+    {
+        var fpc = FirstPersonController.Instance;
+        var fists = fpc.GetComponent<PlayerFists>();
+        var interact = fpc.GetComponent<PlayerInteract>();
+        var disp = PoliceDispatch.Ensure();
+        var cam = fpc.playerCamera;
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        int playerMask = 1 << Mathf.Max(0, LayerMask.NameToLayer("Player"));
+        Vector3 Ground(Vector3 p)
+        {
+            if (Physics.Raycast(p + Vector3.up * 3f, Vector3.down, out var h, 12f, Physics.DefaultRaycastLayers & ~playerMask, QueryTriggerInteraction.Ignore)) return h.point;
+            return p;
+        }
+        Vector3 Flat(Vector3 v) { v.y = 0f; return v.normalized; }
+        int noCars = Physics.DefaultRaycastLayers & ~playerMask & ~(1 << Mathf.Max(0, LayerMask.NameToLayer("Traffic")));
+        float Floor(Vector3 p) => Physics.Raycast(p + Vector3.up * 0.5f, Vector3.down, out var fh, 40f, noCars, QueryTriggerInteraction.Ignore) ? fh.point.y : p.y;
+        void LookAt(Vector3 p)
+        {
+            Vector3 d = p - cam.transform.position;
+            fpc.DebugLook(Mathf.Clamp(-Mathf.Atan2(d.y, new Vector2(d.x, d.z).magnitude) * Mathf.Rad2Deg, -80f, 80f), Mathf.Atan2(d.x, d.z) * Mathf.Rad2Deg);
+        }
+        disp.DebugClear();
+        fpc.Heal();
+        yield return new WaitForSeconds(1f);
+        Vector3 home = fpc.transform.position;
+        float yaw0 = fpc.transform.eulerAngles.y;
+
+        // 1. On fire: no camera shake, an orange vignette.
+        fpc.DebugLook(0f, yaw0);
+        fpc.Ignite();
+        float maxOff = 0f;
+        for (float t = 0f; t < 1.2f; t += Time.deltaTime)
+        {
+            yield return null;
+            maxOff = Mathf.Max(maxOff, cam.transform.localPosition.magnitude);
+        }
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "combat_burning.png"));
+        yield return null;
+        Log($"burning: camera offset max {maxOff:0.0000} m over 1.2 s, on fire {fpc.OnFire}, health {fpc.Health:0}");
+        Log(maxOff < 0.002f ? "PASS being on fire never shakes the camera" : "FAIL burning shakes the camera");
+        yield return new WaitForSeconds(1.5f); // standing still puts it out
+        fpc.Heal();
+
+        // 2. Fire chunks fall past an officer's capsule (only its body parts burn).
+        Vector3 fwd = Flat(cam.transform.forward);
+        var o = OfficerAgent.DebugSpawn(Ground(fpc.transform.position + fwd * 5f), Quaternion.LookRotation(-fwd));
+        yield return new WaitForSeconds(0.8f);
+        int patches0 = FireSystem.PatchCount;
+        Vector3 top = o.transform.position + Vector3.up * 3f;
+        for (int i = 0; i < 6; i++) FireSystem.Spray(top + Random.insideUnitSphere * 0.1f, Vector3.down * 3f, 1, 0.1f, 0.3f);
+        yield return new WaitForSeconds(2f);
+        Log($"chunks over an officer: patches +{FireSystem.PatchCount - patches0}, officer health {(o != null ? o.Health.Health : 0f):0}");
+        Log(FireSystem.PatchCount > patches0 ? "PASS chunks fall past the capsule and land (no burst round it)" : "FAIL chunks did not land");
+
+        // 3. Punch: head snaps back, the body is shoved and staggers.
+        var o2 = OfficerAgent.DebugSpawn(Ground(fpc.transform.position + fwd * 0.6f), Quaternion.LookRotation(-fwd));
+        yield return new WaitForSeconds(0.8f);
+        var anim2 = o2.GetComponent<FigureAnimator>();
+        var fig2 = o2.GetComponent<CharacterFigure>();
+        Vector3 p0 = o2.transform.position;
+        LookAt(fig2.Head.position);
+        fists.DebugRaise();
+        yield return new WaitForSeconds(0.3f);
+        float hp0 = o2.Health.Health;
+        Transform neck = fig2.Neck;
+        fists.DebugPunch(1);
+        float peak = 0f, minAfter = 999f; bool stag = false, shot = false;
+        for (float t = 0f; t < 0.7f; t += Time.deltaTime)
+        {
+            yield return null;
+            if (o2 == null) break;
+            float a = anim2.ReactionAngle(neck);
+            peak = Mathf.Max(peak, Mathf.Abs(a));
+            if (peak > 5f) minAfter = Mathf.Min(minAfter, a);
+            stag |= o2.Staggered;
+            if (!shot && t > 0.12f) { shot = true; ScreenCapture.CaptureScreenshot(Path.Combine(dir, "combat_head_snap.png")); }
+        }
+        float shoved = o2 != null ? Vector3.Distance(Flat2(o2.transform.position), Flat2(p0)) : 0f;
+        Log($"head punch: damage {hp0 - (o2 != null ? o2.Health.Health : 0f):0}, neck reaction peak {peak:0} deg (overshoot {minAfter:0.0}), shoved {shoved:0.00} m, staggered {stag}");
+        Log(peak > 20f && shoved > 0.4f && stag ? "PASS punched heads snap back and bodies stumble" : "FAIL punch reaction");
+        if (o != null) Destroy(o.gameObject);
+        if (o2 != null) Destroy(o2.gameObject);
+        disp.DebugClear();
+
+        // 4. Falls: 20 m hurts badly, 40 m kills, gliding is safe.
+        float g = fpc.gravity;
+        Log($"fall table: glide 3 m/s -> {FirstPersonController.FallDamage(3f, g):0}, 10 m -> {FirstPersonController.FallDamage(Mathf.Sqrt(2f * -g * 10f), g):0}, " +
+            $"20 m -> {FirstPersonController.FallDamage(Mathf.Sqrt(2f * -g * 20f), g):0}, 30 m -> {FirstPersonController.FallDamage(Mathf.Sqrt(2f * -g * 30f), g):0}");
+        float dmgOut = 0f, hpOut = 0f; bool deadOut = false;
+        IEnumerator Drop(float h)
+        {
+            fpc.Heal();
+            yield return null;
+            Vector3 start = home + Vector3.up * h;
+            fpc.PlaceAt(start, Quaternion.Euler(0f, yaw0, 0f));
+            float t0 = Time.time, before = fpc.LastFallDamage;
+            deadOut = false; Vector3 last = start;
+            while (Time.time - t0 < 6f)
+            {
+                yield return null;
+                if ((fpc.transform.position - last).sqrMagnitude > 25f) { deadOut = true; break; } // respawned elsewhere
+                last = fpc.transform.position;
+                if (fpc.LastFallDamage != before) break;
+            }
+            yield return null; yield return null;
+            dmgOut = fpc.LastFallDamage; hpOut = fpc.Health;
+            // Dying respawns (maybe right here, at the spawn): judge by the damage against full health.
+            deadOut = deadOut || dmgOut >= fpc.maxHealth;
+        }
+        yield return Drop(20f);
+        float d20 = dmgOut, hp20 = hpOut; bool dead20 = deadOut;
+        yield return new WaitForSeconds(0.3f);
+        yield return Drop(40f);
+        float d40 = dmgOut; bool dead40 = deadOut;
+        Log($"drop 20 m: damage {d20:0}, health {hp20:0}, dead {dead20}; drop 40 m: damage {d40:0}, dead {dead40}");
+        Log(d20 > 40f && !dead20 && dead40 && FirstPersonController.FallDamage(3f, g) == 0f ? "PASS 20 m hurts badly, 40 m kills, gliding is safe" : "FAIL fall damage");
+        yield return new WaitForSeconds(1f);
+        fpc.PlaceAt(home, Quaternion.Euler(0f, yaw0, 0f));
+        fpc.Heal();
+        yield return new WaitForSeconds(1f);
+
+        // 5. A wreck lies flat, trunk reachable; E from 2.2 m behind opens it.
+        FlyingVehicle wcar = null; float wd = float.MaxValue;
+        foreach (var v in FlyingVehicle.Active)
+            if (v != null && v.IsParked && v.Health != null && !v.Health.Wrecked && v.Trunk != null)
+            {
+                float dd = (v.transform.position - home).sqrMagnitude;
+                if (dd < wd) { wd = dd; wcar = v; }
+            }
+        if (wcar == null) { Log("WARN no parked car for the wreck test"); yield break; }
+        float groundY = Floor(wcar.transform.position);
+        float openH0 = wcar.Trunk.OpeningCentre.y - groundY;
+        Vector3 wpos0 = wcar.transform.position;
+        Vector3 away = Flat(home - wcar.transform.position);
+        fpc.PlaceAt(Ground(wcar.transform.position + away * 16f), Quaternion.LookRotation(-away));
+        wcar.DebugPlace(wcar.transform.position + Vector3.up * 12f, wcar.transform.rotation, Vector3.zero);
+        yield return new WaitForSeconds(0.3f);
+        wcar.Health.Damage(100000f, wcar.transform.position, Vector3.up);
+        float tw = Time.time;
+        yield return new WaitForSeconds(2f);
+        while (Time.time - tw < 8f && wcar.Velocity.sqrMagnitude > 0.0001f) yield return null;
+        yield return new WaitForSeconds(0.5f);
+        float gy = Floor(wcar.transform.position);
+        Log($"  wreck test car {wcar.name}: wrecked {wcar.Health.Wrecked}, moved {Vector3.Distance(wpos0, wcar.transform.position):0.00} m, y {wpos0.y:0.0} -> {wcar.transform.position.y:0.0}, floor {gy:0.0}");
+        float under = wcar.transform.TransformPoint(wcar.BodyCenterLocal).y - wcar.BodyHalfExtents.y;
+        float openH1 = wcar.Trunk.OpeningCentre.y - gy;
+        Log($"wreck: pitch {wcar.DebugPitch:0.0} deg, underside {under - gy:0.00} m above the ground, opening {openH0:0.00} m high parked -> {openH1:0.00} m wrecked");
+        Log(Mathf.Abs(wcar.DebugPitch - FlyingVehicle.WreckRestPitch) < 0.5f && Mathf.Abs(openH1 - openH0) < 0.45f ? "PASS wrecks lie flat with the trunk at normal height" : "FAIL wreck not flat");
+        var trunk = wcar.Trunk;
+        if (trunk.IsOpen) { trunk.Close(); yield return new WaitForSeconds(0.5f); }
+        fpc.Heal();
+        fpc.PlaceAt(Ground(trunk.OpeningCentre + trunk.RearNormal * 2.2f), Quaternion.LookRotation(-trunk.RearNormal));
+        yield return new WaitForSeconds(0.6f);
+        LookAt(trunk.OpeningCentre);
+        yield return null; yield return null;
+        string pr = interact.DebugPrompt();
+        float camDist = Vector3.Distance(cam.transform.position, trunk.OpeningCentre);
+        interact.DebugUse();
+        yield return new WaitForSeconds(0.6f);
+        ScreenCapture.CaptureScreenshot(Path.Combine(dir, "combat_wreck_trunk.png"));
+        yield return null;
+        Log($"wreck trunk from {camDist:0.00} m (camera): prompt '{pr}', open {trunk.IsOpen}; player {fpc.transform.position}, opening {trunk.OpeningCentre}, ray hits opening {trunk.RayHitsOpening(new Ray(cam.transform.position, cam.transform.forward), 10f, out float rd)} at {rd:0.00}, can open {trunk.CanOpen} (speed {wcar.Velocity.magnitude:0.00})");
+        Log(pr.Contains("open trunk") && trunk.IsOpen ? "PASS looking at a trunk opens it first (wreck, 2.2 m back)" : "FAIL trunk priority");
     }
 
     static Vector3 Flat2(Vector3 v) => new Vector3(v.x, 0f, v.z);

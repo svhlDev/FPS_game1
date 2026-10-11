@@ -30,6 +30,16 @@ public class NpcBody : MonoBehaviour
     Renderer bodyRend;
     FlyingVehicle platform; Vector3 platformLocal; float platformYaw;
     Collider groundCollider;
+    float staggerUntil;
+    Vector3 knockLeft;
+
+    // Shoved `displacement` (eased out) and staggered for `seconds`.
+    public void Knock(Vector3 displacement, float seconds)
+    {
+        staggerUntil = Mathf.Max(staggerUntil, Time.time + seconds);
+        knockLeft += new Vector3(displacement.x, 0f, displacement.z);
+    }
+    bool Staggered => Time.time < staggerUntil;
 
     // Thrown out of `car` through the door on `side` (-1 left / driver, +1 right).
     public static NpcBody Eject(FlyingVehicle car, int side, FlyingVehicle.DriverKind kind, bool unconscious = false)
@@ -96,7 +106,13 @@ public class NpcBody : MonoBehaviour
         }
 
         Vector3 move = Vector3.zero;
-        if (Grounded && !unconscious && platform == null)
+        if (knockLeft.sqrMagnitude > 1e-6f && dt > 0f)
+        {
+            Vector3 step = knockLeft * (1f - Mathf.Exp(-10f * dt));
+            knockLeft -= step;
+            move += step / dt;
+        }
+        if (Grounded && !unconscious && platform == null && !Staggered)
         {
             // Get away from the player.
             var player = FirstPersonController.Instance;
@@ -106,7 +122,7 @@ public class NpcBody : MonoBehaviour
             {
                 away.Normalize();
                 transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(away), 360f * dt);
-                move = transform.forward * fleeSpeed;
+                move += transform.forward * fleeSpeed;
             }
 
             bool seen = bodyRend.isVisible;
@@ -136,7 +152,8 @@ public class NpcBody : MonoBehaviour
         anim.Velocity = Grounded ? move : velocity;
         anim.Grounded = Grounded;
         anim.LookYaw = transform.eulerAngles.y;
-        anim.CurrentPose = unconscious ? FigureAnimator.Pose.Fallen : !Grounded ? FigureAnimator.Pose.Air : FigureAnimator.Pose.Normal;
+        anim.CurrentPose = unconscious ? FigureAnimator.Pose.Fallen : !Grounded ? FigureAnimator.Pose.Air
+                         : Staggered ? FigureAnimator.Pose.Staggered : FigureAnimator.Pose.Normal;
     }
 
     void Landed()
@@ -172,6 +189,13 @@ public class NpcBody : MonoBehaviour
         }
         despawnAt = Time.time + fleeLifetime;
         outOfViewSince = Time.time;
+        // A hard landing that didn't kill: a stumble.
+        float fell = peakY - transform.position.y;
+        if (fell > 2.5f)
+        {
+            anim.Stumble(transform.forward, Mathf.Min(35f, 8f + fell * 2.5f));
+            staggerUntil = Time.time + Mathf.Min(0.8f, 0.2f + fell * 0.06f);
+        }
     }
 
     void OnControllerColliderHit(ControllerColliderHit hit)

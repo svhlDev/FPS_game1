@@ -194,6 +194,14 @@ public class OfficerAgent : MonoBehaviour
     // Stun shot: down (Stunned pose) for `seconds`, no moving or shooting.
     public void Stun(float seconds) => stunUntil = Mathf.Max(stunUntil, Time.time + seconds);
 
+    // Shoved `displacement` (m, eased out over ~0.3 s, walls stop it) and staggered for `seconds`.
+    public void Knock(Vector3 displacement, float seconds)
+    {
+        staggerUntil = Mathf.Max(staggerUntil, Time.time + seconds);
+        knockLeft += new Vector3(displacement.x, 0f, displacement.z);
+    }
+    Vector3 knockLeft;
+
     public void Stagger(float seconds, Vector3 knockback)
     {
         staggerUntil = Time.time + seconds;
@@ -316,6 +324,9 @@ public class OfficerAgent : MonoBehaviour
             // Knocked back over the first fraction of the stagger.
             move = knock * 4f;
             knock = Vector3.MoveTowards(knock, Vector3.zero, 4f * dt);
+            Vector3 step = knockLeft * (1f - Mathf.Exp(-10f * dt));
+            knockLeft -= step;
+            if (dt > 0f) move += step / dt;
         }
         else
         {
@@ -371,6 +382,12 @@ public class OfficerAgent : MonoBehaviour
         {
             Health.Kill(new DamageInfo { kind = DamageKind.Fall, point = transform.position });
             return;
+        }
+        if (Grounded && !wasGrounded && peakY - transform.position.y > 2.5f && anim != null)
+        {
+            float fall = peakY - transform.position.y;
+            anim.Stumble(transform.forward, Mathf.Min(35f, 8f + fall * 2.5f));
+            Stagger(Mathf.Min(0.8f, 0.2f + fall * 0.06f), Vector3.zero);
         }
         if (Grounded) peakY = transform.position.y;
         if (Grounded)

@@ -1,19 +1,22 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// E on things lying around, on foot (before FirstPersonController's own E, which it then skips):
-//   a dropped T-gun within 2 m that you look at   -> "E pick up laser" (only without a gun of your own)
-//   an item in an open trunk within 2 m, looked at -> "E pick up grenade"
-//   a car's rear within 1.5 m, looked at, the car slower than 1 m/s -> "E open trunk" / "E close trunk"
-// The looked-at choice is the one closest to the centre of the view (within lookAngle degrees).
+// E on things around you, on foot (before FirstPersonController's own E, which it then skips), first
+// match wins:
+//   1. a trunk opening the camera ray goes into, within 2.5 m of the camera, the car slower than 1 m/s
+//      (from the ground, another car's roof, anywhere) -> "E open trunk" / "E close trunk"; open and
+//      looking right at an item in it -> "E pick up grenade"
+//   2. an item in an open trunk within 2 m, looked at -> "E pick up grenade"
+//   3. a dropped T-gun within 2 m, looked at -> "E pick up laser" (only without a gun of your own)
+//   4. otherwise FirstPersonController's E (get into / take a car); the prompt says which.
+// "Looked at": within lookAngle degrees of the centre of the view.
 [DefaultExecutionOrder(95)]
 [RequireComponent(typeof(FirstPersonController))]
 public class PlayerInteract : MonoBehaviour
 {
     public float pickupRange = 2f;
     public float lookAngle = 14f;
-    public float trunkLookAngle = 35f;
-
+    
     enum Kind { None, Gun, TrunkItem, Trunk }
     Kind kind;
     GunPickup gun;
@@ -78,43 +81,61 @@ public class PlayerInteract : MonoBehaviour
         if (!fpc.isActiveAndEnabled || fpc.Restrained || fpc.Stunned || fpc.Frozen || fpc.IsHanging || fpc.playerCamera == null) return;
         var cam = fpc.playerCamera.transform;
         Vector3 eye = fpc.cameraRoot.position;
-        float best = float.MaxValue;
-
+        var ray = new Ray(cam.position, cam.forward);
         float Angle(Vector3 p) => Vector3.Angle(cam.forward, p - cam.position);
 
-        if (weapon != null && !weapon.HasGun)
+        // 1. A trunk the camera ray goes into (wherever we stand), within trunkRange of the camera. Open
+        //    and looking straight at an item in it: that item.
+        int n = Physics.OverlapSphereNonAlloc(cam.position, trunkRange + 3f, near, trafficMask, QueryTriggerInteraction.Ignore);
+        float bestDist = float.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            var car = near[i].GetComponentInParent<FlyingVehicle>();
+            var t = car != null ? car.Trunk : null;
+            if (t == null || !t.CanOpen || !t.RayHitsOpening(ray, trunkRange, out float d) || d >= bestDist) continue;
+            bestDist = d; kind = Kind.Trunk; trunk = t;
+        }
+        if (kind == Kind.Trunk && trunk.IsOpen && trunk.OpenAmount > 0.6f)
+        {
+            float best = lookAngle;
+            foreach (var it in trunk.Items)
+            {
+                if (it == null) continue;
+                float a = Angle(it.position);
+                if (a < best) { best = a; kind = Kind.TrunkItem; item = it; }
+            }
+        }
+
+        // 2. An item in an open trunk, looked at from elsewhere.
+        if (kind == Kind.None)
+        {
+            float best = lookAngle;
+            for (int i = 0; i < n; i++)
+            {
+                var car = near[i].GetComponentInParent<FlyingVehicle>();
+                var t = car != null ? car.Trunk : null;
+                if (t == null || !t.IsOpen || t.OpenAmount <= 0.6f) continue;
+                foreach (var it in t.Items)
+                {
+                    if (it == null || (it.position - eye).sqrMagnitude > pickupRange * pickupRange) continue;
+                    float a = Angle(it.position);
+                    if (a < best) { best = a; kind = Kind.TrunkItem; trunk = t; item = it; }
+                }
+            }
+        }
+
+        // 3. A dropped gun (only without one of our own).
+        if (kind == Kind.None && weapon != null && !weapon.HasGun)
+        {
+            float best = lookAngle;
             foreach (var g in GunPickup.All)
             {
                 if (g == null) continue;
                 Vector3 c = g.Center;
                 if ((c - eye).sqrMagnitude > pickupRange * pickupRange) continue;
                 float a = Angle(c);
-                if (a < lookAngle && a < best) { best = a; kind = Kind.Gun; gun = g; }
+                if (a < best) { best = a; kind = Kind.Gun; gun = g; }
             }
-
-        float trunkBest = float.MaxValue;
-        int n = Physics.OverlapSphereNonAlloc(transform.position + Vector3.up, 4f, near, trafficMask, QueryTriggerInteraction.Ignore);
-        for (int i = 0; i < n; i++)
-        {
-            var car = near[i].GetComponentInParent<FlyingVehicle>();
-            var t = car != null ? car.Trunk : null;
-            if (t == null) continue;
-            if (t.IsOpen && t.OpenAmount > 0.6f)
-                foreach (var it in t.Items)
-                {
-                    if (it == null || (it.position - eye).sqrMagnitude > pickupRange * pickupRange) continue;
-                    float a = Angle(it.position);
-                    if (a < lookAngle && a < best) { best = a; kind = Kind.TrunkItem; trunk = t; item = it; }
-                }
-            // The rear: within reach of the opening, standing behind the car, looking at it.
-            Vector3 o = t.OpeningCentre;
-            Vector3 flat = transform.position - o; flat.y = 0f;
-            if (flat.magnitude > OpenRangeFlat || Mathf.Abs(o.y - (transform.position.y + 1f)) > 1.6f) continue;
-            if (Vector3.Dot(flat, t.RearNormal) < 0.1f) continue;
-            if (!t.CanOpen) continue;
-            // Items and guns come first; among trunks, the one most in view.
-            float ta = Angle(o);
-            if (ta < trunkLookAngle && (kind == Kind.None || (kind == Kind.Trunk && ta < trunkBest))) { trunkBest = ta; kind = Kind.Trunk; trunk = t; }
         }
 
         Prompt = kind switch
@@ -122,11 +143,24 @@ public class PlayerInteract : MonoBehaviour
             Kind.Gun => "E  pick up laser",
             Kind.TrunkItem => "E  pick up grenade",
             Kind.Trunk => trunk.IsOpen ? "E  close trunk" : "E  open trunk",
-            _ => null,
+            _ => CarPrompt(cam),
         };
     }
 
-    const float OpenRangeFlat = CarTrunk.OpenRange;
+    // 4. Nothing of ours: what FirstPersonController's E will do (the roof car, or the car looked at).
+    string CarPrompt(Transform cam)
+    {
+        var roof = fpc.Platform;
+        if (roof != null) return roof.IsOccupied ? null : "E  take car";
+        int mask = Physics.DefaultRaycastLayers & ~(1 << Mathf.Max(0, LayerMask.NameToLayer("Player")));
+        float back = Vector3.Distance(cam.position, fpc.cameraRoot.position);
+        if (!Physics.Raycast(cam.position, cam.forward, out var hit, fpc.interactRange + back, mask, QueryTriggerInteraction.Ignore)) return null;
+        if (Vector3.Distance(hit.point, fpc.cameraRoot.position) > fpc.interactRange) return null;
+        var car = hit.collider.GetComponentInParent<FlyingVehicle>();
+        return car != null && !car.IsOccupied ? (car.hasDriver ? "E  take car" : "E  get in") : null;
+    }
+
+    public float trunkRange = CarTrunk.OpenRange;
 
     void OnGUI()
     {
