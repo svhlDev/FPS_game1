@@ -1176,14 +1176,17 @@ public partial class ScenarioTest : MonoBehaviour
 
         // 1. The pool fills in the background: progress and frame times while it does.
         var fillFrames = new List<float>();
-        float t = 0f, nextLog = 0f;
+        float t = 0f, nextLog = 0f, presetIn = -1f;
         while (pool.Filling && t < 240f)
         {
             yield return null;
             t += Time.unscaledDeltaTime;
             fillFrames.Add(Time.unscaledDeltaTime * 1000f);
+            if (presetIn < 0f && pool.PresetSeconds >= 0f) presetIn = t;
             if (t >= nextLog) { Log($"  pool {pool.Ready}/{pool.Total} after {t:0} s"); nextLog += 10f; }
         }
+        Log($"preset: {pool.PresetLoaded} baked bodies loaded in {pool.PresetSeconds:0.00} s{(pool.PresetProblem != null ? " (" + pool.PresetProblem + ")" : "")}; the rest generated");
+        Log(pool.PresetLoaded > 0 && pool.PresetSeconds < 5f ? "PASS the baked preset fills its slots at startup" : "WARN no preset loaded (bake one: Tools > Characters > Bake Body Pool)");
         fillFrames.Sort();
         float Avg(List<float> l) { float x = 0f; foreach (var v in l) x += v; return l.Count > 0 ? x / l.Count : 0f; }
         float Pct(List<float> l, float q) => l.Count > 0 ? l[Mathf.Clamp((int)(l.Count * q), 0, l.Count - 1)] : 0f;

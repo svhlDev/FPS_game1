@@ -7,6 +7,7 @@ using UnityEngine;
 // garment's skirt surface; the skirt's vertices are skinned to them (vertically between consecutive
 // bones of a panel, round the body between the two nearest panels unless an opening or slit lies
 // between them, into the pelvis near the ring).
+[System.Serializable]
 public class ClothChainSet
 {
     public int garment;               // the outfit garment (its submesh is 1 + garment)

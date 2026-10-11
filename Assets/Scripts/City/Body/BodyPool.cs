@@ -11,6 +11,9 @@ using UnityEngine;
 // Request() generates one-off bodies (the player's, when their stats change) through the same queue,
 // ahead of the pool fill.
 // -bodies off on the command line (or Enabled = false) keeps everyone on the primitive figure.
+// Preset (BodyPreset): bodies baked in the editor fill their slots at startup (decoded on a worker, a
+// few meshes uploaded per frame); only the slots it doesn't hold are generated (hybrid). -preset off
+// skips it.
 [DefaultExecutionOrder(-50)]
 public class BodyPool : MonoBehaviour
 {
@@ -18,6 +21,11 @@ public class BodyPool : MonoBehaviour
     public int officers = 30;
     public int maxInFlight = 2;
     public float officerStrBias = 3f, officerDexBias = 3f;
+    [Tooltip("Load the baked preset (Resources/BodyPoolPreset) at startup.")]
+    public bool usePreset = true;
+    [Tooltip("Preset bodies turned into meshes per frame while loading.")]
+    public int presetUploadsPerFrame = 6;
+    public const float DefaultOfficerStrBias = 3f, DefaultOfficerDexBias = 3f;
 
     public static BodyPool Instance { get; private set; }
     public static bool Enabled = true;
@@ -38,6 +46,12 @@ public class BodyPool : MonoBehaviour
     public float StepMsThisFrame { get; private set; }
     public readonly float[] StageMaxMs = new float[9];
     public float WorstStepMs { get; private set; }
+    public int PresetLoaded { get; private set; }
+    public float PresetSeconds { get; private set; } = -1f;
+    public string PresetProblem { get; private set; }
+    System.Threading.Tasks.Task<List<BodyPreset.Entry>> presetTask;
+    readonly Queue<BodyPreset.Entry> presetUploads = new Queue<BodyPreset.Entry>();
+    float presetStart;
 
     public static BodyPool Ensure()
     {
@@ -60,7 +74,53 @@ public class BodyPool : MonoBehaviour
             if (i < officers && i % 4 == 0) queue.Enqueue((i, true));
         }
         for (int i = 0; i < officers; i++) if (i % 4 != 0) queue.Enqueue((i, true));
+        StartPreset();
     }
+
+    void StartPreset()
+    {
+        foreach (var a in Environment.GetCommandLineArgs()) if (a == "-presetoff") usePreset = false;
+        if (!usePreset || !Enabled) return;
+        var ta = Resources.Load<TextAsset>(BodyPreset.ResourceName);
+        if (ta == null) return;
+        var bytes = ta.bytes;
+        Resources.UnloadAsset(ta);
+        BodyPreset.PrepareDecode();
+        presetStart = Time.realtimeSinceStartup;
+        presetTask = System.Threading.Tasks.Task.Run(() =>
+        {
+            var list = BodyPreset.Decode(bytes, out string problem);
+            PresetProblem = problem;
+            return list;
+        });
+    }
+
+    // Preset bodies into their slots, a few per frame (mesh upload is main-thread work).
+    void UpdatePreset()
+    {
+        if (presetTask != null && presetTask.IsCompleted)
+        {
+            if (presetTask.IsFaulted) { PresetProblem = "preset failed to load: " + presetTask.Exception?.InnerException?.Message; Debug.LogWarning(PresetProblem); }
+            else
+            {
+                if (PresetProblem != null) Debug.LogWarning("BodyPool preset: " + PresetProblem);
+                foreach (var e in presetTask.Result) presetUploads.Enqueue(e);
+            }
+            presetTask = null;
+        }
+        for (int k = 0; k < presetUploadsPerFrame && presetUploads.Count > 0; k++)
+        {
+            var e = presetUploads.Dequeue();
+            var arr = e.officer ? off : civ;
+            if (e.index < 0 || e.index >= arr.Length || arr[e.index] != null) continue;
+            try { arr[e.index] = e.ToAsset(); } catch (Exception ex) { PresetProblem = ex.Message; continue; }
+            Ready++; PresetLoaded++;
+            if (presetUploads.Count == 0 && presetTask == null) PresetSeconds = Time.realtimeSinceStartup - presetStart;
+        }
+    }
+
+    // Still waiting for the preset? (Generation holds off until it's in, then fills what it didn't hold.)
+    bool PresetPending => presetTask != null || presetUploads.Count > 0;
 
     public static BodyAsset Civilian(int seed) => Get(seed, false);
     public static BodyAsset Officer(int seed) => Get(seed, true);
@@ -83,14 +143,19 @@ public class BodyPool : MonoBehaviour
     // A one-off body (the player's), ahead of the pool queue.
     public void Request(CharacterSheet sheet, Action<BodyAsset> done) => requests.Enqueue((sheet, done));
 
-    CharacterSheet SheetFor(int index, bool officer) =>
-        officer ? CharacterSheet.Roll(50000 + index, officerStrBias, 0f, officerDexBias) : CharacterSheet.Roll(1000 + index);
+    CharacterSheet SheetFor(int index, bool officer) => SheetFor(index, officer, officerStrBias, officerDexBias);
+
+    // A pool slot's sheet and outfit (the editor bake makes exactly what the pool would).
+    public static CharacterSheet SheetFor(int index, bool officer, float strBias, float dexBias) =>
+        officer ? CharacterSheet.Roll(50000 + index, strBias, 0f, dexBias) : CharacterSheet.Roll(1000 + index);
+    public static Outfit OutfitFor(CharacterSheet sheet, bool officer) => Wardrobe.For(officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian, sheet.seed);
 
     void Update()
     {
         if (!Enabled && requests.Count == 0 && inFlight.Count == 0) return;
         if (FillStarted < 0f) FillStarted = Time.realtimeSinceStartup;
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        UpdatePreset();
         while (inFlight.Count < maxInFlight && requests.Count > 0)
         {
             var (sheet, done) = requests.Dequeue();
@@ -98,11 +163,12 @@ public class BodyPool : MonoBehaviour
         }
         int arg = CommandLineInFlight();
         if (arg > 0) maxInFlight = arg;
-        while (Enabled && inFlight.Count < maxInFlight && queue.Count > 0)
+        while (Enabled && !PresetPending && inFlight.Count < maxInFlight && queue.Count > 0)
         {
             var (index, officer) = queue.Dequeue();
+            if ((officer ? off : civ)[index] != null) continue;   // the preset had it
             var sheet = SheetFor(index, officer);
-            inFlight.Add((new BodyBuild(sheet, null, Wardrobe.For(officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian, sheet.seed)), index, officer, null));
+            inFlight.Add((new BodyBuild(sheet, null, OutfitFor(sheet, officer)), index, officer, null));
         }
         for (int i = inFlight.Count - 1; i >= 0; i--)
         {
@@ -116,8 +182,8 @@ public class BodyPool : MonoBehaviour
             if (f.done != null) { f.done(a); continue; }
             (f.officer ? off : civ)[f.index] = a;
             Ready++;
-            if (Ready + Failed >= Total && FillSeconds < 0f) FillSeconds = Time.realtimeSinceStartup - FillStarted;
         }
+        if (Ready + Failed >= Total && FillSeconds < 0f) FillSeconds = Time.realtimeSinceStartup - FillStarted;
         StepMsThisFrame = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
         WorstStepMs = Mathf.Max(WorstStepMs, StepMsThisFrame);
     }
@@ -132,5 +198,5 @@ public class BodyPool : MonoBehaviour
         return inFlightArg;
     }
 
-    public bool Filling => queue.Count > 0 || inFlight.Count > 0;
+    public bool Filling => PresetPending || queue.Count > 0 || inFlight.Count > 0;
 }
