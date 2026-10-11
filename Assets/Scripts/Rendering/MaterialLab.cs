@@ -115,7 +115,7 @@ public class MaterialLab : MonoBehaviour
 
     void RegisterFeatures()
     {
-        var vol = FindFirstObjectByType<Volume>();
+        var vol = FindAnyObjectByType<Volume>();
         if (vol != null) GraphicsFeatures.Register("Post-processing", () => vol.enabled, v => vol.enabled = v);
         var fog = HeightFogSettings.Active;
         if (fog != null) GraphicsFeatures.Register("Height fog", () => fog.enabled, v => fog.enabled = v);

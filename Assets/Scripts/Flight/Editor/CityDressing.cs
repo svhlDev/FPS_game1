@@ -534,7 +534,7 @@ public static partial class CityDressing
     // The scene's day / night cycle (one per scene).
     public static TimeOfDay AddTimeOfDay()
     {
-        var existing = Object.FindFirstObjectByType<TimeOfDay>();
+        var existing = Object.FindAnyObjectByType<TimeOfDay>();
         return existing != null ? existing : new GameObject("TimeOfDay").AddComponent<TimeOfDay>();
     }
 

@@ -648,7 +648,7 @@ public partial class ScenarioTest : MonoBehaviour
         if (fpc != null) fpc.enabled = false;
         var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(22f); }
         Vector3 mid = fpc != null ? fpc.transform.position : new Vector3(0f, 180f, 0f);
-        var sig = FindFirstObjectByType<TrafficSignal>();
+        var sig = FindAnyObjectByType<TrafficSignal>();
         Vector3 street = sig != null ? new Vector3(sig.transform.position.x, 0f, sig.transform.position.z) : Vector3.zero;
         Light lamp = null; float best = float.MaxValue;
         foreach (var l in FindObjectsByType<Light>(FindObjectsInactive.Include))
@@ -1022,7 +1022,7 @@ public partial class ScenarioTest : MonoBehaviour
         FlyingVehicle.CameraOverride = false;
 
         // The city: near pedestrians wear the pool's dressed bodies.
-        var peds = FindFirstObjectByType<PedestrianSystem>();
+        var peds = FindAnyObjectByType<PedestrianSystem>();
         var pool = BodyPool.Instance;
         float waited = 0f;
         for (; waited < 400f && pool != null && pool.Filling; waited += 1f) yield return new WaitForSeconds(1f);
