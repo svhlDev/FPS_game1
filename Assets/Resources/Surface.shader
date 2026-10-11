@@ -109,7 +109,11 @@ Shader "FPS/Surface"
                 o.positionCS = p.positionCS;
                 o.positionWS = p.positionWS;
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
-                o.patternPos = _Space < 0.5 ? p.positionWS : (_Space < 1.5 ? v.positionOS.xyz : v.restPos);
+                // Object space in metres: primitives are unit meshes scaled by the transform, so scale the
+                // local position by the object's scale (otherwise patterns stretch with it).
+                float3x3 m = (float3x3)GetObjectToWorldMatrix();
+                float3 scale = float3(length(m._m00_m10_m20), length(m._m01_m11_m21), length(m._m02_m12_m22));
+                o.patternPos = _Space < 0.5 ? p.positionWS : (_Space < 1.5 ? v.positionOS.xyz * scale : v.restPos);
                 o.patternNrm = _Space < 0.5 ? o.normalWS : v.normalOS;
                 o.uv = v.uv;
                 o.color = v.color;
@@ -177,30 +181,42 @@ Shader "FPS/Surface"
                     {
                         float mottle = Fbm(p * 0.6, 3);
                         float fine = lerp(0.5, VNoise(p * 9.0), DetailFade(p, 9.0));
-                        s.albedo = base * lerp(0.75, 1.15, mottle) * lerp(0.92, 1.08, fine);
+                        // Per-slab tone and dark joints every 1.5 m on floors (paving, decks), readable far off.
+                        float floorMask = saturate(nWS.y * 5.0 - 4.0);
+                        float2 slab = p.xz / 1.5;
+                        float2 jf = abs(frac(slab) - 0.5);
+                        float toJoint = 0.5 - max(jf.x, jf.y);                               // slab units, 0 on a joint
+                        float jw = 0.008 + fwidth(slab.x);                                     // ~1 cm, at least a pixel
+                        float joint = (1.0 - smoothstep(jw, jw * 2.0, toJoint)) * floorMask * DetailFade(p, 5.0);
+                        float slabTone = lerp(1.0, lerp(0.85, 1.12, Hash01(int3(floor(slab.x), 0, floor(slab.y)))), floorMask);
+                        s.albedo = base * lerp(0.65, 1.25, mottle) * lerp(0.9, 1.1, fine) * slabTone * (1.0 - joint * 0.5);
                         s.smoothness = lerp(_SmoothMin, _SmoothMax, VNoise(p * 2.0));
                         s.albedo = lerp(s.albedo, base * 1.25, wear * 0.5);               // chipped corners lighter
                         break;
                     }
                     case T_ASPHALT:
                     {
+                        // Fine aggregate (fades out), a mid-scale grain that survives to ~50 m, and big
+                        // features readable from far away: repair patches, oil stains, cracks.
                         float fade = DetailFade(p, 45.0);
                         float aggregate = lerp(0.3, smoothstep(0.62, 0.78, VNoise(p * 45.0)), fade);
-                        s.albedo = base * lerp(0.85, 1.6, aggregate) * lerp(0.85, 1.1, Fbm(p * 0.4, 2));
+                        float grain = lerp(0.5, VNoise(p * 6.0), DetailFade(p, 6.0));
+                        // Repairs: a few rectangular patches (2.5 x 5 m grid, ~8 % of cells), slightly
+                        // darker, soft-edged.
+                        float2 pc = p.xz / float2(2.5, 5.0);
+                        float ph = Hash01(int3(floor(pc.x), 7, floor(pc.y)));
+                        float2 pf = abs(frac(pc) - 0.5);
+                        float patch = step(ph, 0.08) * (1.0 - smoothstep(0.38, 0.45, max(pf.x, pf.y))) * saturate(nWS.y * 5.0 - 4.0);
+                        float stain = smoothstep(0.66, 0.74, Fbm(p * 0.5 + 31.0, 3));
+                        s.albedo = base * lerp(0.85, 1.6, aggregate) * lerp(0.85, 1.15, grain) * lerp(0.75, 1.25, Fbm(p * 0.25, 3))
+                                 * (1.0 - patch * 0.25) * (1.0 - stain * 0.35);
                         s.smoothness = lerp(_SmoothMin, _SmoothMax, Fbm(p * 1.3, 2));
-                        // Lighter, smoother wheel tracks: the lanes run along the slab's long axis.
-                        if (hasBox && nWS.y > 0.9)
-                        {
-                            float across = (box.acrossIsU > 0.5 ? box.uvMetres.x - box.size.x * 0.5 : box.uvMetres.y - box.size.y * 0.5);
-                            float lane = frac(across / 3.5) * 3.5 - 1.75;                   // metres from the lane centre
-                            float track = exp(-Sq(abs(lane) - 0.9) / 0.06);
-                            s.albedo *= 1.0 + track * _Wear * 0.7;
-                            s.smoothness = lerp(s.smoothness, _SmoothMax + 0.1, track * _Wear);
-                        }
-                        // Cracks along cell borders, only in some areas.
-                        float3 vor = Voronoi(p * 0.3);
-                        float crack = (1.0 - smoothstep(0.0, 0.035, vor.y)) * smoothstep(0.45, 0.6, Fbm(p * 0.15, 2));
-                        s.albedo *= 1.0 - crack * 0.7;
+                        s.smoothness = lerp(s.smoothness, 0.45, stain);                     // oil is a little glossier
+                        // Cracks: thin, jagged (a warped cell field), only in some areas.
+                        float3 wp = p + (float3(Fbm(p * 0.8, 2), 0.0, Fbm(p * 0.8 + 11.0, 2)) - 0.5) * 1.2;
+                        float3 vor = Voronoi(wp * 0.35);
+                        float crack = (1.0 - smoothstep(0.0, 0.02, vor.y)) * smoothstep(0.58, 0.68, Fbm(p * 0.12 + 5.0, 2));
+                        s.albedo *= 1.0 - crack * 0.6;
                         s.smoothness *= 1.0 - crack * 0.5;
                         break;
                     }
@@ -249,12 +265,12 @@ Shader "FPS/Surface"
                         s.smoothness = _SmoothMin;
                         s.coat = 1.0; s.coatSmooth = _SmoothMax;
                         s.porosity = 0.3;
-                        // Flakes: one random micro-facet per 4 mm cell, sparkling in highlights; fades to
-                        // a slightly smoother base far away.
-                        float fade = DetailFade(p, 250.0);
-                        uint3 h = HashInt3((int3)floor(p * 250.0));
+                        // Flakes: one random micro-facet per 2 mm cell, a faint sparkle in highlights,
+                        // gone (a slightly smoother base) beyond arm's length.
+                        float fade = DetailFade(p, 500.0);
+                        uint3 h = HashInt3((int3)floor(p * 500.0));
                         float3 r = float3(U01(h.x), U01(h.y), U01(h.z)) - 0.5;
-                        s.flakeGrad = r * _Flake * fade * 1.5;
+                        s.flakeGrad = r * _Flake * fade * 0.25;
                         s.smoothness = lerp(s.smoothness, saturate(s.smoothness + 0.15), _Flake);
                         s.albedo = lerp(base, _SecondColor.rgb, wear * 0.6);
                         break;

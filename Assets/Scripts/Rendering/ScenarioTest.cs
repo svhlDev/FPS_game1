@@ -745,6 +745,16 @@ public partial class ScenarioTest : MonoBehaviour
             Vector3 c = row.transform.position + new Vector3(0f, 0.6f, -0.8f);
             View(c, c + new Vector3(0.6f, 0.9f, -2.2f)); yield return Shot("close_" + n);
         }
+        // The cars up close (object-space patterns must stay in metres on scaled primitives), and the
+        // road and floor from standing height.
+        foreach (var carName in new[] { "LabCar", "LabPoliceCar" })
+        {
+            var car = GameObject.Find(carName);
+            if (car == null) continue;
+            Vector3 c = car.transform.position + Vector3.up * 0.5f;
+            View(c, c + new Vector3(-1.2f, 0.8f, -1.6f)); yield return Shot("close_" + carName);
+        }
+        { Vector3 r = new Vector3(0f, 0f, 24f); View(r + new Vector3(0f, 0f, 10f), r + new Vector3(-6f, 1.7f, -5f)); yield return Shot("close_road"); }
         lab.SetPreset(MaterialLab.Preset.NightNeon);
         lab.SetWet(true); View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot("wet"); lab.SetWet(false);
         // Phase 1 before / after: SSAO and film grain off, Neutral tonemapping.
