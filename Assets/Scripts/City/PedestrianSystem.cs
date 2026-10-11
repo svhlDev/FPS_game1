@@ -321,7 +321,7 @@ public class PedestrianSystem : MonoBehaviour
         if (asset != null)
         {
             if (fig == null || fig.Hips == null || fig.Asset != asset) fig = CharacterFigure.Assemble(t, asset, CharacterFigure.Role.Civilian, false, false, p.seed);
-            else fig.Renderers[0].sharedMaterials = BodyMaterials.Clothes(CharacterFigure.Role.Civilian, p.seed, fig.HeadRenderer.sharedMaterial);
+            else fig.Renderers[0].sharedMaterials = BodyMaterials.Clothes(asset, CharacterFigure.Role.Civilian, p.seed, fig.HeadRenderer.sharedMaterial);
         }
         else if (fig == null || fig.Generated || fig.Hips == null)
             fig = CharacterFigure.Build(t, CharacterFigure.Role.Civilian, rand, CharacterFigure.DefaultHeight, false, false);

@@ -13,8 +13,8 @@ using UnityEngine;
 // previewMeshes shows the generated body mesh (BodySDF -> BodyMesher, A-pose bind pose) instead of the
 // rings: built one per frame in play mode; in the editor use the component's context menu
 // "Build preview meshes" (they draw as gizmos).
-// previewOutfit (Clothing Phase 1 check): the STR / DEX rows also get a T-shirt and pants, each as its
-// garment field's outer solid, quick-meshed in the garment's colour.
+// Play mode builds every entry through BodyBuild (the game's own path: what the lineup shows is what the
+// game shows); previewOutfit dresses the STR / DEX rows in the casual outfit (Clothing Part A).
 public class BodyLineupDebug : MonoBehaviour
 {
     public float spacing = 1.0f;
@@ -26,6 +26,8 @@ public class BodyLineupDebug : MonoBehaviour
     public int meshTriangles = 10000;
     public Color skinColor = new Color(0.82f, 0.64f, 0.52f);
     public bool previewOutfit = true;
+    [Tooltip("Also mesh each body with BodyMesher (whole, one grid) for its stats (holes, timings): the bodies test.")]
+    public bool collectMeshStats;
     public int[] outfitRows = { 1, 2, 3 };
     public float garmentCell = 0.006f;
     public float LastMeshMs { get; private set; }
@@ -34,7 +36,7 @@ public class BodyLineupDebug : MonoBehaviour
     readonly List<(Mesh mesh, Vector3 offset)> editorMeshes = new List<(Mesh, Vector3)>();
     readonly List<(Mesh mesh, Vector3 offset, Color color)> editorGarments = new List<(Mesh, Vector3, Color)>();
 
-    public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; public int row; }
+    public struct Entry { public string label; public BodyPlan plan; public Vector3 offset; public int row; public ISpeciesTemplate template; }
     public readonly List<Entry> Entries = new List<Entry>();
     public static readonly string[] RowNames = { "seed variation", "STR 1  (DEX 1/10/20)", "STR 10 (DEX 1/10/20)", "STR 20 (DEX 1/10/20)", "INT 1-20", "arms 0/1/3/4/5" };
     static readonly int[] Sweep = { 1, 5, 10, 15, 20 };
@@ -44,7 +46,7 @@ public class BodyLineupDebug : MonoBehaviour
         Entries.Clear();
         var rules = BodyRules.Default;
         void Add(int row, int col, string label, CharacterSheet sheet, ISpeciesTemplate t = null) =>
-            Entries.Add(new Entry { label = label, plan = BodyPlanner.Generate(sheet, rules, t), offset = new Vector3(-col * spacing, -row * rowHeight, 0f), row = row });
+            Entries.Add(new Entry { label = label, plan = BodyPlanner.Generate(sheet, rules, t), offset = new Vector3(-col * spacing, -row * rowHeight, 0f), row = row, template = t });
 
         for (int i = 0; i < 4; i++)
         {
@@ -90,27 +92,28 @@ public class BodyLineupDebug : MonoBehaviour
         skinLines = LineObject("Skin", new Color(1f, 0.75f, 0.35f) * 1.2f);
     }
 
+    public readonly List<(string label, BodyAsset asset)> Assets = new List<(string, BodyAsset)>();
+
     System.Collections.IEnumerator BuildMeshes()
     {
-        var mat = CharacterFigure.Mat(skinColor);
+        var skin = CharacterFigure.Mat(skinColor);
         foreach (var e in Entries)
         {
-            var (mesh, r) = BuildMesh(e.plan);
-            MeshStats.Add((e.label, r));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var asset = new BodyBuild(e.plan.sheet, e.template, Dressed(e) ? Outfit.Casual() : Outfit.None()).RunSync();
+            LastMeshMs = (float)sw.Elapsed.TotalMilliseconds;
+            Assets.Add((e.label, asset));
+            if (collectMeshStats) MeshStats.Add((e.label, BuildMesh(e.plan).r));
             var go = new GameObject("Mesh " + e.label);
             go.transform.SetParent(transform, false);
             go.transform.localPosition = e.offset;
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+            go.AddComponent<MeshFilter>().sharedMesh = asset.body;
+            go.AddComponent<MeshRenderer>().sharedMaterials = BodyMaterials.Clothes(asset, CharacterFigure.Role.Civilian, e.plan.sheet.seed, skin);
+            var head = new GameObject("Head");
+            head.transform.SetParent(go.transform, false);
+            head.AddComponent<MeshFilter>().sharedMesh = asset.head;
+            head.AddComponent<MeshRenderer>().sharedMaterial = skin;
             MeshesBuilt++;
-            if (Dressed(e))
-                foreach (var (gm, color) in BuildGarments(e.plan))
-                {
-                    var g = new GameObject("Garment " + gm.name);
-                    g.transform.SetParent(go.transform, false);
-                    g.AddComponent<MeshFilter>().sharedMesh = gm;
-                    g.AddComponent<MeshRenderer>().sharedMaterial = CharacterFigure.Mat(color);
-                }
             yield return null;
         }
     }

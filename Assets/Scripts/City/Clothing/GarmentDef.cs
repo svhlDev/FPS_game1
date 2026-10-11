@@ -8,6 +8,8 @@ using UnityEngine;
 // cut at its ends (`cuts`). GarmentField turns one into a distance field; adding a garment type is a
 // new GarmentDef, no new mesh code.
 public enum Fabric { Cotton, Denim, Wool, Leather, Vinyl }
+// What a garment is for (picks its colour from the wardrobe's palettes).
+public enum GarmentSlot { Top, Bottom, Feet, Outer, Head }
 
 [Serializable]
 public class GarmentCut
@@ -53,11 +55,20 @@ public class GarmentDef
     [Tooltip("Hem: the cut's rounding radius (m).")]
     public float hemBlend = 0.004f;
 
+    [Header("Mesh")]
+    [Tooltip("Meshing grid cell (m) for the garment's surface.")]
+    public float meshCell = 0.015f;
+    [Tooltip("Triangle budget (decimated to it).")]
+    public int triangles = 2500;
+
     [Header("Look")]
+    public GarmentSlot slot = GarmentSlot.Top;
     public Fabric fabric = Fabric.Cotton;
     public Color color = new Color(0.3f, 0.32f, 0.36f);
-    [Tooltip("Outfit layer: under (0), pants (1), outer (2), shoes (3).")]
+    [Tooltip("Outfit layer (informational; the outfit's list order is the layering: later rests on earlier).")]
     public int layer;
+
+    public GarmentDef Clone() { var c = (GarmentDef)MemberwiseClone(); c.cuts = new List<GarmentCut>(cuts); return c; }
 
     static readonly BoneKind[] Torso = { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest };
 
@@ -65,7 +76,7 @@ public class GarmentDef
 
     public static GarmentDef TShirt() => new GarmentDef
     {
-        name = "T-shirt", layer = 0, ease = 0.015f, thickness = 0.004f, hangLength = 0.15f, slope = 0.25f,
+        name = "T-shirt", layer = 1, slot = GarmentSlot.Top, triangles = 3000, ease = 0.015f, thickness = 0.004f, hangLength = 0.15f, slope = 0.25f,
         covers = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Neck, BoneKind.UpperArm, BoneKind.Thigh },
         cuts =
         {
@@ -93,7 +104,7 @@ public class GarmentDef
 
     public static GarmentDef Pants() => new GarmentDef
     {
-        name = "Pants", layer = 1, ease = 0.015f, thickness = 0.005f, hangLength = 0.1f, slope = 0.35f, splitLegs = true,
+        name = "Pants", layer = 0, slot = GarmentSlot.Bottom, triangles = 2500, ease = 0.015f, thickness = 0.005f, hangLength = 0.1f, slope = 0.35f, splitLegs = true,
         fabric = Fabric.Denim, color = new Color(0.16f, 0.2f, 0.3f),
         covers = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Thigh, BoneKind.Shin },
         drapeOn = new[] { BoneKind.Pelvis },
@@ -102,6 +113,15 @@ public class GarmentDef
             GarmentCut.AtHeight(1.12f, false, BoneKind.Pelvis, BoneKind.Lumbar),   // waist
             GarmentCut.AtBone(BoneKind.Shin, 0.9f),                                  // ankle
         },
+    };
+
+    // Shoes: a shell over the small feet and the ankle (Phase 7 adds the sole slab and boots).
+    public static GarmentDef Shoes() => new GarmentDef
+    {
+        name = "Shoes", layer = 0, slot = GarmentSlot.Feet, ease = 0.006f, thickness = 0.006f, gap = 0.002f, hangLength = 0f, meshCell = 0.008f, triangles = 700,
+        fabric = Fabric.Leather, color = new Color(0.07f, 0.07f, 0.08f), drapeOn = new BoneKind[0],
+        covers = new[] { BoneKind.Foot, BoneKind.Shin },
+        cuts = { GarmentCut.AtBone(BoneKind.Shin, 0.9f, false) },   // just above the ankle
     };
 
     public static GarmentDef Shorts()
@@ -116,7 +136,7 @@ public class GarmentDef
     // Long coat: torso to the knees, wide ease, heavy drape (Phase 7 adds the flare, slits and collar).
     public static GarmentDef Coat() => new GarmentDef
     {
-        name = "Coat", layer = 2, ease = 0.06f, thickness = 0.015f, hangLength = 0.3f, slope = 0.15f,
+        name = "Coat", layer = 2, slot = GarmentSlot.Outer, triangles = 3500, ease = 0.06f, thickness = 0.015f, hangLength = 0.3f, slope = 0.15f,
         fabric = Fabric.Wool, color = new Color(0.25f, 0.2f, 0.16f),
         covers = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Neck, BoneKind.UpperArm, BoneKind.Forearm, BoneKind.Thigh },
         drapeOn = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Thigh },
@@ -133,5 +153,25 @@ public class GarmentDef
 public class Outfit
 {
     public List<GarmentDef> garments = new List<GarmentDef>();
-    public static Outfit Casual() => new Outfit { garments = { GarmentDef.TShirt(), GarmentDef.Pants() } };
+    // List order is the layering (each garment rests on the ones before it): shoes, pants, then the top,
+    // untucked over the pants.
+    public static Outfit Casual(bool longSleeve = false) => new Outfit { garments = { GarmentDef.Shoes(), GarmentDef.Pants(), longSleeve ? GarmentDef.LongSleeve() : GarmentDef.TShirt() } };
+    public static Outfit None() => new Outfit();
+    public int Count => garments.Count;
+}
+
+// Who wears what: an outfit per role from the seed (shapes; colours come from BodyMaterials.Clothes).
+public static class Wardrobe
+{
+    public static Outfit For(CharacterFigure.Role role, int seed)
+    {
+        switch (role)
+        {
+            case CharacterFigure.Role.Police: return Outfit.Casual(true);      // uniform: long sleeves, navy (colours)
+            case CharacterFigure.Role.Player: return Outfit.Casual(false);
+            default:
+                var r = new PcgRandom(seed, "outfit");
+                return Outfit.Casual(r.Value() < 0.35f);
+        }
+    }
 }

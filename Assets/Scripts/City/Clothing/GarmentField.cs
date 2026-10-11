@@ -38,76 +38,135 @@ public class GarmentField : IDisposable
         public int applyMask;  // height cuts: bit per BoneKind
     }
 
+    // Done when the field is ready (scheduled builds); temporaries are freed by Complete().
+    public JobHandle Handle;
+    readonly List<IDisposable> temps = new List<IDisposable>();
+    GarmentKernel dummy; bool ownsDummy;
+
+    // Blocking build on the body alone (tests, lineup previews).
     public GarmentField(BodySDF sdf, GarmentDef g, float cell = 0.01f)
     {
-        def = g;
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        dummy = GarmentKernel.Dummy(sdf.Kernel, Allocator.TempJob); ownsDummy = true;
+        def = g;
+        Schedule(sdf, g, DressedKernel.Make(sdf.Kernel, null, dummy), default, cell);
+        Complete();
+        buildMs = (float)sw.Elapsed.TotalMilliseconds;
+    }
+
+    // Scheduled build (BodyBuild): `below` holds the garments under this one (body + earlier layers are
+    // its base: it rests on them); `dep` = when they're ready. Nothing runs on the calling thread.
+    public GarmentField(BodySDF sdf, GarmentDef g, DressedKernel below, JobHandle dep, float cell = 0.01f)
+    {
+        def = g;
+        Schedule(sdf, g, below, dep, cell);
+    }
+
+    public void Complete()
+    {
+        Handle.Complete();
+        foreach (var t in temps) t.Dispose();
+        temps.Clear();
+        if (ownsDummy) { dummy.Dispose(); ownsDummy = false; }
+    }
+
+    // (Uninitialized: every job writes all of its output before anything reads it.)
+    NativeArray<T> Temp<T>(int n) where T : struct { var a = new NativeArray<T>(n, Allocator.Persistent, NativeArrayOptions.UninitializedMemory); temps.Add(a); return a; }
+
+    // Grid bounds: the covered bones, padded by girth, ease, the shell and the drape.
+    static Bounds CoverBounds(BodySDF sdf, GarmentDef g)
+    {
+        var plan = sdf.Plan;
+        int cover = 0; foreach (var k in g.covers) cover |= 1 << (int)k;
+        var b = new Bounds(); bool any = false;
+        float pad = g.ease * 2f + g.thickness + g.gap + g.hangLength * 0.5f + 0.06f;
+        for (int i = 0; i < plan.bones.Count; i++)
+        {
+            var bone = plan.bones[i];
+            if (bone.kind == BoneKind.Finger || (cover & (1 << (int)bone.kind)) == 0) continue;
+            float r = Mathf.Max(bone.Outer.x, Mathf.Max(bone.Outer.y, bone.Outer.z)) * 1.3f + pad;
+            var e = new Bounds(sdf.start[i], Vector3.one * r * 2f); e.Encapsulate(new Bounds(sdf.end[i], Vector3.one * r * 2f));
+            if (!any) { b = e; any = true; } else b.Encapsulate(e);
+        }
+        // Breasts and the like hang off the bones: the body bounds clamp it.
+        if (!any) b = sdf.bounds;
+        var body = sdf.bounds; body.Expand(pad * 2f);
+        b.SetMinMax(Vector3.Max(b.min, body.min), Vector3.Min(b.max, body.max));
+        return b;
+    }
+
+    void Schedule(BodySDF sdf, GarmentDef g, DressedKernel below, JobHandle dep, float cell)
+    {
         var body = sdf.Kernel;
-        float pad = g.ease * 2f + g.thickness + g.gap + 0.03f;
-        bounds = sdf.bounds;
-        bounds.Expand(pad * 2f);
+        bounds = CoverBounds(sdf, g);
         Vector3 min = bounds.min;
         int nx = Mathf.CeilToInt(bounds.size.x / cell) + 1, ny = Mathf.CeilToInt(bounds.size.y / cell) + 1, nz = Mathf.CeilToInt(bounds.size.z / cell) + 1;
         int n = nx * ny * nz;
         int mx = (nx - 1) / C + 2, my = (ny - 1) / C + 2, mz = (nz - 1) / C + 2;
 
-        // 1. body distance + nearest bone
-        var coarse = new NativeArray<float>(mx * my * mz, Allocator.TempJob);
-        var values = new NativeArray<float>(n, Allocator.TempJob);
-        var nearest = new NativeArray<byte>(n, Allocator.TempJob);
-        var h = new BodyMesher.CoarseJob { kernel = body, min = min, step = cell * C, mx = mx, my = my, values = coarse }.Schedule(coarse.Length, 64);
-        float band = Mathf.Max(cell * C * 1.9f, g.ease * 2f + g.thickness + 0.02f);
-        h = new SampleJob { kernel = body, coarse = coarse, min = min, cell = cell, band = band, nx = nx, ny = ny, mx = mx, my = my, values = values, nearest = nearest }.Schedule(n, 256, h);
-        h.Complete();
-        coarse.Dispose();
+        // 1. base distance (body + the layers below) + nearest bone
+        var coarse = Temp<float>(mx * my * mz);
+        var values = Temp<float>(n);
+        // Nearest bone per cell: kept with the kernel (garment surfaces look it up instead of evaluating the body).
+        var nearest = new NativeArray<byte>(n, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        var h = new BaseCoarseJob { kernel = below, min = min, step = cell * C, nx = mx, ny = my, values = coarse }.Schedule(coarse.Length, 64, dep);
+        float band = Mathf.Max(cell * C * 1.9f, g.ease * 2f + g.thickness + g.hangLength * 0.5f + 0.03f);
+        h = new SampleJob { kernel = below, coarse = coarse, min = min, cell = cell, band = band, nx = nx, ny = ny, mx = mx, my = my, values = values, nearest = nearest }.Schedule(n, 256, h);
 
         // 2. closing (per leg for split garments)
         int nb = body.bones.Length;
-        var closed = new NativeArray<float>(n, Allocator.Persistent);
-        var tmpA = new NativeArray<float>(n, Allocator.TempJob);
-        var tmpB = new NativeArray<float>(n, Allocator.TempJob);
+        var closed = Temp<float>(n);
+        var tmpA = Temp<float>(n);
+        var tmpB = Temp<float>(n);
         int r = Mathf.Max(1, Mathf.RoundToInt(g.ease / cell));
         // Split garments: each leg on its own, then the whole body again above the crotch (so the legs'
-        // own closings don't leave a notch where they meet the pelvis).
-        var sides = g.splitLegs ? new[] { -1, 1, 0 } : new[] { 0 };
+        // own closings don't leave a notch where they meet the pelvis). Sleeves: each arm closed on its own
+        // and the torso without the arms, so the armpit isn't webbed shut (it would stretch into a bat
+        // wing when the arms go up).
+        bool splitArms = System.Array.IndexOf(g.covers, BoneKind.UpperArm) >= 0;
+        var groups = new List<(int legSide, int arm)>();   // legSide: 0 all legs, +-1 that leg only; arm: 0 no arms, +-1 that arm only, 2 all
+        foreach (int side in g.splitLegs ? new[] { -1, 1, 0 } : new[] { 0 }) groups.Add((side, splitArms ? 0 : 2));
+        if (splitArms) { groups.Add((9, -1)); groups.Add((9, 1)); }
         int pelvis = sdf.Plan.Index("Hips");
         float crotchY = pelvis >= 0 ? sdf.end[pelvis].y : 0f;
         bool first = true;
-        foreach (int side in sides)
+        foreach (var (side, arm) in groups)
         {
-            var exclude = new NativeArray<byte>(nb, Allocator.TempJob);
+            var exclude = Temp<byte>(nb);
             for (int i = 0; i < nb; i++)
             {
                 var b = body.bones[i];
                 bool leg = b.kind == (int)BoneKind.Thigh || b.kind == (int)BoneKind.Shin || b.kind == (int)BoneKind.Foot;
-                exclude[i] = (byte)(side != 0 && leg && b.side == -side ? 1 : 0);
+                bool isArm = b.kind == (int)BoneKind.UpperArm || b.kind == (int)BoneKind.Forearm || b.kind == (int)BoneKind.Hand;
+                bool ex;
+                if (side == 9) ex = !(isArm && (b.side == arm || (arm < 0 && b.side == 0)));                  // one arm alone
+                else ex = (side != 0 && leg && b.side == -side) || (isArm && arm == 0);
+                exclude[i] = (byte)(ex ? 1 : 0);
             }
-            h = new MaskJob { values = values, nearest = nearest, exclude = exclude, output = tmpA }.Schedule(n, 1024);
+            h = new MaskJob { values = values, nearest = nearest, exclude = exclude, output = tmpA }.Schedule(n, 1024, h);
             h = Filter(tmpA, tmpB, nx, ny, nz, r, 0, h);    // dilate: min filter (result in tmpA)
             h = Filter(tmpA, tmpB, nx, ny, nz, r, 1, h);    // erode: max filter
             bool aboveOnly = g.splitLegs && side == 0;
             h = new CombineJob { a = tmpA, output = closed, first = first ? 1 : 0, aboveOnly = aboveOnly ? 1 : 0, nx = nx, ny = ny,
                                  minY = min.y, cell = cell, fromY = crotchY - 0.01f, toY = crotchY + 0.05f }.Schedule(n, 1024, h);
-            h.Complete();
-            exclude.Dispose();
             first = false;
         }
 
         // 3. drape
         int drapeMask = 0; foreach (var k in g.drapeOn) drapeMask |= 1 << (int)k;
-        var kinds = new NativeArray<int>(nb, Allocator.TempJob);
+        var kinds = Temp<int>(nb);
         for (int i = 0; i < nb; i++) kinds[i] = body.bones[i].kind;
-        h = new WeightJob { nearest = nearest, kinds = kinds, mask = drapeMask, output = tmpA }.Schedule(n, 1024);
+        h = new WeightJob { nearest = nearest, kinds = kinds, mask = drapeMask, output = tmpA }.Schedule(n, 1024, h);
         h = Filter(tmpA, tmpB, nx, ny, nz, Mathf.Max(1, Mathf.RoundToInt(0.03f / cell)), 2, h);   // smooth the region's edge (~3 cm)
-        var drape = new NativeArray<float>(n, Allocator.Persistent);
+        var drape = new NativeArray<float>(n, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         int steps = 8;
         int stepCells = Mathf.Max(1, Mathf.RoundToInt(g.hangLength / steps / cell));
         h = new DrapeJob { closed = closed, nearest = nearest, kinds = kinds, mask = drapeMask, weight = tmpA, nx = nx, ny = ny, steps = g.hangLength > 0f ? steps : 0,
                            stepCells = stepCells, stepRise = stepCells * cell * g.slope, output = drape }.Schedule(n, 256, h);
-        h.Complete();
-        kinds.Dispose(); tmpA.Dispose(); tmpB.Dispose(); values.Dispose(); nearest.Dispose(); closed.Dispose();
+        Handle = h;
+        JobHandle.ScheduleBatchedJobs();
 
-        // 4. the kernel
+        // 4. the kernel (its grid is ready once Handle completes)
         var cuts = new NativeArray<Cut>(g.cuts.Count, Allocator.Persistent);
         for (int i = 0; i < g.cuts.Count; i++)
         {
@@ -119,16 +178,15 @@ public class GarmentField : IDisposable
         float hipY = sdf.Plan.bones[sdf.Plan.Index("Hips")].localPos.y;
         Kernel = new GarmentKernel
         {
-            body = body, drape = drape, min = min, cell = cell, nx = nx, ny = ny, nz = nz, cuts = cuts, coverMask = cover, hipY = hipY,
+            body = body, drape = drape, nearest = nearest, min = min, cell = cell, nx = nx, ny = ny, nz = nz, cuts = cuts, coverMask = cover, hipY = hipY,
             thickness = g.thickness, gap = g.gap, hemBlend = g.hemBlend,
         };
-        buildMs = (float)sw.Elapsed.TotalMilliseconds;
     }
 
     public void Dispose()
     {
-        if (Kernel.drape.IsCreated) Kernel.drape.Dispose();
-        if (Kernel.cuts.IsCreated) Kernel.cuts.Dispose();
+        Complete();
+        Kernel.Dispose();
     }
 
     // Debug view (Phase 1 check): the outer solid quick-meshed (surface nets at `cell`, one smoothing pass,
@@ -200,9 +258,25 @@ public class GarmentField : IDisposable
     // ---------- jobs ----------
 
     [BurstCompile]
+    struct BaseCoarseJob : IJobParallelFor
+    {
+        public DressedKernel kernel;
+        public Vector3 min;
+        public float step;
+        public int nx, ny;
+        [WriteOnly] public NativeArray<float> values;
+        public void Execute(int i)
+        {
+            int x = i % nx, y = (i / nx) % ny, z = i / (nx * ny);
+            Vector3 p = min + new Vector3(x, y, z) * step;
+            values[i] = kernel.Base(p, kernel.body.Eval(p), kernel.count);
+        }
+    }
+
+    [BurstCompile]
     struct SampleJob : IJobParallelFor
     {
-        public BodySdfKernel kernel;
+        public DressedKernel kernel;
         [ReadOnly] public NativeArray<float> coarse;
         public Vector3 min;
         public float cell, band;
@@ -220,8 +294,9 @@ public class GarmentField : IDisposable
             float c11 = Mathf.Lerp(coarse[x0 + mx * (y0 + 1 + my * (z0 + 1))], coarse[x0 + 1 + mx * (y0 + 1 + my * (z0 + 1))], fx);
             float est = Mathf.Lerp(Mathf.Lerp(c00, c10, fy), Mathf.Lerp(c01, c11, fy), fz);
             if (Mathf.Abs(est) > band) { values[i] = est; nearest[i] = Far; return; }
-            var s = kernel.Eval(min + new Vector3(x, y, z) * cell);
-            values[i] = s.skin;
+            Vector3 p = min + new Vector3(x, y, z) * cell;
+            var s = kernel.body.Eval(p);
+            values[i] = kernel.Base(p, s, kernel.count);
             nearest[i] = (byte)s.nearest;
         }
     }
@@ -343,6 +418,7 @@ public struct GarmentKernel
 {
     public BodySdfKernel body;
     [ReadOnly] public NativeArray<float> drape;
+    [ReadOnly] public NativeArray<byte> nearest;           // nearest body bone per grid cell (255: far from the body)
     [ReadOnly] public NativeArray<GarmentField.Cut> cuts;
     public Vector3 min;
     public float cell;
@@ -396,10 +472,191 @@ public struct GarmentKernel
         return BodySdfKernel.SMax(Mathf.Max(outer, -inner), Region(p, s.nearest), hemBlend);
     }
 
-    // The solid the garment's outer surface encloses (body included), cut like the garment: the debug view.
+    // The solid the garment's outer surface encloses (body included), cut like the garment: the debug view,
+    // and (Part A) the garment's mesh: its surface, minus whatever lies inside the layers beneath. Region by
+    // the grid's nearest bone (no body evaluation: meshing samples this a lot).
     public float OuterSolid(Vector3 p)
     {
-        var s = body.Eval(p);
-        return BodySdfKernel.SMax(Draped(p) - thickness - gap, Region(p, s.nearest), hemBlend);
+        Vector3 g = (p - min) / cell;
+        int x = Mathf.Clamp(Mathf.RoundToInt(g.x), 0, nx - 1), y = Mathf.Clamp(Mathf.RoundToInt(g.y), 0, ny - 1), z = Mathf.Clamp(Mathf.RoundToInt(g.z), 0, nz - 1);
+        byte nb = nearest[x + nx * (y + ny * z)];
+        float region = nb == 255 ? 0.05f : Region(p, nb);
+        return BodySdfKernel.SMax(Draped(p) - thickness - gap, region, hemBlend);
+    }
+    public float OuterSolidGiven(Vector3 p, BodySdfKernel.Sample s) => OuterSolid(p);
+
+    public Vector3 Gradient(Vector3 p, float h)
+    {
+        Vector3 g = new Vector3(
+            OuterSolid(p + new Vector3(h, 0f, 0f)) - OuterSolid(p - new Vector3(h, 0f, 0f)),
+            OuterSolid(p + new Vector3(0f, h, 0f)) - OuterSolid(p - new Vector3(0f, h, 0f)),
+            OuterSolid(p + new Vector3(0f, 0f, h)) - OuterSolid(p - new Vector3(0f, 0f, h)));
+        float m = g.magnitude;
+        return m > 1e-9f ? g / m : Vector3.up;
+    }
+
+    // A placeholder for empty DressedKernel slots (jobs need every container assigned).
+    public static GarmentKernel Dummy(BodySdfKernel body, Allocator alloc) => new GarmentKernel
+    {
+        body = body, drape = new NativeArray<float>(8, alloc), nearest = new NativeArray<byte>(8, alloc), cuts = new NativeArray<GarmentField.Cut>(0, alloc), nx = 2, ny = 2, nz = 2, cell = 1f, coverMask = 0,
+    };
+
+    public void Dispose()
+    {
+        if (drape.IsCreated) drape.Dispose();
+        if (nearest.IsCreated) nearest.Dispose();
+        if (cuts.IsCreated) cuts.Dispose();
+    }
+}
+
+// The body plus up to MaxGarments garments, for evaluating layers: a garment's base is the body and every
+// garment under it (min of their solids), so outer layers rest on inner ones.
+public struct DressedKernel
+{
+    public const int MaxGarments = 6;
+    public BodySdfKernel body;
+    public GarmentKernel g0, g1, g2, g3, g4, g5;
+    public int count;
+
+    public GarmentKernel Get(int i) => i == 0 ? g0 : i == 1 ? g1 : i == 2 ? g2 : i == 3 ? g3 : i == 4 ? g4 : g5;
+
+    // Body + garments [0, upto): distance to the solid they make together.
+    public float Base(Vector3 p, BodySdfKernel.Sample s, int upto)
+    {
+        float b = s.skin;
+        int n = Mathf.Min(upto, count);
+        for (int i = 0; i < n; i++) b = Mathf.Min(b, Get(i).OuterSolidGiven(p, s));
+        return b;
+    }
+
+    public static DressedKernel Make(BodySdfKernel body, IList<GarmentKernel> garments, GarmentKernel dummy)
+    {
+        var k = new DressedKernel { body = body, count = garments != null ? Mathf.Min(garments.Count, MaxGarments) : 0 };
+        GarmentKernel G(int i) => garments != null && i < garments.Count ? garments[i] : dummy;
+        k.g0 = G(0); k.g1 = G(1); k.g2 = G(2); k.g3 = G(3); k.g4 = G(4); k.g5 = G(5);
+        return k;
+    }
+}
+
+// Part A: garment meshing jobs (BodyBuild). A garment's mesh is the surface of its outer solid, kept
+// only outside the layers beneath it (the hem lip stays: the ring from the layer below out to the outer
+// surface); the inside of the fabric is never seen, so the thin shell needn't be resolved.
+public static class GarmentMeshJobs
+{
+    const int C = 4;
+
+    [BurstCompile]
+    public struct CoarseJob : IJobParallelFor
+    {
+        public GarmentKernel kernel;
+        public Vector3 min;
+        public float step;
+        public int nx, ny;
+        [WriteOnly] public NativeArray<float> values;
+        public void Execute(int i) { int x = i % nx, y = (i / nx) % ny, z = i / (nx * ny); values[i] = kernel.OuterSolid(min + new Vector3(x, y, z) * step); }
+    }
+
+    [BurstCompile]
+    public struct FineJob : IJobParallelFor
+    {
+        public GarmentKernel kernel;
+        [ReadOnly] public NativeArray<float> coarse;
+        public Vector3 min;
+        public float cell, band;
+        public int nx, ny, mx, my;
+        [WriteOnly] public NativeArray<float> values;
+        public void Execute(int i)
+        {
+            int x = i % nx, y = (i / nx) % ny, z = i / (nx * ny);
+            int x0 = x / C, y0 = y / C, z0 = z / C;
+            float fx = (x - x0 * C) / (float)C, fy = (y - y0 * C) / (float)C, fz = (z - z0 * C) / (float)C;
+            float c00 = Mathf.Lerp(coarse[x0 + mx * (y0 + my * z0)], coarse[x0 + 1 + mx * (y0 + my * z0)], fx);
+            float c10 = Mathf.Lerp(coarse[x0 + mx * (y0 + 1 + my * z0)], coarse[x0 + 1 + mx * (y0 + 1 + my * z0)], fx);
+            float c01 = Mathf.Lerp(coarse[x0 + mx * (y0 + my * (z0 + 1))], coarse[x0 + 1 + mx * (y0 + my * (z0 + 1))], fx);
+            float c11 = Mathf.Lerp(coarse[x0 + mx * (y0 + 1 + my * (z0 + 1))], coarse[x0 + 1 + mx * (y0 + 1 + my * (z0 + 1))], fx);
+            float est = Mathf.Lerp(Mathf.Lerp(c00, c10, fy), Mathf.Lerp(c01, c11, fy), fz);
+            values[i] = Mathf.Abs(est) > band ? est : kernel.OuterSolid(min + new Vector3(x, y, z) * cell);
+        }
+    }
+
+    // Newton steps onto each vertex's garment surface (piece = garment index per vertex).
+    [BurstCompile]
+    public struct ProjectJob : IJobParallelFor
+    {
+        public DressedKernel kernel;
+        public NativeArray<Vector3> positions;
+        [ReadOnly] public NativeArray<byte> garment;
+        [ReadOnly] public NativeArray<float> cells;
+        public int steps;
+        public void Execute(int i)
+        {
+            var g = kernel.Get(garment[i]);
+            float c = cells[garment[i]], h = c * 0.25f;
+            Vector3 p = positions[i];
+            for (int s = 0; s < steps; s++)
+            {
+                float d = g.OuterSolid(p);
+                if (Mathf.Abs(d) < 1e-5f) break;
+                p -= g.Gradient(p, h) * Mathf.Clamp(d, -c, c);
+            }
+            positions[i] = p;
+        }
+    }
+
+    // Normals (the garment surface's gradient), regions (nearest body bone), layers (garment, standoff),
+    // flags (bit 0: inside the layers beneath, dropped; bit 1: under an outer garment, dropped unless the
+    // whole triangle isn't), and where on the body the vertex sits (for skin weights).
+    [BurstCompile]
+    public struct AttribJob : IJobParallelFor
+    {
+        public DressedKernel kernel;
+        [ReadOnly] public NativeArray<Vector3> positions;
+        [ReadOnly] public NativeArray<byte> garment;
+        [ReadOnly] public NativeArray<float> cells, gaps;
+        public float coverMargin;
+        [WriteOnly] public NativeArray<Vector3> normals, onBody;
+        [WriteOnly] public NativeArray<Vector2> region, layers;
+        [WriteOnly] public NativeArray<byte> flags;
+        public void Execute(int i)
+        {
+            int gi = garment[i];
+            var g = kernel.Get(gi);
+            Vector3 p = positions[i];
+            var s = kernel.body.Eval(p);
+            normals[i] = g.Gradient(p, cells[gi] * 0.5f);
+            region[i] = new Vector2(kernel.body.bones[s.nearest].kind, s.nearest);
+            float below = kernel.Base(p, s, gi);
+            layers[i] = new Vector2(gi, Mathf.Max(0f, below));
+            byte f = 0;
+            if (below < -gaps[gi] * 0.5f) f |= 1;
+            for (int k = gi + 1; k < kernel.count; k++)
+            {
+                var o = kernel.Get(k);
+                if (o.Region(p, s.nearest) < -coverMargin && o.OuterSolidGiven(p, s) < -0.002f) { f |= 2; break; }
+            }
+            flags[i] = f;
+            // The body surface point under the vertex (one step along the skin's gradient).
+            Vector3 n = kernel.body.Normal(p, 0.004f);
+            onBody[i] = p - n * s.skin;
+        }
+    }
+
+    // Body vertices under a garment (covered by its region, with a margin): their triangles are dropped.
+    [BurstCompile]
+    public struct BodyCoverJob : IJobParallelFor
+    {
+        public DressedKernel kernel;
+        [ReadOnly] public NativeArray<Vector3> positions;
+        public float coverMargin;
+        [WriteOnly] public NativeArray<byte> covered;
+        public void Execute(int i)
+        {
+            Vector3 p = positions[i];
+            var s = kernel.body.Eval(p);
+            byte c = 0;
+            for (int k = 0; k < kernel.count; k++)
+                if (kernel.Get(k).Region(p, s.nearest) < -coverMargin) { c = 1; break; }
+            covered[i] = c;
+        }
     }
 }

@@ -94,14 +94,15 @@ public class BodyPool : MonoBehaviour
         while (inFlight.Count < maxInFlight && requests.Count > 0)
         {
             var (sheet, done) = requests.Dequeue();
-            inFlight.Add((new BodyBuild(sheet), -1, false, done));
+            inFlight.Add((new BodyBuild(sheet, null, Wardrobe.For(CharacterFigure.Role.Player, sheet.seed)), -1, false, done));
         }
         int arg = CommandLineInFlight();
         if (arg > 0) maxInFlight = arg;
         while (Enabled && inFlight.Count < maxInFlight && queue.Count > 0)
         {
             var (index, officer) = queue.Dequeue();
-            inFlight.Add((new BodyBuild(SheetFor(index, officer)), index, officer, null));
+            var sheet = SheetFor(index, officer);
+            inFlight.Add((new BodyBuild(sheet, null, Wardrobe.For(officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian, sheet.seed)), index, officer, null));
         }
         for (int i = inFlight.Count - 1; i >= 0; i--)
         {

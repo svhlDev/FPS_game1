@@ -73,6 +73,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "seats": yield return SeatsTest(); break;
             case "daynight": yield return DayNightTest(); break;
             case "garments": yield return GarmentsTest(); break;
+            case "dressed": yield return DressedTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
@@ -504,7 +505,7 @@ public partial class ScenarioTest : MonoBehaviour
             go.transform.position = origin + new Vector3(i * 1.0f, 0f, 0f);
             go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false);
+            var f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false, null, null, Outfit.None()); // (naked: the hole count needs the whole skin)
             float ms = (float)sw.Elapsed.TotalMilliseconds;
             var an = go.AddComponent<FigureAnimator>(); an.Grounded = true; an.LookYaw = 180f;
             figs.Add((name, f, an));
@@ -617,6 +618,110 @@ public partial class ScenarioTest : MonoBehaviour
         cam.fieldOfView = fov;
         foreach (var g in lights) Destroy(g);
         FlyingVehicle.CameraOverride = false;
+    }
+
+    // ---------- clothing part A: real garments in the game pipeline ----------
+
+    IEnumerator DressedTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        TimeOfDay.Instance?.SetHour(12f);
+        var specs = new (string, CharacterSheet, CharacterFigure.Role)[]
+        {
+            ("civilian M", new CharacterSheet(Sex.Male, 10, 10, 10, 1000), CharacterFigure.Role.Civilian),
+            ("civilian F heavy", new CharacterSheet(Sex.Female, 12, 10, 2, 1001), CharacterFigure.Role.Civilian),
+            ("civilian M STR 20", new CharacterSheet(Sex.Male, 20, 10, 14, 1006), CharacterFigure.Role.Civilian),
+            ("police", new CharacterSheet(Sex.Male, 14, 10, 13, 1003), CharacterFigure.Role.Police),
+            ("player", new CharacterSheet(Sex.Female, 10, 10, 10, 1004), CharacterFigure.Role.Player),
+        };
+        var figs = new List<(CharacterFigure f, FigureAnimator a)>();
+        bool allDressed = true;
+        for (int i = 0; i < specs.Length; i++)
+        {
+            var (name, sh, role) = specs[i];
+            var go = new GameObject(name);
+            go.transform.position = origin + new Vector3(i * 1.2f, 0f, 0f);
+            go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var f = CharacterFigure.BuildGenerated(go.transform, sh, role, true, false);
+            float ms = (float)sw.Elapsed.TotalMilliseconds;
+            var an = go.AddComponent<FigureAnimator>(); an.Grounded = true; an.LookYaw = 180f;
+            figs.Add((f, an));
+            if (i == 0)
+            {
+                // Stage timing, one body sequentially (as the pool runs it) and blocking.
+                var bb = new BodyBuild(sh, null, Wardrobe.For(role, sh.seed));
+                while (!bb.Step()) yield return null;
+                Log($"  pool-style build: {bb.Asset.wallMs:0} ms wall: " + string.Join(", ", System.Linq.Enumerable.Select(System.Linq.Enumerable.Range(0, 7), s => $"{(BodyBuild.Stage)s} {bb.StageWallMs[s]:0}")));
+                var nb = new BodyBuild(sh, null, Outfit.None());
+                while (!nb.Step()) yield return null;
+                Log($"  same body, no clothes: {nb.Asset.wallMs:0} ms wall: " + string.Join(", ", System.Linq.Enumerable.Select(System.Linq.Enumerable.Range(0, 7), s => $"{(BodyBuild.Stage)s} {nb.StageWallMs[s]:0}")));
+            }
+            var a = f.Asset;
+            var sb = new StringBuilder();
+            for (int g = 0; g < a.outfit.Count; g++) sb.Append($"{a.outfit.garments[g].name} {a.garmentTriangles[g]}, ");
+            Log($"{name}: {a.triangles} tris = skin {a.skinTriangles} (of {a.skinTrianglesBeforeRemoval} before covered skin was dropped) + head + {sb}generated in {ms:0} ms");
+            if (a.outfit.Count == 0 || a.body.subMeshCount != 1 + a.outfit.Count) allDressed = false;
+            for (int g = 0; g < a.outfit.Count; g++) if (a.garmentTriangles[g] < 50) allDressed = false;
+            yield return null;
+        }
+        Log(allDressed ? "PASS every role wears real garment meshes (a submesh each)" : "FAIL missing garments");
+
+        // Poses (pictures): walk, run, seated, glide, hang, cuffed, guard + punch.
+        var cam = Camera.main; cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        var lg = new GameObject("DressKey"); var l = lg.AddComponent<Light>(); l.type = LightType.Directional; l.intensity = 1.2f;
+        lg.transform.rotation = Quaternion.LookRotation(new Vector3(-0.4f, -0.5f, 0.8f));
+        IEnumerator Shot(string n, Vector3 at, Vector3 from)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"dressed_{n}.png"));
+            yield return null; yield return null;
+        }
+        Vector3 row = origin + new Vector3(2.4f, 0.9f, 0f);
+        yield return Shot("lineup", row, row + new Vector3(0f, 0.2f, -4.2f));
+        yield return Shot("lineup_back", row, row + new Vector3(0.5f, 0.3f, 4.2f));
+        var poses = new (string, FigureAnimator.Pose, FigureAnimator.Arms, float)[]
+        {
+            ("walk", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Lowered, 1.4f), ("run", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Lowered, 5f),
+            ("seated", FigureAnimator.Pose.Seated, FigureAnimator.Arms.Lowered, 0f), ("glide", FigureAnimator.Pose.Glide, FigureAnimator.Arms.Lowered, 0f),
+            ("hang", FigureAnimator.Pose.Hang, FigureAnimator.Arms.Lowered, 0f), ("cuffed", FigureAnimator.Pose.Cuffed, FigureAnimator.Arms.Lowered, 0f),
+            ("guard", FigureAnimator.Pose.Normal, FigureAnimator.Arms.Guard, 0f),
+        };
+        foreach (var (n, pose, arms, speed) in poses)
+        {
+            foreach (var (f, an) in figs) { an.CurrentPose = pose; an.ArmMode = arms; an.Velocity = Vector3.back * speed; an.Grounded = pose != FigureAnimator.Pose.Glide && pose != FigureAnimator.Pose.Hang; }
+            if (arms == FigureAnimator.Arms.Guard) foreach (var (f, an) in figs) an.Punch(1);
+            yield return new WaitForSeconds(speed > 0f ? 0.37f : 0.6f);
+            yield return Shot(n, row, row + new Vector3(-0.6f, 0.4f, -3.6f));
+            if (n == "walk" || n == "seated") yield return Shot(n + "_side", origin + new Vector3(1.2f, 0.9f, 0f), origin + new Vector3(4.2f, 1.2f, -1.2f));
+        }
+        foreach (var (f, an) in figs) { an.CurrentPose = FigureAnimator.Pose.Normal; an.ArmMode = FigureAnimator.Arms.Lowered; an.Velocity = Vector3.zero; an.Grounded = true; }
+        Destroy(lg);
+        FlyingVehicle.CameraOverride = false;
+
+        // The city: near pedestrians wear the pool's dressed bodies.
+        var peds = FindFirstObjectByType<PedestrianSystem>();
+        var pool = BodyPool.Instance;
+        float waited = 0f;
+        for (; waited < 400f && pool != null && pool.Filling; waited += 1f) yield return new WaitForSeconds(1f);
+        Log($"pool: {(pool != null ? pool.Ready : 0)} bodies ready after {waited:0} s more");
+        if (peds != null)
+        {
+            peds.DebugRedress();
+            yield return new WaitForSeconds(1f);
+            int near = 0, dressed = 0;
+            var mine = new HashSet<CharacterFigure>(); foreach (var (f, _) in figs) mine.Add(f);
+            foreach (var cf in FindObjectsByType<CharacterFigure>())
+            {
+                if (cf.Asset == null || mine.Contains(cf)) continue;
+                near++;
+                if (cf.Asset.outfit != null && cf.Asset.outfit.Count > 0 && cf.Renderers[0] is SkinnedMeshRenderer smr && smr.sharedMesh.subMeshCount > 1) dressed++;
+            }
+            Log($"city: {near} generated characters near, {dressed} in garment meshes; pool filled: {(pool != null ? (!pool.Filling).ToString() : "-")}");
+            Log(near > 0 && dressed == near ? "PASS near characters in the city wear garments" : "FAIL city characters undressed");
+        }
     }
 
     // ---------- clothing phase 1: garment fields ----------
@@ -1337,7 +1442,11 @@ public partial class ScenarioTest : MonoBehaviour
             {
                 var m = new Mesh();
                 ((SkinnedMeshRenderer)r).BakeMesh(m, true);
-                foreach (var v in m.vertices)
+                // Skin only (submesh 0 and the head): garments stand off the body by design.
+                var skinIdx = new HashSet<int>(m.GetTriangles(0));
+                var bakedV = m.vertices;
+                var skinV = new List<Vector3>(); foreach (int vi in skinIdx) skinV.Add(bakedV[vi]);
+                foreach (var v in skinV)
                 {
                     float d = sdf.Eval(v);
                     if (d < -hide) { hidden++; continue; }
@@ -1373,7 +1482,7 @@ public partial class ScenarioTest : MonoBehaviour
         {
             var go = new GameObject("Pose " + poses[i].name);
             go.transform.position = origin + new Vector3(i * 1.1f, 0f, 0f);
-            var f = CharacterFigure.BuildGenerated(go.transform, avgSheet, CharacterFigure.Role.Civilian, true, false);
+            var f = CharacterFigure.BuildGenerated(go.transform, avgSheet, CharacterFigure.Role.Civilian, true, false, null, null, Outfit.None()); // naked: the volume is the body's
             var a = go.AddComponent<FigureAnimator>();
             a.CurrentPose = poses[i].pose; a.ArmMode = poses[i].arms;
             a.Velocity = Vector3.forward * poses[i].speed; a.Grounded = poses[i].pose != FigureAnimator.Pose.Air && poses[i].pose != FigureAnimator.Pose.Glide;
@@ -1392,7 +1501,7 @@ public partial class ScenarioTest : MonoBehaviour
         {
             var go = new GameObject("Body " + bodies[i].name);
             go.transform.position = origin + new Vector3(i * 1.2f, -2.4f, 0f);
-            var f = CharacterFigure.BuildGenerated(go.transform, bodies[i].sheet, CharacterFigure.Role.Civilian, true, false);
+            var f = CharacterFigure.BuildGenerated(go.transform, bodies[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, Outfit.None());
             var a = go.AddComponent<FigureAnimator>();
             a.Velocity = Vector3.forward * 1.6f; a.Grounded = true;
             figs.Add((bodies[i].name, f, a, false));
@@ -1603,8 +1712,9 @@ public partial class ScenarioTest : MonoBehaviour
         var go = new GameObject("Body Lineup");
         go.transform.position = new Vector3(0f, 1500f, 0f);
         var lineup = go.AddComponent<BodyLineupDebug>();
+        lineup.collectMeshStats = true;
         yield return null; yield return null;
-        for (float t = 0f; t < 120f && lineup.MeshesBuilt < lineup.Entries.Count; t += Time.unscaledDeltaTime) yield return null;
+        for (float t = 0f; t < 400f && lineup.MeshesBuilt < lineup.Entries.Count; t += Time.unscaledDeltaTime) yield return null;
         {
             float mms = 0f, sdfMs = 0f, maxMs = 0f; int tris = 0, maxTris = 0, raw = 0, holes = 0, nonMan = 0; float vol = 0f;
             foreach (var (label, r) in lineup.MeshStats)

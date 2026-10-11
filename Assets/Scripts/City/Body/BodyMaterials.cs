@@ -48,21 +48,36 @@ public static class BodyMaterials
 
     // Placeholder clothing by role (clothing proper is a later doc): body submeshes shirt, pants, skin,
     // shoes. Civilians: muted seed colours; police: navy uniform; the player: light shirt, dark pants.
+    // (Clothing Part A: the submeshes are real garments now, one per garment of the body's outfit.)
     static readonly Color[] Shirts = { new Color(0.32f, 0.3f, 0.34f), new Color(0.38f, 0.26f, 0.24f), new Color(0.22f, 0.3f, 0.32f), new Color(0.4f, 0.37f, 0.3f), new Color(0.26f, 0.27f, 0.36f), new Color(0.3f, 0.33f, 0.26f), new Color(0.45f, 0.42f, 0.4f) };
     static readonly Color[] PantsColors = { new Color(0.14f, 0.14f, 0.16f), new Color(0.2f, 0.19f, 0.17f), new Color(0.16f, 0.18f, 0.22f), new Color(0.24f, 0.22f, 0.2f) };
 
-    public static Material[] Clothes(CharacterFigure.Role role, int seed, Material skin)
+    static readonly Color[] CoatColors = { new Color(0.25f, 0.2f, 0.16f), new Color(0.16f, 0.16f, 0.17f), new Color(0.3f, 0.27f, 0.2f), new Color(0.12f, 0.14f, 0.13f) };
+
+    // Materials for a generated body's submeshes: the skin, then one per garment of its outfit, coloured
+    // by the garment's slot (top, bottom, feet, outer) for the role; civilians from the seed (so the
+    // same pooled body dresses differently per pedestrian).
+    public static Material[] Clothes(BodyAsset asset, CharacterFigure.Role role, int seed, Material skin)
     {
-        Color shirt, pants, shoes = new Color(0.07f, 0.07f, 0.08f);
+        Color top, bottom, feet = new Color(0.07f, 0.07f, 0.08f), outer;
+        var r = new PcgRandom(seed, "clothes");
         switch (role)
         {
-            case CharacterFigure.Role.Police: shirt = new Color(0.06f, 0.1f, 0.3f); pants = new Color(0.04f, 0.06f, 0.16f); shoes = new Color(0.03f, 0.03f, 0.03f); break;
-            case CharacterFigure.Role.Player: shirt = new Color(0.78f, 0.78f, 0.8f); pants = new Color(0.22f, 0.23f, 0.26f); break;
+            case CharacterFigure.Role.Police: top = new Color(0.06f, 0.1f, 0.3f); bottom = new Color(0.04f, 0.06f, 0.16f); feet = new Color(0.03f, 0.03f, 0.03f); outer = new Color(0.04f, 0.06f, 0.16f); break;
+            case CharacterFigure.Role.Player: top = new Color(0.78f, 0.78f, 0.8f); bottom = new Color(0.22f, 0.23f, 0.26f); outer = new Color(0.25f, 0.2f, 0.16f); break;
             default:
-                var r = new PcgRandom(seed, "clothes");
-                shirt = Shirts[r.Range(0, Shirts.Length)]; pants = PantsColors[r.Range(0, PantsColors.Length)]; break;
+                top = Shirts[r.Range(0, Shirts.Length)]; bottom = PantsColors[r.Range(0, PantsColors.Length)]; outer = CoatColors[r.Range(0, CoatColors.Length)]; break;
         }
-        return new[] { CharacterFigure.Mat(shirt), CharacterFigure.Mat(pants), skin, CharacterFigure.Mat(shoes) };
+        var garments = asset != null && asset.outfit != null ? asset.outfit.garments : new List<GarmentDef>();
+        int n = asset != null && asset.body != null ? asset.body.subMeshCount : 1;
+        var mats = new Material[n];
+        mats[0] = skin;
+        for (int i = 1; i < n; i++)
+        {
+            var slot = i - 1 < garments.Count ? garments[i - 1].slot : GarmentSlot.Top;
+            mats[i] = CharacterFigure.Mat(slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet : outer);
+        }
+        return mats;
     }
 
     public static Material Sclera()

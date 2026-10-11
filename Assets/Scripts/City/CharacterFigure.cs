@@ -146,10 +146,10 @@ public class CharacterFigure : MonoBehaviour
     // Generate a body for this sheet right now (blocking; the pool generates without blocking) and
     // assemble it.
     public static CharacterFigure BuildGenerated(Transform root, CharacterSheet sheet, Role role, bool shadows = false, bool hitColliders = true,
-                                                 GenerationStats stats = null, ISpeciesTemplate template = null)
+                                                 GenerationStats stats = null, ISpeciesTemplate template = null, Outfit outfit = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var asset = new BodyBuild(sheet, template).RunSync();
+        var asset = new BodyBuild(sheet, template, outfit ?? Wardrobe.For(role, sheet.seed)).RunSync();
         float genMs = (float)sw.Elapsed.TotalMilliseconds;
         var f = Assemble(root, asset, role, shadows, hitColliders, sheet.seed);
         if (stats != null) { stats.meshMs = genMs; stats.triangles = asset.triangles; stats.totalMs = (float)sw.Elapsed.TotalMilliseconds; stats.skinMs = stats.totalMs - genMs; }
@@ -226,7 +226,7 @@ public class CharacterFigure : MonoBehaviour
         for (int i = 0; i < bones.Length; i++) bones[i] = sk.Bones[i].joint;
         var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed));
         var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", a.body, bones, sk.Hips, skin, shadows);
-        bodyR.sharedMaterials = BodyMaterials.Clothes(role, colorSeed, skin);
+        bodyR.sharedMaterials = BodyMaterials.Clothes(a, role, colorSeed, skin);
         var headR = BodySkinner.AddRenderer(root, "HeadMesh", a.head, bones, sk.Hips, skin, shadows);
         f.Renderers.Add(bodyR); f.Renderers.Add(headR);
         f.HeadRenderer = headR;
