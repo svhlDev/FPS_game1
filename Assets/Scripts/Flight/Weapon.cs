@@ -38,7 +38,7 @@ public class Weapon : MonoBehaviour
     public float Length => muzzle != null ? muzzle.localPosition.z : 0.2f;
 
     readonly List<Renderer> modeParts = new List<Renderer>();
-    static Material gunmetal, stemBlack;
+    static Material gunmetal, stemBlack, sightMat;
 
     public void SetMode(Mode m)
     {
@@ -71,6 +71,15 @@ public class Weapon : MonoBehaviour
 
         // Grip stem 0.026 x 0.085 x 0.036, raked back 12 degrees; the hand covers its upper half.
         Box(root, new Vector3(0f, -0.021f, -0.004f), new Vector3(0.026f, 0.085f, 0.036f), Quaternion.Euler(12f, 0f, 0f), stemBlack, layer);
+
+        // Emissive sight: a small green dot on top at the back of the barrel (Phase 5).
+        if (sightMat == null)
+        {
+            sightMat = new Material(Shader.Find("Universal Render Pipeline/Unlit")) { name = "GunSight", enableInstancing = true };
+            sightMat.SetColor("_BaseColor", new Color(0.2f, 1f, 0.35f) * 3f);
+        }
+        Box(root, new Vector3(0f, by + hh * 0.5f + 0.003f, -0.085f), new Vector3(0.006f, 0.006f, 0.01f), Quaternion.identity, sightMat, layer)
+            .shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 
         // Mode strips along the barrel sides and the emitter square on the nose.
         foreach (float sx in new[] { 1f, -1f })

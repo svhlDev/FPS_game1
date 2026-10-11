@@ -464,6 +464,16 @@ public static class FlightGrayboxBuilder
         body.transform.localScale = CarSize;
         body.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
         SetMat(body, mat);
+        // Phase 5 trim: a dark glass band round the cabin (a little wider than the body so it reads as
+        // windows; the driver's eye sits inside it, so it never blocks the view out), a chrome line under
+        // it and a rubber skirt round the bottom. No colliders.
+        Vector3 hs = CarSize * 0.5f;
+        LightBox(root, "Windows", new Vector3(0f, hs.y - 0.16f, 0.1f), new Vector3(CarSize.x + 0.04f, 0.42f, CarSize.z * 0.6f),
+                 Surf(SurfaceType.Glass, MaterialLibrary.Variant.Object, new Color(0.03f, 0.04f, 0.05f)));
+        LightBox(root, "Trim", new Vector3(0f, hs.y - 0.39f, 0f), new Vector3(CarSize.x + 0.03f, 0.03f, CarSize.z + 0.03f),
+                 Surf(SurfaceType.Chrome, MaterialLibrary.Variant.Object, new Color(0.85f, 0.86f, 0.88f)));
+        LightBox(root, "Skirt", new Vector3(0f, -hs.y + 0.09f, 0f), new Vector3(CarSize.x + 0.04f, 0.18f, CarSize.z + 0.04f),
+                 Surf(SurfaceType.Rubber, MaterialLibrary.Variant.Object, new Color(0.04f, 0.04f, 0.045f)));
 
         // First-person driving camera: the driver's eyes (front left seat).
         var cockpit = new GameObject("Cockpit").transform;

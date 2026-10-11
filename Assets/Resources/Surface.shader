@@ -3,7 +3,8 @@
 // in UnityPerMaterial. The material type is a uniform branch (_Type), not a keyword, so every material
 // shares one set of variants and batches with the rest.
 //   Types: 0 concrete, 1 asphalt, 2 painted metal, 3 brushed metal, 4 chrome, 5 glass, 6 rubber / plastic,
-//          7 car paint (clear coat, optional flakes), 8 cotton, 9 denim, 10 wool, 11 leather, 12 vinyl.
+//          7 car paint (clear coat, optional flakes), 8 cotton, 9 denim, 10 wool, 11 leather, 12 vinyl,
+//          13 road paint (worn markings), 14 hazard stripes.
 //   Pattern space (_Space): 0 world (static city), 1 object (rigid movers), 2 rest pose (TEXCOORD3, baked
 //          by the body pipeline for skinned meshes; Phase 3).
 //   Edges / cavities (_EdgeSource): 0 none, 1 box faces (per-face UVs: primitives and slabs, survives
@@ -134,6 +135,8 @@ Shader "FPS/Surface"
             #define T_WOOL 10
             #define T_LEATHER 11
             #define T_VINYL 12
+            #define T_ROADPAINT 13
+            #define T_HAZARD 14
 
             // Pattern frequencies (cycles per metre at detail scale 1): fabric threads and leather grain.
             #define COTTON_F 420.0
@@ -163,7 +166,7 @@ Shader "FPS/Surface"
             struct Surf
             {
                 half3 albedo; half metallic; half smoothness;
-                half3 sheen; half coat; half coatSmooth; half porosity;
+                half3 sheen; half coat; half coatSmooth; half porosity; half3 emission;
                 float3 flakeGrad;
             };
 
@@ -172,7 +175,7 @@ Shader "FPS/Surface"
                 Surf s;
                 half3 base = _BaseColor.rgb;
                 s.albedo = base; s.metallic = _Metallic; s.smoothness = lerp(_SmoothMin, _SmoothMax, 0.5);
-                s.sheen = 0; s.coat = 0; s.coatSmooth = 0; s.porosity = 1.0; s.flakeGrad = 0;
+                s.sheen = 0; s.coat = 0; s.coatSmooth = 0; s.porosity = 1.0; s.flakeGrad = 0; s.emission = 0;
                 float wear = edge * _Wear;
 
                 [branch] switch (type)
@@ -318,6 +321,27 @@ Shader "FPS/Surface"
                         s.albedo = lerp(s.albedo, base * 1.15, wear * 0.4);
                         s.sheen = 0.06 * _Sheen;
                         s.porosity = 0.2;
+                        break;
+                    }
+                    case T_ROADPAINT:
+                    {
+                        // Worn through to the asphalt in patches and along the wheel-worn middle; a faint
+                        // retroreflective glow keeps the markings readable at night.
+                        float worn = smoothstep(0.5, 0.62, Fbm(p * 1.2, 3) * 0.75 + VNoise(p * 25.0) * 0.25 * DetailFade(p, 25.0) + _Wear * 0.25);
+                        s.albedo = lerp(base, _SecondColor.rgb, worn);
+                        s.smoothness = lerp(_SmoothMax, _SmoothMin, worn);
+                        s.emission = base * 0.05 * (1.0 - worn);
+                        s.porosity = 0.5;
+                        break;
+                    }
+                    case T_HAZARD:
+                    {
+                        // 45-degree stripes, 20 cm wide, along whatever plane the surface lies in.
+                        float stripe = step(0.5, frac((p.x + p.y + p.z) / 0.4));
+                        float chip = smoothstep(0.32, 0.4, wear * 1.6 - VNoise(p * 7.0) * 0.8 + 0.2);
+                        s.albedo = lerp(lerp(_SecondColor.rgb, base, stripe), half3(0.5, 0.5, 0.52), chip);
+                        s.metallic = chip;
+                        s.smoothness = lerp(_SmoothMax, 0.45, chip);
                         break;
                     }
                     case T_VINYL:
@@ -468,7 +492,7 @@ Shader "FPS/Surface"
                 // Fabric sheen: brightens at grazing angles (fibres catching the light).
                 half nv = saturate(dot(n, v));
                 color += s.sheen * pow(1.0 - nv, 4.0) * sheenLight;
-                color += _EmissionColor.rgb;
+                color += _EmissionColor.rgb + s.emission;
                 color = MixFog(color, i.fogFactor);
                 return half4(color, 1);
             }

@@ -371,6 +371,13 @@ public static class DistrictBuilder
         foreach (var b in blocks)
             if (QuarterOf(b) == Quarter.Market) CityDressing.AddMarketStalls(cityRoot, b, decoRng, kit);
 
+        // Decals (Phase 5): oil and skid marks on the roads, grime, leaks, posters and graffiti at street
+        // level; denser near intersections and in the market. Own RNG: the layout above is untouched.
+        var marketRects = new List<Rect>();
+        foreach (var b in blocks) if (QuarterOf(b) == Quarter.Market) marketRects.Add(b);
+        int decals = CityDressing.ScatterDecals(cityRoot, streets, crossings, towers, marketRects, Seed + 977);
+        Debug.Log($"District decals: {decals}");
+
         // ---------- pedestrians ----------
         var graph = DistrictWalkGraph.Build(cityRoot, walk, sk.masses, sk.taxiPads, signals);
         var peds = new GameObject("Pedestrians").AddComponent<PedestrianSystem>();

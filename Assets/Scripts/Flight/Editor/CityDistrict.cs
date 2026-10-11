@@ -43,8 +43,8 @@ public static partial class CityDressing
         root.SetParent(parent, false);
         var asphalt = Surf(SurfaceType.Asphalt, MaterialLibrary.Variant.City, new Color(0.06f, 0.06f, 0.07f));
         var paving = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.2f, 0.2f, 0.21f));
-        var marking = Neon("StreetMarking", new Color(0.75f, 0.75f, 0.7f), 0.6f);
-        var centerLine = Neon("StreetCenterLine", new Color(0.9f, 0.65f, 0.15f), 0.7f);
+        var marking = Surf(SurfaceType.RoadPaint, MaterialLibrary.Variant.City, new Color(0.75f, 0.75f, 0.7f));   // worn paint (Phase 5)
+        var centerLine = Surf(SurfaceType.RoadPaint, MaterialLibrary.Variant.City, new Color(0.85f, 0.6f, 0.12f));
         var lampHead = Neon("StreetLamp", new Color(1f, 0.82f, 0.6f), 3f);
 
         // Intersections: every north-south street crossing every east-west one.
@@ -420,6 +420,12 @@ public static partial class CityDressing
         var go = Slab(parent, "Railing", c, size, sk.rail).gameObject;
         go.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         MarkStatic(go, false);
+        // Hazard-striped kick plate along the foot of the railing (Phase 5).
+        Vector3 kick = along.x != 0f ? new Vector3(b - a, 0.22f, 0.24f) : new Vector3(0.24f, 0.22f, b - a);
+        var k = Slab(parent, "RailKick", c + Vector3.up * (-0.55f + 0.11f), kick, Surf(SurfaceType.Hazard, MaterialLibrary.Variant.City, new Color(0.85f, 0.65f, 0.08f))).gameObject;
+        Object.DestroyImmediate(k.GetComponent<Collider>());
+        k.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        MarkStatic(k, false);
     }
 
     // ---------- the hollow tower ----------

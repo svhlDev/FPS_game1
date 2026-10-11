@@ -702,6 +702,31 @@ public partial class ScenarioTest : MonoBehaviour
         }
         Phase1(true);
         Log(lights.TotalCount > 50 ? "PASS city lights placed and budgeted" : "FAIL too few city lights");
+
+        // Decals (Phase 5): a close look at a poster, a graffiti and an oil stain, from their meshes.
+        int decalQuads = 0;
+        foreach (var n in new[] { "Poster", "Graffiti", "Grime", "Leak", "Oil", "Skid" })
+        {
+            var go = GameObject.Find("Decals_" + n);
+            var mf = go != null ? go.GetComponent<MeshFilter>() : null;
+            if (mf == null || mf.sharedMesh == null) continue;
+            var mesh = mf.sharedMesh;
+            decalQuads += mesh.vertexCount / 4;
+            if (n != "Poster" && n != "Graffiti" && n != "Oil") continue;
+            var vs = mesh.vertices; var ns = mesh.normals;
+            int q = (vs.Length / 4 / 3) * 4;                                        // a quad a third of the way in
+            Vector3 c = go.transform.TransformPoint((vs[q] + vs[q + 1] + vs[q + 2] + vs[q + 3]) * 0.25f);
+            Vector3 nn = go.transform.TransformDirection(ns[q]);
+            Vector3 from = n == "Oil" ? c + Vector3.up * 2.2f + Vector3.forward * 1.5f : c + nn * 3f + Vector3.up * 0.3f;
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(c - from));
+            lights.Refresh();
+            for (int i = 0; i < 10; i++) yield return null;
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"lighting_decal_{n}.png"));
+            yield return null; yield return null;
+        }
+        Log($"decals: {decalQuads} quads");
+        Log(decalQuads > 100 ? "PASS decals scattered" : "FAIL no decals");
         if (fpc != null) fpc.enabled = true;
         FlyingVehicle.CameraOverride = false;
         if (tod != null) tod.freeze = false;

@@ -88,7 +88,7 @@ public static class MaterialLabBuilder
 
         // Road section with lane markings, and a facade block.
         var road = Slab(root, "Road", new Vector3(0f, 0.01f, 24f), new Vector3(40f, 0.02f, 12f), LabMaterial("Asphalt", Presets[1].color, MaterialLibrary.Variant.City));
-        var paint = GetUnlitMaterial("LabLanePaint", new Color(0.8f, 0.8f, 0.75f), 0.6f);
+        var paint = MaterialLibrary.Get(SurfaceType.RoadPaint, new Color(0.8f, 0.8f, 0.75f), MaterialLibrary.Variant.City);
         for (int i = -4; i <= 4; i++)
         {
             var dash = Slab(root, "LaneDash", new Vector3(i * 4f, 0.025f, 24f), new Vector3(2f, 0.01f, 0.15f), paint);

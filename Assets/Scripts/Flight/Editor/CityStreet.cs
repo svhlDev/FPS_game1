@@ -31,8 +31,8 @@ public static partial class CityDressing
         root.SetParent(parent, false);
         var asphalt = Surf(SurfaceType.Asphalt, MaterialLibrary.Variant.City, new Color(0.06f, 0.06f, 0.07f));
         var paving = Surf(SurfaceType.Concrete, MaterialLibrary.Variant.City, new Color(0.2f, 0.2f, 0.21f));
-        var marking = Neon("StreetMarking", new Color(0.75f, 0.75f, 0.7f), 0.6f);       // under the bloom threshold
-        var centerLine = Neon("StreetCenterLine", new Color(0.9f, 0.65f, 0.15f), 0.7f);
+        var marking = Surf(SurfaceType.RoadPaint, MaterialLibrary.Variant.City, new Color(0.75f, 0.75f, 0.7f));   // worn paint (Phase 5)
+        var centerLine = Surf(SurfaceType.RoadPaint, MaterialLibrary.Variant.City, new Color(0.85f, 0.6f, 0.12f));
         var lampHead = Neon("StreetLamp", new Color(1f, 0.82f, 0.6f), 3f);
 
         float length = halfL * 2f;

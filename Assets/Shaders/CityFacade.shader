@@ -292,6 +292,18 @@ Shader "FPS/CityFacade"
                     // is wall; a darker strip under the lintel.
                     half3 nearAlbedo = lerp(nearWall, _GlassColor.rgb, glassMask);
                     half nearSmooth = lerp(wallSmooth, 0.95, glassMask);
+                    // Closed shops (Phase 5): some dark storefronts have a ribbed metal roller shutter
+                    // down instead of glass: painted, grimier toward the bottom, no room behind.
+                    if (storefront && isLit < 0.5 && h3 < 0.45)
+                    {
+                        float rib = frac(uv.y / 0.12);
+                        half3 paint = lerp(half3(0.32, 0.34, 0.36), half3(0.3, 0.22, 0.16), step(0.25, h3)) * lerp(0.75, 1.05, VNoise(float3(uv * 2.0, float(seed))));
+                        paint *= lerp(0.6, 1.0, saturate(wf.y * 1.5));
+                        nearAlbedo = lerp(nearWall, paint, glassMask);
+                        nearSmooth = lerp(wallSmooth, 0.35, glassMask);
+                        winEmission = 0;
+                        nNear = normalize(nNear + B * cos(rib * 6.2832) * 0.35 * glassMask * detail);
+                    }
                     albedo = lerp(farAlbedo, nearAlbedo, nearK);
                     smooth = lerp(farSmooth, nearSmooth, nearK);
                     emission = lerp(farEmission, winEmission * glassMask, nearK);
