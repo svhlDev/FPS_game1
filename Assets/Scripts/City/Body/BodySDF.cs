@@ -47,7 +47,10 @@ public class BodySDF : IDisposable
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
     readonly List<Feature> breasts = new List<Feature>();
-    Feature skull;
+    Feature skull;                                 // the face's frame / profile egg (fat mask, wig, bake)
+    Feature cranium;                               // Face Fix Part 2: the braincase ...
+    BodySdfKernel.Mandible mandible;               // ... and the lower jaw (the head's core)
+    float craniumBottom, craniumTop;
     public float EggTop, EggBottom;
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
@@ -134,6 +137,8 @@ public class BodySDF : IDisposable
         headIndex = plan.Index("Head");
         BuildMuscles();
         BuildHead();
+        // The head meets the neck with a small blend, so the under-jaw plane turns down into the neck.
+        if (headIndex >= 0) jointK[headIndex] = BodyRules.Default.face.neckBlend;
         BuildBreasts();
         // Bounds: every bone's ends padded by its outer girth.
         bounds = new Bounds(start[0], Vector3.zero);
@@ -219,6 +224,7 @@ public class BodySDF : IDisposable
             socketClearance = BodyRules.Default.face.socketClearance,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
+            cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
@@ -403,7 +409,8 @@ public class BodySDF : IDisposable
         float rx = Canon.halfW, ry = b.length * 0.5f, rz = Canon.halfD, hy = Canon.halfH;
         // INT elongation: the cranium grows up and toward the back (the face stays on the canon).
         float el = dna != null ? dna.headElongation : 0f;
-        Vector3 c = f.o + f.y * ry * (1f + el * 0.3f) - f.z * rz * el * 0.5f;
+        // The profile egg (the face's frame: fat mask, wig, bake): bottom on the chin line.
+        Vector3 c = Canon.o + f.y * (ry * (1f + el * 0.3f) - hy) - f.z * rz * el * 0.5f;
         skull = new Feature { f = new Frame { o = c, x = f.x, y = f.y, z = f.z }, r = new Vector3(rx, ry * (1f + el * 0.3f), rz * (1f + el * 0.6f)) };
         // Egg: seed variation on both ends.
         var eggRng = new PcgRandom(plan.sheet.seed, "egg");
@@ -411,15 +418,39 @@ public class BodySDF : IDisposable
         EggBottom = SR.eggBottom + SR.eggVariation * eggRng.Signed();
         float skullRy = skull.r.y;
         Vector3 O = Canon.o;
-        float eggDy = Vector3.Dot(O - c, f.y);
-        // Face space -> root space: fractions of the half width / height / depth from the eye line's centre,
-        // x / z narrowed by the egg at that height.
-        Vector3 FacePoint(Vector3 at)
-        {
-            float s = BodySdfKernel.EggScale(at.y * hy + eggDy, skullRy, EggBottom, EggTop);
-            return O + f.x * at.x * rx * s + f.y * at.y * hy + f.z * at.z * rz * s;
-        }
+        // Face space -> root space: fractions of the half width / height / depth from the eye line's centre.
+        Vector3 FacePoint(Vector3 at) => O + f.x * at.x * rx + f.y * at.y * hy + f.z * at.z * rz;
         float Anchor(FaceLine l) => Canon.Line(l) / hy;
+        var fd = BodyRules.Default.face;
+        bool fem = plan.sheet.sex == Sex.Female;
+        // Face Fix Part 2: the cranium (braincase), an egg big end up and back; INT grows it up and back.
+        {
+            Vector3 cc = fd.craniumCentre, cr = fd.craniumRadii;
+            Vector3 o = FacePoint(cc) + f.y * cr.y * hy * el * 0.8f - f.z * cr.z * rz * el * 0.4f;
+            cranium = new Feature { f = new Frame { o = o, x = f.x, y = f.y, z = f.z }, r = new Vector3(cr.x * rx, cr.y * hy * (1f + el * 0.8f), cr.z * rz * (1f + el * 0.6f)) };
+            craniumBottom = fd.craniumBottom; craniumTop = fd.craniumTop;
+        }
+        // The lower jaw: the menton on the chin line, the jaw angles (sex, STR, DNA, seed), the chin's width.
+        {
+            var jr = new PcgRandom(plan.sheet.seed, "jaw");
+            float js = dna != null ? dna.jaw : 1f;
+            Vector3 g = fem ? fd.femaleGonion : fd.gonion;
+            float gx = (g.x + fd.jawStr * plan.sheet.S + fd.jawVariation * jr.Signed()) * js * rx;
+            float cx = (fem ? fd.femaleChinHalfWidth : fd.chinHalfWidth) * js * rx * (1f + 0.15f * jr.Signed());
+            Vector3 menton = O + f.y * (Canon.chin + fd.menton.y * hy) + f.z * (fd.menton.z * rz);
+            Vector3 gon = O + f.y * (g.y + 0.03f * jr.Signed()) * hy + f.z * g.z * rz;
+            Vector3 v = menton - gon;
+            float a = Vector3.Dot(v, f.y), bz = Vector3.Dot(v, f.z);
+            Vector3 n = (f.y * bz - f.z * a).normalized;
+            float gz = Vector3.Dot(gon - menton, f.z);
+            float round = fd.jawRound * hy;
+            var poly = Inset(new[] { new Vector2(-cx, 0f), new Vector2(cx, 0f), new Vector2(gx, gz), new Vector2(-gx, gz) }, round);
+            mandible = new BodySdfKernel.Mandible
+            {
+                menton = menton, x = f.x, y = f.y, z = f.z, jawN = n, q0 = poly[0], q1 = poly[1], q2 = poly[2], q3 = poly[3],
+                round = round, angle = (fem ? fd.femaleJawAngle : fd.jawAngle) * hy, top = fd.jawTop * hy, blend = fd.jawBlend * hy, on = 1,
+            };
+        }
         // Face parts (Head spec Part D): data in face space -> primitives in root space. Per part: the
         // sex's factors, the seed's variation (mirrored pairs share it, plus a little asymmetry each),
         // the DNA face scale, then the character's own overrides.
@@ -464,13 +495,39 @@ public class BodySDF : IDisposable
         }
         // The eyes on the canon: on the eye line, one eye-width either side of the midline, canon size.
         EyeRadius = Canon.eyeballRadius;
-        float ex = Canon.eyeSpacing / (rx * BodySdfKernel.EggScale(eggDy, skullRy, EggBottom, EggTop));   // (FacePoint narrows x)
+        float ex = Canon.eyeSpacing / rx;
         EyeL = FacePoint(new Vector3(-ex, 0f, faceDef.eyeDepth));
         EyeR = FacePoint(new Vector3(ex, 0f, faceDef.eyeDepth));
         // The jaw hinges in front of the ears, a little above the nose base; the mouth line from its part.
         JawPivot = FacePoint(new Vector3(0f, Anchor(FaceLine.NoseBase) + 0.12f, -0.15f));
         MouthCentre = FacePoint(new Vector3(0f, Anchor(FaceLine.Mouth), 1.0f));
         for (int j = 0; j < FacePartNames.Count; j++) if (FacePartNames[j] == "MouthLine") MouthCentre = faceParts[j].o;
+    }
+
+    // A convex polygon's edges moved inward by r (vertices: the moved neighbouring edges' intersections).
+    static Vector2[] Inset(Vector2[] v, float r)
+    {
+        int n = v.Length;
+        Vector2 centre = Vector2.zero; foreach (var p in v) centre += p; centre /= n;
+        var pts = new Vector2[n]; var nrm = new Vector2[n];
+        for (int i = 0; i < n; i++)
+        {
+            Vector2 e = (v[(i + 1) % n] - v[i]).normalized, nn = new Vector2(-e.y, e.x);
+            if (Vector2.Dot(centre - v[i], nn) < 0f) nn = -nn;
+            nrm[i] = nn; pts[i] = v[i] + nn * r;
+        }
+        var res = new Vector2[n];
+        for (int i = 0; i < n; i++)
+        {
+            int a = (i + n - 1) % n, b = i;   // vertex i joins edge a (v[a] -> v[i]) and edge b (v[i] -> v[i+1])
+            Vector2 da = new Vector2(nrm[a].y, -nrm[a].x), db = new Vector2(nrm[b].y, -nrm[b].x);
+            float den = da.x * db.y - da.y * db.x;
+            if (Mathf.Abs(den) < 1e-9f) { res[i] = v[i] + nrm[b] * r; continue; }
+            Vector2 w = pts[b] - pts[a];
+            float t = (w.x * db.y - w.y * db.x) / den;
+            res[i] = pts[a] + da * t;
+        }
+        return res;
     }
 
     void BuildBreasts()

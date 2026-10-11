@@ -58,6 +58,19 @@ public struct BodySdfKernel : IDisposable
         public int shape, op;
     }
 
+    // Face Fix Part 2: the lower jaw. Top view (x, z in the head frame): a trapezoid from the chin (front,
+    // half width chin.x) back to the jaw angles (gonion: half width, z behind the menton), its vertical
+    // edges rounded (inset polygon + round); cut below by the jaw-line plane (through the menton, normal
+    // jawN: up and forward) with the jaw angle's rounding, and above at `top`. Its bottom is the under-jaw
+    // plane; the back edge rising from each gonion is the ramus.
+    public struct Mandible
+    {
+        public Vector3 menton, x, y, z, jawN;
+        public Vector2 q0, q1, q2, q3;      // the inset polygon (x, z from the menton), convex
+        public float round, angle, top, blend;
+        public int on;
+    }
+
     public struct Sample
     {
         public float skin;      // signed distance to the skin
@@ -75,8 +88,11 @@ public struct BodySdfKernel : IDisposable
     public float fingerBlend;
     public int cutMode;                 // 0 whole body, 1 body without hands, 2 + h hand h
     public float cutBody, cutHand, cutShrink;  // cut positions along the hand (m from the wrist), shrink (m)
-    public Ellipsoid skull;
+    public Ellipsoid skull;             // the face's frame and profile egg (face space, fat mask, wig, bake)
     public float eggTop, eggBottom;     // the egg head: horizontal radii x eggBottom at the jaw .. x eggTop at the crown
+    public Ellipsoid cranium;           // Face Fix Part 2: the braincase (an egg, big end up and back) ...
+    public float craniumBottom, craniumTop;
+    public Mandible jaw;                // ... and the lower jaw, smooth-unioned: the head's core
     public int headIndex;
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
@@ -152,6 +168,40 @@ public struct BodySdfKernel : IDisposable
         // Lips carry almost no fat (so they stay visible on any face).
         float mouth = G(ax / 0.32f) * G((u.y + 0.48f) / 0.1f) * front;
         return Mathf.Lerp(Mathf.Lerp(0.35f, 1.7f, pool), 0.12f, mouth);
+    }
+
+    // Signed distance to a polygon (Inigo Quilez's sdPolygon), 4 vertices.
+    static float Poly4(Vector2 p, Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        float dd = (p - a).sqrMagnitude, s = 1f;
+        PolyEdge(p, a, d, ref dd, ref s); PolyEdge(p, b, a, ref dd, ref s); PolyEdge(p, c, b, ref dd, ref s); PolyEdge(p, d, c, ref dd, ref s);
+        return s * Mathf.Sqrt(dd);
+    }
+
+    static void PolyEdge(Vector2 p, Vector2 vi, Vector2 vj, ref float dd, ref float s)
+    {
+        Vector2 e = vj - vi, w = p - vi;
+        Vector2 bb = w - e * Mathf.Clamp01(Vector2.Dot(w, e) / Mathf.Max(1e-12f, e.sqrMagnitude));
+        dd = Mathf.Min(dd, bb.sqrMagnitude);
+        bool c1 = p.y >= vi.y, c2 = p.y < vj.y, c3 = e.x * w.y > e.y * w.x;
+        if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) s = -s;
+    }
+
+    public static float MandibleDist(in Mandible m, Vector3 p)
+    {
+        Vector3 d = p - m.menton;
+        Vector2 q = new Vector2(Vector3.Dot(d, m.x), Vector3.Dot(d, m.z));
+        float d2 = Poly4(q, m.q0, m.q1, m.q2, m.q3) - m.round;
+        float below = -Vector3.Dot(d, m.jawN);
+        float above = Vector3.Dot(d, m.y) - m.top;
+        return Mathf.Max(SMax(d2, below, m.angle), above);
+    }
+
+    // The head's core: the cranium smooth-unioned with the lower jaw.
+    public float HeadCore(Vector3 p)
+    {
+        float c = EggDist(cranium.ToLocal(p), cranium.r, craniumBottom, craniumTop);
+        return jaw.on != 0 ? SMin(c, MandibleDist(jaw, p), jaw.blend) : c;
     }
 
     public static float FaceDist(FacePrim f, Vector3 p)
@@ -261,7 +311,7 @@ public struct BodySdfKernel : IDisposable
             float plane = Vector3.Dot(l - new Vector3(0f, h * 0.5f, -footLen * 0.1f), n);
             return SMax(box, plane, 0.01f);
         }
-        if (b.kind == KHead) return EggDist(skull.ToLocal(p), skull.r, eggBottom, eggTop);
+        if (b.kind == KHead) return HeadCore(p);
 
         float dr = b.depthRatio;
         Vector3 s = new Vector3(q.x, q.y, q.z / dr);
@@ -381,10 +431,20 @@ public struct BodySdfKernel : IDisposable
         if (nearHead)
             for (int j = 0; j < face.Length; j++)
             {
-                if (face[j].op != (int)FacePartOp.Union) continue;
-                float v = FaceDist(face[j], p);
-                muscle = SMin(muscle, v, face[j].blend);
-                soft = SMin(soft, v, Mathf.Max(kFat * 0.5f, face[j].blend));   // half the body's fat blend: features soften, not vanish
+                int op = face[j].op;
+                if (op == (int)FacePartOp.Union)
+                {
+                    float v = FaceDist(face[j], p);
+                    muscle = SMin(muscle, v, face[j].blend);
+                    soft = SMin(soft, v, Mathf.Max(kFat * 0.5f, face[j].blend));   // half the body's fat blend: features soften, not vanish
+                }
+                else if (op == (int)FacePartOp.Carve)
+                {
+                    // Hollows in the bone and muscle (temples): the fat fills them.
+                    float v = -FaceDist(face[j], p);
+                    muscle = SMax(muscle, v, face[j].blend);
+                    soft = SMax(soft, v, face[j].blend);
+                }
             }
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);

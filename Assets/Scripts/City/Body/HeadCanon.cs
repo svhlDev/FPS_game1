@@ -37,7 +37,7 @@ public struct HeadCanon
         // Width and depth from the height (a head is taller than wide), not the bone's girth.
         c.halfW = c.halfH * (female ? fd.femaleWidthToHeight : fd.widthToHeight) * (1f + V());
         c.halfD = c.halfH * fd.depthToHeight * (1f + V());
-        c.o = joint + ay * c.halfH;
+        c.o = joint + ay * c.halfH + az * c.halfD * fd.faceForward;
         float H = c.halfH * 2f, W = c.halfW * 2f;
         float third = H * fd.faceThird * (1f + V());
         c.chin = -c.halfH;
