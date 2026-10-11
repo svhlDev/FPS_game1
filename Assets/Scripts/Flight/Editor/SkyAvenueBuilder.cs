@@ -348,6 +348,9 @@ public static class SkyAvenueBuilder
         }
         CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, SkySize, HazeHeights, kit);
         CityDressing.AddCloudDeck(cityRoot, Vector3.zero, SkySize, CloudHeights, Vector3.forward);
+        // Reflection probes down the canyon: street level, both traffic streams, the deck.
+        CityDressing.AddProbeGrid(cityRoot, new Bounds(Vector3.zero, new Vector3(CanyonWidth, 0f, CanyonLength)), 60f, new[] { 8f }, 16f);
+        CityDressing.AddProbeGrid(cityRoot, new Bounds(Vector3.zero, new Vector3(CanyonWidth, 0f, CanyonLength)), 60f, new[] { 120f, 210f }, 90f);
         CityDressing.AddHeightFog();
         CityDressing.SetupAtmosphere(mainCam, "SkyAvenue_Post");
 

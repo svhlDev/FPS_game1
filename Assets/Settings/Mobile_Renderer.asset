@@ -14,6 +14,32 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::HeightFogFeature
   m_Active: 1
   shader: {fileID: 4800000, guid: 9476bc24ceb1fe44a834f97373ed89b8, type: 3}
+--- !u!114 &-1006271582198841019
+MonoBehaviour:
+  m_ObjectHideFlags: 1
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f62c9c65cf3354c93be831c8bc075510, type: 3}
+  m_Name: SSAO
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.ScreenSpaceAmbientOcclusion
+  m_Active: 1
+  m_Settings:
+    AOMethod: 0
+    Downsample: 0
+    AfterOpaque: 0
+    Source: 1
+    NormalSamples: 1
+    Intensity: 0.6
+    DirectLightingStrength: 0.15
+    Radius: 0.3
+    Samples: 1
+    BlurQuality: 0
+    Falloff: 60
+    SampleCount: -1
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -40,7 +66,8 @@ MonoBehaviour:
     probeVolumeBlendStatesCS: {fileID: 0}
   m_RendererFeatures:
   - {fileID: -8923374498319078554}
-  m_RendererFeatureMap: 666be9fd2bce2984l
+  - {fileID: -1006271582198841019}
+  m_RendererFeatureMap: 666be9fd2bce298445c177d3530109f2l
   xrSystemData: {fileID: 0}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   m_AssetVersion: 3

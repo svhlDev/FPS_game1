@@ -83,6 +83,7 @@ public static partial class CityDressing
                 Street(arm.gameObject, kit, false);
                 var head = Slab(root, "LampHead", new Vector3(x - s * 1.6f, KerbHeight + LampHeight - 0.25f, z), new Vector3(0.7f, 0.15f, 0.35f), lampHead);
                 Street(head.gameObject, kit, false);
+                AddLampLight(head, head.position);
             }
         }
 
@@ -93,9 +94,10 @@ public static partial class CityDressing
             float z = Mathf.Lerp(-halfL + 10f, halfL - 10f, (float)rng.NextDouble());
             if (!OnFacade(plots, s, z, 1f)) continue;
             float h = Mathf.Lerp(2.5f, 4.5f, (float)rng.NextDouble());
-            var sign = Slab(root, "StreetBladeSign", new Vector3(s * (halfW - 0.8f), 4f + h * 0.5f, z), new Vector3(1.4f, h, 0.2f),
-                            kit.neon[rng.Next(kit.neon.Length)]);
+            var neon = kit.neon[rng.Next(kit.neon.Length)];
+            var sign = Slab(root, "StreetBladeSign", new Vector3(s * (halfW - 0.8f), 4f + h * 0.5f, z), new Vector3(1.4f, h, 0.2f), neon);
             Street(sign.gameObject, kit, false);
+            AddSignLight(sign, sign.position - Vector3.right * s * 1.2f, neon);
         }
 
         // Vents against the walls (solid: you walk round them) and pipes up the first floors (decoration).

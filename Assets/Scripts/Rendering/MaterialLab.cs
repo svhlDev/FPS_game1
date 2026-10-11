@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 
 // Graphics Upgrade Phase 0: the Material Lab (Tools > Build Material Lab -> Assets/Scenes/MaterialLab.unity).
 // Rows of test shapes per material, characters in each outfit, a car, a weapon, a road and a facade,
@@ -124,6 +125,7 @@ public class MaterialLab : MonoBehaviour
         var sun = RenderSettings.sun;
         if (sun == null) foreach (var l in FindObjectsByType<Light>()) if (l.type == LightType.Directional && l != beam) { sun = l; break; }
         if (sun != null) GraphicsFeatures.Register("Moon / sun shadows", () => sun.shadows != LightShadows.None, v => sun.shadows = v ? LightShadows.Soft : LightShadows.None);
+        GraphicsFeatures.RegisterLightingStack();
     }
 
     // ---------- runtime ----------
@@ -212,5 +214,36 @@ public static class GraphicsFeatures
         if (f == null) return false;
         f.set(on);
         return true;
+    }
+
+    public static bool Get(string name) { var f = all.Find(x => x.name == name); return f != null && f.get(); }
+
+    // Phase 1, the lighting stack: SSAO (the renderer feature), the city's lights and probes, the
+    // tonemapper (ACES, off = Neutral), film grain. Note: switching SSAO in the editor's play mode changes
+    // the renderer asset itself.
+    public const string Ssao = "SSAO", CityLightsName = "City lights", CityProbesName = "City reflection probes",
+                        Aces = "ACES tonemap (off: Neutral)", Grain = "Film grain";
+
+    public static void RegisterLightingStack()
+    {
+        if (GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset urp)
+            foreach (var d in urp.rendererDataList)
+                if (d != null)
+                    foreach (var f in d.rendererFeatures)
+                        if (f is ScreenSpaceAmbientOcclusion s) { Register(Ssao, () => s.isActive, v => s.SetActive(v)); break; }
+        var lights = CityLights.Instance;
+        if (lights != null) Register(CityLightsName, () => lights.On, v => { lights.On = v; lights.Refresh(); });
+        var probes = CityProbes.Instance;
+        if (probes != null && probes.probes.Count > 0) Register(CityProbesName, () => probes.On, v => probes.SetOn(v));
+        Volume vol = null;
+        foreach (var v in UnityEngine.Object.FindObjectsByType<Volume>()) if (v.isGlobal) { vol = v; break; }
+        if (vol != null && vol.sharedProfile != null)
+        {
+            var p = vol.profile; // the runtime copy (TimeOfDay uses the same one)
+            if (p.TryGet(out Tonemapping tone))
+                Register(Aces, () => tone.mode.value == TonemappingMode.ACES, v => tone.mode.value = v ? TonemappingMode.ACES : TonemappingMode.Neutral);
+            if (p.TryGet(out FilmGrain grain))
+                Register(Grain, () => grain.active, v => grain.active = v);
+        }
     }
 }

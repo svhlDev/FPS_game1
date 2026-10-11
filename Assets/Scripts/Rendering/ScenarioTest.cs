@@ -76,6 +76,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "dressed": yield return DressedTest(); break;
             case "coat": yield return CoatTest(); break;
             case "lab": yield return LabTest(); break;
+            case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
@@ -622,6 +623,90 @@ public partial class ScenarioTest : MonoBehaviour
         FlyingVehicle.CameraOverride = false;
     }
 
+    // ---------- graphics phase 1: the lighting stack ----------
+
+    // District: light and probe counts, probe startup, then before (SSAO, city lights, probes, grain off)
+    // and after shots at street level, mid level and from the air, and the frame time either way.
+    IEnumerator LightingTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        yield return null;
+        GraphicsFeatures.RegisterLightingStack();
+        var lights = CityLights.Instance; var probes = CityProbes.Instance;
+        if (lights == null || probes == null) { Log("FAIL no CityLights / CityProbes in the scene"); yield break; }
+        Log($"features: {string.Join(", ", System.Linq.Enumerable.Select(GraphicsFeatures.All, f => f.name))}");
+        var ssaoOk = GraphicsFeatures.Get(GraphicsFeatures.Ssao);
+        Log(ssaoOk ? "PASS SSAO renderer feature installed and on" : "FAIL no SSAO");
+        float t0 = Time.realtimeSinceStartup;
+        while (!probes.StartupDone && Time.realtimeSinceStartup - t0 < 30f) yield return null;
+        Log($"probes: {probes.probes.Count}, first pass {(Time.realtimeSinceStartup - t0):0.0} s ({probes.startupPerFrame} a frame), last render call {probes.RenderMs:0.00} ms CPU");
+        Log(probes.probes.Count > 10 && probes.StartupDone ? "PASS reflection probes placed and rendered" : "FAIL probes");
+
+        var fpc = FirstPersonController.Instance;
+        var cam = Camera.main;
+        cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        if (fpc != null) fpc.enabled = false;
+        var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(22f); }
+        Vector3 mid = fpc != null ? fpc.transform.position : new Vector3(0f, 180f, 0f);
+        var sig = FindFirstObjectByType<TrafficSignal>();
+        Vector3 street = sig != null ? new Vector3(sig.transform.position.x, 0f, sig.transform.position.z) : Vector3.zero;
+        Light lamp = null; float best = float.MaxValue;
+        foreach (var l in FindObjectsByType<Light>(FindObjectsInactive.Include))
+            if (l.name == "LampLight") { float d = (l.transform.position - street).sqrMagnitude; if (d < best) { best = d; lamp = l; } }
+        Vector3 lampFoot = lamp != null ? new Vector3(lamp.transform.position.x, 0f, lamp.transform.position.z) : street;
+        Vector3 sign = mid;
+        best = float.MaxValue;
+        foreach (var l in FindObjectsByType<Light>(FindObjectsInactive.Include))
+            if (l.name == "SignLight") { float d = (l.transform.position - mid).sqrMagnitude; if (d < best) { best = d; sign = l.transform.position; } }
+        var views = new (string, Vector3, Vector3)[]
+        {
+            ("lamp", lampFoot + Vector3.up * 1f, lampFoot + new Vector3(10f, 4f, 10f)),
+            ("sign", sign, sign + new Vector3(14f, 6f, 14f)),
+            ("street", street + new Vector3(4f, 3f, 35f), street + new Vector3(-3f, 1.7f, -22f)),
+            ("mid", mid + new Vector3(0f, -4f, 40f), mid + new Vector3(0f, 1.7f, 0f)),
+            ("air", mid + new Vector3(0f, -60f, 200f), mid + new Vector3(-40f, 90f, -60f)),
+        };
+        void Phase1(bool on)
+        {
+            GraphicsFeatures.Set(GraphicsFeatures.Ssao, on);
+            GraphicsFeatures.Set(GraphicsFeatures.CityLightsName, on);
+            GraphicsFeatures.Set(GraphicsFeatures.CityProbesName, on);
+            GraphicsFeatures.Set(GraphicsFeatures.Grain, on);
+        }
+        IEnumerator FrameMs(System.Action<float> result)
+        {
+            yield return new WaitForSeconds(0.5f);
+            float sum = 0f; int n = 0; float end = Time.realtimeSinceStartup + 2f;
+            while (Time.realtimeSinceStartup < end) { yield return null; sum += Time.unscaledDeltaTime; n++; }
+            result(sum / Mathf.Max(1, n) * 1000f);
+        }
+        foreach (var (name, at, from) in views)
+        {
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            Phase1(true); lights.Refresh();
+            // Let the nearest probes catch up with this view.
+            for (int i = 0; i < 30; i++) yield return null;
+            int active = lights.ActiveCount, visible = 0;
+            foreach (var l in FindObjectsByType<Light>()) if (l.enabled && l.type != LightType.Directional && l.isActiveAndEnabled) visible++;
+            float onMs = 0f, offMs = 0f;
+            yield return FrameMs(v => onMs = v);
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"lighting_{name}_after.png"));
+            yield return null; yield return null;
+            Phase1(false);
+            yield return FrameMs(v => offMs = v);
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"lighting_{name}_before.png"));
+            yield return null; yield return null;
+            Log($"{name}: {active} city lights on of {lights.TotalCount} ({visible} point / spot lights enabled), frame {onMs:0.00} ms with Phase 1, {offMs:0.00} ms without");
+        }
+        Phase1(true);
+        Log(lights.TotalCount > 50 ? "PASS city lights placed and budgeted" : "FAIL too few city lights");
+        if (fpc != null) fpc.enabled = true;
+        FlyingVehicle.CameraOverride = false;
+        if (tod != null) tod.freeze = false;
+    }
+
     // ---------- graphics: the Material Lab ----------
 
     IEnumerator LabTest()
@@ -630,6 +715,7 @@ public partial class ScenarioTest : MonoBehaviour
         var lab = MaterialLab.Instance;
         if (lab == null) { Log("FAIL not in the Material Lab scene"); yield break; }
         yield return new WaitForSeconds(1.5f);
+        GraphicsFeatures.RegisterLightingStack();
         int chars = lab.characterRow != null ? lab.characterRow.childCount : 0;
         Log($"lab: {MaterialLabPresetCount()} material rows, {chars} characters, {lab.neon.Count} orbiting neon lights, {GraphicsFeatures.All.Count} feature toggles: {string.Join(", ", System.Linq.Enumerable.Select(GraphicsFeatures.All, f => f.name))}");
         Log(chars >= 4 && lab.neon.Count > 0 && GraphicsFeatures.All.Count > 0 ? "PASS the lab has its exhibits, lights and toggles" : "FAIL lab incomplete");
@@ -651,6 +737,13 @@ public partial class ScenarioTest : MonoBehaviour
         }
         lab.SetPreset(MaterialLab.Preset.NightNeon);
         lab.SetWet(true); View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot("wet"); lab.SetWet(false);
+        // Phase 1 before / after: SSAO and film grain off, Neutral tonemapping.
+        GraphicsFeatures.Set(GraphicsFeatures.Ssao, false); GraphicsFeatures.Set(GraphicsFeatures.Grain, false);
+        yield return Shot("phase1_off");
+        GraphicsFeatures.Set(GraphicsFeatures.Aces, false); yield return Shot("neutral_tonemap"); GraphicsFeatures.Set(GraphicsFeatures.Aces, true);
+        GraphicsFeatures.Set(GraphicsFeatures.Ssao, true); GraphicsFeatures.Set(GraphicsFeatures.Grain, true);
+        View(people, people + new Vector3(0.5f, 0.6f, -5f)); yield return Shot("people_ssao_on");
+        GraphicsFeatures.Set(GraphicsFeatures.Ssao, false); yield return Shot("people_ssao_off"); GraphicsFeatures.Set(GraphicsFeatures.Ssao, true);
         GraphicsFeatures.Set("Post-processing", false); yield return Shot("post_off"); GraphicsFeatures.Set("Post-processing", true);
         View(new Vector3(0f, 5f, 38f), new Vector3(-18f, 8f, 10f)); yield return Shot("facade_road");
         lab.focus.position = rows; View(rows, rows + new Vector3(0f, 2f, -12f)); lab.SetDistance(120f); yield return Shot("far_120m");

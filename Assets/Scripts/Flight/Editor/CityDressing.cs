@@ -12,7 +12,8 @@ using static FlightGrayboxBuilder;
 // Split between GAMEPLAY geometry (building masses, roofs, ledges, bridges: colliders, tops on the
 // grid) and DECORATION (neon, signs, AC units, pipes, roof machinery, antennas, holograms: no
 // colliders, never changes what you can stand on or run along). Light comes from emissive materials
-// picked up by Bloom, never from Light components.
+// picked up by Bloom, plus (Graphics Phase 1, CityLighting.cs) unshadowed lights on lamps and signs that
+// the runtime CityLights budget switches on near the camera.
 // Tower archetypes, bays, recessed floors, balconies and the extra decoration live in CityVariation.cs.
 public static partial class CityDressing
 {
@@ -80,6 +81,7 @@ public static partial class CityDressing
     public static Kit CreateKit(float spacing, int trafficMinLayer, int trafficMaxLayer)
     {
         Directory.CreateDirectory(Folder);
+        ClearPendingLighting();
         var kit = new Kit { spacing = spacing, trafficMin = trafficMinLayer * spacing, trafficMax = (trafficMaxLayer + 1) * spacing };
         kit.detailLayer = Mathf.Max(0, EnsureLayer("Detail"));
 
@@ -246,8 +248,11 @@ public static partial class CityDressing
                 float y = Mathf.Lerp(Mathf.Max(b.min.y, kit.trafficMin - 20f) + h * 0.5f, Mathf.Min(b.max.y, kit.trafficMax + 20f) - h * 0.5f, (float)rng.NextDouble());
                 if (y - h * 0.5f < b.min.y || y + h * 0.5f > b.max.y || rng.NextDouble() > kit.Density(y)) continue;
                 var c = new Vector3(face.x, y, face.z) + along * Mathf.Lerp(-faceLen * 0.4f, faceLen * 0.4f, (float)rng.NextDouble()) + n * 1.5f;
+                var neon = NeonFor(y, rng, kit);
+                int before = deco.childCount;
                 Box(deco, "BladeSign", c, Vector3.Scale(new Vector3(Mathf.Abs(n.x), 0f, Mathf.Abs(n.z)), Vector3.one) * 3f + Vector3.up * h + along * 0.4f,
-                    NeonFor(y, rng, kit), kit);
+                    neon, kit);
+                if (deco.childCount > before) AddSignLight(deco, c + n * 1.5f, neon);
             }
         }
 
@@ -435,10 +440,13 @@ public static partial class CityDressing
 
     // Night (as the scene starts, 22:00; TimeOfDay takes over at runtime): exponential fog, gradient
     // skybox, dim cool moonlight (the scene's existing directional light), low ambient, and a global post
-    // volume (Bloom, ACES, a slight teal in the shadows, vignette). Dark blue-green: the neon and the
-    // windows carry the light.
+    // volume (Bloom for the HDR emissives, ACES, cool shadows / warm highlights, subtle vignette, light
+    // film grain). Dark blue-green: the neon and the windows carry the light. Also installs the lighting
+    // stack (SSAO, HDR grading) and hands the scene's lamp / sign lights and probes to CityLights /
+    // CityProbes (CityLighting.cs).
     public static void SetupAtmosphere(Camera cam, string profileName)
     {
+        EnsureLightingStack();
         // Opaque shaders fog toward this colour; additive ones (holograms, haze) fade to black, so neon
         // doesn't cut through.
         var fogColor = new Color(0.02f, 0.05f, 0.06f);
@@ -490,9 +498,9 @@ public static partial class CityDressing
         AssetDatabase.CreateAsset(profile, path);
 
         var bloom = AddOverride<Bloom>(profile);
-        bloom.threshold.value = 1.0f;
-        bloom.intensity.value = 0.8f;
-        bloom.scatter.value = 0.7f;
+        bloom.threshold.value = 1.1f;
+        bloom.intensity.value = 0.7f;
+        bloom.scatter.value = 0.65f;
         bloom.clamp.value = 20f;
         bloom.highQualityFiltering.value = true;
         var tone = AddOverride<Tonemapping>(profile);
@@ -501,13 +509,18 @@ public static partial class CityDressing
         adjust.contrast.value = 8f;
         adjust.saturation.value = 8f;
         adjust.postExposure.value = -0.4f;
-        // A slight teal in the shadows at night only (TimeOfDay fades it out by day); highlights neutral.
+        // A slight teal in the shadows at night only (TimeOfDay fades it out by day); highlights a touch warm.
         var split = AddOverride<SplitToning>(profile);
         split.shadows.value = new Color(0.42f, 0.56f, 0.56f);
-        split.highlights.value = new Color(0.5f, 0.5f, 0.5f);
+        split.highlights.value = new Color(0.56f, 0.51f, 0.45f);
+        split.balance.value = -10f;
         var vignette = AddOverride<Vignette>(profile);
-        vignette.intensity.value = 0.25f;
+        vignette.intensity.value = 0.2f;
         vignette.smoothness.value = 0.4f;
+        var grain = AddOverride<FilmGrain>(profile);
+        grain.type.value = FilmGrainLookup.Thin1;
+        grain.intensity.value = 0.12f;
+        grain.response.value = 0.8f;
         EditorUtility.SetDirty(profile);
         AssetDatabase.SaveAssets();
 
@@ -515,6 +528,7 @@ public static partial class CityDressing
         vol.isGlobal = true;
         vol.sharedProfile = profile;
         AddTimeOfDay();
+        FinishLighting();
     }
 
     // The scene's day / night cycle (one per scene).

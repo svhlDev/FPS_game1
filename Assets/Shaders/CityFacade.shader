@@ -67,6 +67,9 @@ Shader "FPS/CityFacade"
             #pragma fragment frag
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _SHADOWS_SOFT
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
 
@@ -135,8 +138,30 @@ Shader "FPS/CityFacade"
                 float3 n = normalize(i.normalWS);
                 float3 wall = _WallColor.rgb * i.color.rgb;
 
+                // Diffuse light: ambient (SSAO-darkened), the moon / sun, and every additional light (neon
+                // signs, street lamps, headlights: Graphics Phase 1). Full PBR comes with Phase 4.
+                InputData inputData = (InputData)0;
+                inputData.positionWS = i.positionWS;
+                inputData.normalWS = n;
+                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
+                AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(inputData.normalizedScreenSpaceUV);
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
-                float3 light = SampleSH(n) + mainLight.color * saturate(dot(n, mainLight.direction)) * mainLight.shadowAttenuation;
+                float3 light = SampleSH(n) * ao.indirectAmbientOcclusion
+                             + mainLight.color * saturate(dot(n, mainLight.direction)) * mainLight.shadowAttenuation * ao.directAmbientOcclusion;
+                #if defined(_ADDITIONAL_LIGHTS)
+                    uint pixelLightCount = GetAdditionalLightsCount();
+                    #if USE_CLUSTER_LIGHT_LOOP
+                    [loop] for (uint li = 0; li < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); li++)
+                    {
+                        Light dl = GetAdditionalLight(li, i.positionWS, half4(1, 1, 1, 1));
+                        light += dl.color * saturate(dot(n, dl.direction)) * dl.distanceAttenuation * dl.shadowAttenuation;
+                    }
+                    #endif
+                    LIGHT_LOOP_BEGIN(pixelLightCount)
+                        Light al = GetAdditionalLight(lightIndex, i.positionWS, half4(1, 1, 1, 1));
+                        light += al.color * saturate(dot(n, al.direction)) * al.distanceAttenuation * al.shadowAttenuation;
+                    LIGHT_LOOP_END
+                #endif
 
                 float3 color;
                 if (n.y > 0.5)

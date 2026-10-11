@@ -103,8 +103,8 @@ public class TimeOfDay : MonoBehaviour
             var p = volume.profile;   // a runtime copy: the asset stays as authored
             p.TryGet(out adjust);
             p.TryGet(out split);
-            // The magenta highlight toning is gone for good; shadows follow the look.
-            if (split != null) { split.highlights.overrideState = true; split.highlights.value = new Color(0.5f, 0.5f, 0.5f); split.shadows.overrideState = true; }
+            // Highlights stay as authored (a touch warm); shadows follow the look.
+            if (split != null) { split.shadows.overrideState = true; }
             if (adjust != null) adjust.postExposure.overrideState = true;
         }
         cam = Camera.main;

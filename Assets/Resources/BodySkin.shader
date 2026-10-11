@@ -44,6 +44,7 @@ Shader "FPS/BodySkin"
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
 
@@ -105,13 +106,16 @@ Shader "FPS/BodySkin"
                 inputData.normalWS = n;
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
 
-                // Ambient (SH) and reflections, Fresnel-weighted.
+                // Ambient (SH) and reflections, Fresnel-weighted; SSAO darkens both (and a little of the direct light).
+                AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(inputData.normalizedScreenSpaceUV);
                 half nv = saturate(dot(n, v));
                 half fresnel = 0.028h + (1.0h - 0.028h) * pow(1.0h - nv, 5.0h) * _Smoothness;
-                half3 color = SampleSH(n) * albedo
-                            + GlossyEnvironmentReflection(reflect(-v, n), i.positionWS, perceptual, 1.0h, inputData.normalizedScreenSpaceUV) * fresnel;
+                half3 color = (SampleSH(n) * albedo
+                            + GlossyEnvironmentReflection(reflect(-v, n), i.positionWS, perceptual, 1.0h, inputData.normalizedScreenSpaceUV) * fresnel)
+                            * ao.indirectAmbientOcclusion;
 
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
+                mainLight.color *= ao.directAmbientOcclusion;
                 color += SkinLight(mainLight, albedo, n, v, roughness, spec);
 
                 #if defined(_ADDITIONAL_LIGHTS)

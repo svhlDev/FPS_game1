@@ -381,6 +381,11 @@ public static class DistrictBuilder
 
         CityDressing.AddUnderworldHaze(cityRoot, Vector3.zero, 2400f, new[] { 15f, 35f }, kit);
         CityDressing.AddCloudDeck(cityRoot, Vector3.zero, 6000f, new[] { 330f, 360f }, Vector3.forward);
+        // Reflection probes: street level every 60 m, the traffic band every 90 m (open space only).
+        var probeArea = new Bounds(Vector3.zero, new Vector3(BuildHalf * 2f, 0f, BuildHalf * 2f));
+        int probes = CityDressing.AddProbeGrid(cityRoot, probeArea, 60f, new[] { 6f }, 16f)
+                   + CityDressing.AddProbeGrid(cityRoot, probeArea, 90f, new[] { kit.trafficMin + 30f, kit.trafficMax - 40f }, 90f);
+        Debug.Log($"District reflection probes: {probes}");
         CityDressing.AddHeightFog();
         CityDressing.SetupAtmosphere(mainCam, "District_Post");
 

@@ -182,6 +182,7 @@ public static partial class CityDressing
         Street(arm.gameObject, kit, false);
         var h = Slab(root, "LampHead", kerb + outN * 1.6f + Vector3.up * (KerbHeight + LampHeight - 0.25f), Sz(0.35f, 0.15f, 0.7f), head);
         Street(h.gameObject, kit, false);
+        AddLampLight(h, h.position);
     }
 
     // ---------- traffic lights ----------
@@ -553,9 +554,11 @@ public static partial class CityDressing
                 if (rng.NextDouble() < 0.25)
                 {
                     float h = Mathf.Lerp(2.5f, 4.5f, (float)rng.NextDouble());
+                    var neon = NeonFor(1f, rng, kit);
                     var sign = Slab(root, "MarketBladeSign", edge + outN * 0.8f + Vector3.up * (4f + h * 0.5f),
-                                    alongX ? new Vector3(0.2f, h, 1.4f) : new Vector3(1.4f, h, 0.2f), NeonFor(1f, rng, kit));
+                                    alongX ? new Vector3(0.2f, h, 1.4f) : new Vector3(1.4f, h, 0.2f), neon);
                     Street(sign.gameObject, kit, false);
+                    AddSignLight(sign, sign.position + outN * 1.2f, neon);
                 }
             }
         }

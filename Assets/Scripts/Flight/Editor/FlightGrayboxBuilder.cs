@@ -523,8 +523,8 @@ public static class FlightGrayboxBuilder
     }
 
     // Two warm headlights (just over the bloom threshold) and two dim red tail lights (under it) at the
-    // body's corners. Emissive boxes only: no Light components, no colliders. CarLights switches them to
-    // "off" while the car is parked.
+    // body's corners. Emissive boxes, no colliders; CarLights adds the real (budgeted) lights at runtime
+    // and switches everything to "off" while the car is parked.
     static Material headOnMat, tailOnMat, lightsOffMat;
 
     static void AddCarLights(GameObject root)
