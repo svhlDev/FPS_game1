@@ -42,7 +42,8 @@ public class BodySDF : IDisposable
     readonly Frame[] frames;                       // bone frames: y along the bone, z the body's front
     readonly float[] depthRatio;
     readonly List<Blob> blobs = new List<Blob>();
-    readonly List<Feature> headFeatures = new List<Feature>();
+    readonly List<BodySdfKernel.FacePrim> faceParts = new List<BodySdfKernel.FacePrim>();
+    public readonly List<string> FacePartNames = new List<string>();
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;
     public float EggTop, EggBottom;
@@ -56,6 +57,11 @@ public class BodySDF : IDisposable
     // Hands: each meshed on its own grid (HandBounds), cut from the body (see BodySdfKernel).
     public readonly List<Bounds> HandBounds = new List<Bounds>();
     public int HandCount => HandBounds.Count;
+    // Head spec Part D: the head meshed on its own finer grid (cut mode 2 + HandCount). Empty bounds = none.
+    public Bounds HeadBounds;
+    public bool HasHeadPiece => HeadBounds.size.x > 0f;
+    public int HeadMode => 2 + HandCount;
+    Vector3 headCutO, headCutAxis, headCutC; float headCutR;
 
     public BodyPlan Plan => plan;
     public BodySdfKernel Kernel => kernel;
@@ -163,6 +169,16 @@ public class BodySDF : IDisposable
                 HandBounds.Add(hb);
             }
         bounds.Encapsulate(new Vector3(bounds.center.x, 0f, bounds.center.z)); // the soles
+        if (headIndex >= 0)
+        {
+            var mr = BodyRules.Default.mesh;
+            headCutAxis = frames[headIndex].y;
+            headCutO = start[headIndex] - headCutAxis * mr.headCutBelow;
+            headCutC = skull.f.o;
+            float big = Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.4f;
+            headCutR = Mathf.Max((headCutO - headCutC).magnitude + hr.cutOverlap + 0.01f, big);
+            HeadBounds = new Bounds(headCutC, Vector3.one * headCutR * 2f);
+        }
         kernel = BuildKernel(Allocator.Persistent);
     }
 
@@ -196,7 +212,8 @@ public class BodySDF : IDisposable
         {
             bones = new NativeArray<BodySdfKernel.Bone>(n, alloc),
             blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
-            features = new NativeArray<BodySdfKernel.Ellipsoid>(headFeatures.Count, alloc),
+            face = new NativeArray<BodySdfKernel.FacePrim>(faceParts.ToArray(), alloc),
+            socketClearance = BodyRules.Default.face.socketClearance,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
@@ -230,6 +247,8 @@ public class BodySDF : IDisposable
                 var (c, r) = HandSphere(i);
                 cutList.Add(new BodySdfKernel.HandCut { o = start[i], axis = frames[i].y, centre = c, radius = r, hand = i });
             }
+        // The head's cut goes last (cut mode 2 + HandCount).
+        if (HasHeadPiece) cutList.Add(new BodySdfKernel.HandCut { o = headCutO, axis = headCutAxis, centre = headCutC, radius = headCutR, hand = headIndex });
         k.cuts = new NativeArray<BodySdfKernel.HandCut>(cutList.ToArray(), alloc);
         if (plan.dna != null)
         {
@@ -267,8 +286,6 @@ public class BodySDF : IDisposable
         }
         var bl = k.blobs;
         for (int j = 0; j < blobs.Count; j++) bl[j] = E(blobs[j].f, blobs[j].r, blobs[j].bone, (int)blobs[j].group);
-        var fe = k.features;
-        for (int j = 0; j < headFeatures.Count; j++) fe[j] = E(headFeatures[j].f, headFeatures[j].r, headIndex, 0);
         var br = k.breasts;
         for (int j = 0; j < breasts.Count; j++) br[j] = E(breasts[j].f, breasts[j].r, plan.Index("Chest"), 0);
         return k;
@@ -392,18 +409,46 @@ public class BodySDF : IDisposable
             float s = BodySdfKernel.EggScale(at.y * ry, skullRy, EggBottom, EggTop);
             return c + f.x * at.x * rx * s + f.y * at.y * ry + f.z * at.z * rz * s + f.z * rz * el * 0.5f;
         }
-        Vector3 R = new Vector3(rx, ry, rz);
-        void F(Vector3 at, Vector3 size, float scale)
+        // Face parts (Head spec Part D): data in face space -> primitives in root space. Per part: the
+        // sex's factors, the seed's variation (mirrored pairs share it, plus a little asymmetry each),
+        // the DNA face scale, then the character's own overrides.
+        var faceDef = BodyRules.Default.face;
+        bool female = plan.sheet.sex == Sex.Female;
+        var overrides = plan.sheet.face;
+        Vector3 W(Vector3 v) => f.x * v.x + f.y * v.y + f.z * v.z;
+        float DnaScale(FacePartScale k) => dna == null ? 1f : k == FacePartScale.Brow ? dna.brow : k == FacePartScale.Cheekbones ? dna.cheekbones
+                                         : k == FacePartScale.Jaw ? dna.jaw : k == FacePartScale.Nose ? dna.nose : k == FacePartScale.Chin ? dna.chin : 1f;
+        Vector3 V3(PcgRandom r, Vector3 range) => new Vector3(range.x * r.Signed(), range.y * r.Signed(), range.z * r.Signed());
+        foreach (var part in faceDef.parts)
         {
-            Vector3 p = FacePoint(at);
-            headFeatures.Add(new Feature { f = new Frame { o = p, x = f.x, y = f.y, z = f.z }, r = Vector3.Scale(size, R) * scale });
-        }
-        float Scale(FaceScale k) => dna == null ? 1f : k == FaceScale.Brow ? dna.brow : k == FaceScale.Cheekbones ? dna.cheekbones
-                                   : k == FaceScale.Jaw ? dna.jaw : k == FaceScale.Nose ? dna.nose : dna.chin;
-        foreach (var ft in BodyRules.Default.faceFeatures)
-        {
-            if (!ft.mirror) { F(ft.at, ft.size, Scale(ft.scale)); continue; }
-            foreach (float s in new[] { -1f, 1f }) F(new Vector3(s * ft.at.x, ft.at.y, ft.at.z), ft.size, Scale(ft.scale));
+            var rng = new PcgRandom(plan.sheet.seed, "face." + part.name);
+            Vector3 dPos = V3(rng, part.positionVar), dRot = V3(rng, part.rotationVar), dSize = V3(rng, part.sizeVar);
+            for (int side = part.mirrored ? -1 : 1; side <= 1; side += 2)
+            {
+                string inst = part.mirrored ? part.name + (side < 0 ? ".L" : ".R") : part.name;
+                var asym = new PcgRandom(plan.sheet.seed, "face." + inst);
+                Vector3 pos = part.position + dPos + V3(asym, part.positionVar) * faceDef.asymmetry + (female ? part.femaleOffset : Vector3.zero);
+                Vector3 rot = part.rotationEuler + dRot + V3(asym, part.rotationVar) * faceDef.asymmetry;
+                Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy);
+                if (female) size = Vector3.Scale(size, part.femaleSize);
+                if (overrides != null)
+                    foreach (var ov in overrides)
+                    {
+                        if (ov.part != part.name && ov.part != inst) continue;
+                        pos += ov.move; rot += ov.rotate;
+                        size = Vector3.Scale(size, new Vector3(ov.scale.x == 0f ? 1f : ov.scale.x, ov.scale.y == 0f ? 1f : ov.scale.y, ov.scale.z == 0f ? 1f : ov.scale.z));
+                    }
+                if (side < 0) { pos.x = -pos.x; rot.y = -rot.y; rot.z = -rot.z; }
+                var q = Quaternion.Euler(rot);
+                Vector3 r = part.shape == FacePartShape.Capsule || part.shape == FacePartShape.Sphere
+                    ? new Vector3(size.x * rx, size.x * rx, size.x * rx) : new Vector3(size.x * rx, size.y * ry, size.z * rz);
+                faceParts.Add(new BodySdfKernel.FacePrim
+                {
+                    o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
+                    halfLen = part.shape == FacePartShape.Capsule ? size.y * ry : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
+                });
+                FacePartNames.Add(inst);
+            }
         }
         EyeRadius = rx * SR.eyeRadius;
         EyeL = FacePoint(new Vector3(-SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
@@ -491,7 +536,7 @@ public class BodySDF : IDisposable
         sb.Append($"skin {skin:0.000} fat {fat:0.000} nearest {plan.bones[nearest].name}; ");
         for (int i = 0; i < plan.bones.Count; i++) { float db = kernel.BoneCore(i, p); if (db < 0.06f) sb.Append($"{plan.bones[i].name} {db:0.000}, "); }
         foreach (var bl in blobs) { float d = Ellipsoid(bl.f.ToLocal(p), bl.r); if (d < 0.03f) sb.Append($"{bl.group}@{plan.bones[bl.bone].name} {d:0.000}, "); }
-        if (headIndex >= 0) foreach (var ft in headFeatures) { float d = Ellipsoid(ft.f.ToLocal(p), ft.r); if (d < 0.03f) sb.Append($"feature {d:0.000}, "); }
+        if (headIndex >= 0) for (int j = 0; j < faceParts.Count; j++) { float d = BodySdfKernel.FaceDist(faceParts[j], p); if (d < 0.03f) sb.Append($"{FacePartNames[j]} {d:0.000}, "); }
         return sb.ToString();
     }
 

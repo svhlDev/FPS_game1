@@ -104,7 +104,7 @@ public class BodyRules : ScriptableObject
     public MotionRules motion = new MotionRules();
     public HandRules hands = new HandRules();
     public List<MuscleBlobRule> muscleBlobs = MuscleBlobRule.Defaults();
-    public List<FaceFeatureRule> faceFeatures = FaceFeatureRule.Defaults();
+    public FaceDef face = new FaceDef();   // Head spec Part D: the face parts (FaceDef.cs)
 
     [Header("Body plan rules")]
     public int minLegs = 2;

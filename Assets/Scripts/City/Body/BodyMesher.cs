@@ -101,13 +101,13 @@ public static class BodyMesher
         public BodySdfKernel kernel;
         public NativeArray<Vector3> positions;
         [ReadOnly] public NativeArray<byte> piece;
-        public float cell, handCell;
-        public int steps;
+        public float cell, handCell, headCell;
+        public int steps, headMode;   // headMode: the head piece's cut mode (its own cell), or 255
         public void Execute(int i)
         {
             var k = kernel;
             k.cutMode = piece[i];
-            float c = piece[i] >= 2 ? handCell : cell, h = c * 0.25f;
+            float c = piece[i] == headMode ? headCell : piece[i] >= 2 ? handCell : cell, h = c * 0.25f;
             Vector3 p = positions[i];
             for (int s = 0; s < steps; s++)
             {
@@ -127,14 +127,15 @@ public static class BodyMesher
         public BodySdfKernel kernel;
         [ReadOnly] public NativeArray<Vector3> positions;
         [ReadOnly] public NativeArray<byte> piece;
-        public float h, hHand;
+        public float h, hHand, hHead;
+        public int headMode;
         [WriteOnly] public NativeArray<Vector3> normals;
         [WriteOnly] public NativeArray<Vector2> region, layers;
         public void Execute(int i)
         {
             Vector3 p = positions[i];
             var s = kernel.Eval(p);
-            normals[i] = kernel.Normal(p, piece[i] >= 2 ? hHand : h);
+            normals[i] = kernel.Normal(p, piece[i] == headMode ? hHead : piece[i] >= 2 ? hHand : h);
             region[i] = new Vector2(kernel.bones[s.nearest].kind, s.nearest);
             // At the skin: the muscle surface lies `muscle` below it (the fat layer), the core `core`
             // below (fat + muscle).
@@ -256,7 +257,7 @@ public static class BodyMesher
     {
         var p = new NativeArray<Vector3>(verts.ToArray(), Allocator.TempJob);
         var pz = new NativeArray<byte>(verts.Count, Allocator.TempJob);
-        new ProjectJob { kernel = kernel, positions = p, piece = pz, cell = cell, handCell = cell, steps = steps }.Schedule(p.Length, 64).Complete();
+        new ProjectJob { kernel = kernel, positions = p, piece = pz, cell = cell, handCell = cell, headCell = cell, headMode = 255, steps = steps }.Schedule(p.Length, 64).Complete();
         for (int i = 0; i < verts.Count; i++) verts[i] = p[i];
         p.Dispose(); pz.Dispose();
     }

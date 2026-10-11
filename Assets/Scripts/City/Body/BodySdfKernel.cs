@@ -47,6 +47,16 @@ public struct BodySdfKernel : IDisposable
         public Vector3 ToLocal(Vector3 p) { p -= o; return new Vector3(Vector3.Dot(p, x), Vector3.Dot(p, y), Vector3.Dot(p, z)); }
     }
 
+    // A face part (Head spec Part D) in root space: capsule (r.x radius, halfLen along y), ellipsoid or
+    // half-ellipsoid (radii r), sphere (r.x). Union parts are face muscle (under the fat), subtract parts
+    // cut the skin.
+    public struct FacePrim
+    {
+        public Vector3 o, x, y, z, r;
+        public float halfLen, blend;
+        public int shape, op;
+    }
+
     public struct Sample
     {
         public float skin;      // signed distance to the skin
@@ -57,7 +67,8 @@ public struct BodySdfKernel : IDisposable
     }
 
     [ReadOnly] public NativeArray<Bone> bones;
-    [ReadOnly] public NativeArray<Ellipsoid> blobs, features, breasts;
+    [ReadOnly] public NativeArray<Ellipsoid> blobs, breasts;
+    [ReadOnly] public NativeArray<FacePrim> face;
     [ReadOnly] public NativeArray<Digit> digits;
     [ReadOnly] public NativeArray<HandCut> cuts;
     public float fingerBlend;
@@ -69,6 +80,7 @@ public struct BodySdfKernel : IDisposable
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
     public float muscleBlend, fatBlendPerMetre, fatBlendMin, breastBlend, featureBlend, eyeCarveBlend;
+    public float socketClearance;   // eye sockets cut through the face fat in front of the eye, plus this
     public float fatBlendFalloff;   // fat thickness blends across bones within about this distance
     public float fatBlendMax, muscleReach;
     public float fatWaist, fatBelly, fatHips, fatButtocks;
@@ -82,7 +94,7 @@ public struct BodySdfKernel : IDisposable
     {
         if (bones.IsCreated) bones.Dispose();
         if (blobs.IsCreated) blobs.Dispose();
-        if (features.IsCreated) features.Dispose();
+        if (face.IsCreated) face.Dispose();
         if (breasts.IsCreated) breasts.Dispose();
         if (digits.IsCreated) digits.Dispose();
         if (cuts.IsCreated) cuts.Dispose();
@@ -121,6 +133,27 @@ public struct BodySdfKernel : IDisposable
         float s = EggScale(p.y, r.y, bottom, top);
         float d = EllipsoidDist(new Vector3(p.x / s, p.y, p.z / s), r);
         return d * Mathf.Min(1f, Mathf.Min(bottom, top)) * 0.9f;
+    }
+
+    public static float FaceDist(FacePrim f, Vector3 p)
+    {
+        p -= f.o;
+        var l = new Vector3(Vector3.Dot(p, f.x), Vector3.Dot(p, f.y), Vector3.Dot(p, f.z));
+        switch (f.shape)
+        {
+            case (int)FacePartShape.Capsule: l.y -= Mathf.Clamp(l.y, -f.halfLen, f.halfLen); return l.magnitude - f.r.x;
+            case (int)FacePartShape.Sphere: return l.magnitude - f.r.x;
+            case (int)FacePartShape.HalfEllipsoidUpper: return Mathf.Max(EllipsoidDist(l, f.r), -l.y);
+            case (int)FacePartShape.HalfEllipsoidLower: return Mathf.Max(EllipsoidDist(l, f.r), l.y);
+            default: return EllipsoidDist(l, f.r);
+        }
+    }
+
+    static float SegmentDist(Vector3 p, Vector3 a, Vector3 b)
+    {
+        Vector3 ab = b - a;
+        float t = Mathf.Clamp01(Vector3.Dot(p - a, ab) / Mathf.Max(1e-8f, ab.sqrMagnitude));
+        return (p - (a + ab * t)).magnitude;
     }
 
     // Round cone from the origin along +y to (0, h, 0), radii r1 -> r2 (Inigo Quilez).
@@ -273,6 +306,14 @@ public struct BodySdfKernel : IDisposable
             wSum += w; fSum += w * FatAt(p, i);
         }
         float fat = wSum > 0f ? fSum / wSum : 0f;
+        // The face carries the head's own fat (DEX), not the neck's and chest's blended in: over the head
+        // (closer to it than to its parent, the neck) the fat fades to the head's profile.
+        if (headIndex >= 0)
+        {
+            int neck = bones[headIndex].parent;
+            float m = neck >= 0 ? Mathf.Clamp01((d[neck] - d[headIndex]) / 0.03f + 0.5f) : 1f;
+            if (m > 0f) fat = Mathf.Lerp(fat, FatAt(p, headIndex), m);
+        }
         // Hands carry their fat in the palm and finger sizes: a fat offset (and its wide blend) past the
         // wrist would fuse the fingers into a mitten.
         float handMask = 1f;
@@ -306,19 +347,30 @@ public struct BodySdfKernel : IDisposable
             muscle = SMin(muscle, v, muscleBlend);
             soft = SMin(soft, v, kFat);
         }
+        // Face (Head spec Part D): the parts are face muscle on the egg (each with its own small blend), so
+        // the face fat rounds over them like the body's blobs.
+        bool nearHead = headIndex >= 0 && d[headIndex] < 0.1f;
+        if (nearHead)
+            for (int j = 0; j < face.Length; j++)
+            {
+                if (face[j].op != (int)FacePartOp.Union) continue;
+                float v = FaceDist(face[j], p);
+                muscle = SMin(muscle, v, face[j].blend);
+                soft = SMin(soft, v, Mathf.Max(kFat * 0.5f, face[j].blend));   // half the body's fat blend: features soften, not vanish
+            }
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
-        // Face features sit on the skin, pushed out by the face's fat so they stay visible.
-        if (headIndex >= 0 && d[headIndex] < 0.08f)
-        {
-            float faceFat = Profile(bones[headIndex].fat, 0.5f);
-            for (int j = 0; j < features.Length; j++)
-                skin = SMin(skin, EllipsoidDist(features[j].ToLocal(p) - new Vector3(0f, 0f, faceFat), features[j].r), featureBlend);
-        }
+        if (nearHead)
+            for (int j = 0; j < face.Length; j++)
+                if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
         if (eyeRadius > 0f)
         {
-            skin = SMax(skin, -((p - eyeL).magnitude - eyeRadius), eyeCarveBlend);
-            skin = SMax(skin, -((p - eyeR).magnitude - eyeRadius), eyeCarveBlend);
+            // Eye sockets: the eyeball's sphere, and a channel straight out through the face fat (the local
+            // fat, plus a clearance) so a fat face never buries the eyes.
+            Vector3 outDir = skull.z * (fat + eyeRadius + socketClearance);
+            float rr = eyeRadius * 0.92f;
+            skin = SMax(skin, -Mathf.Min((p - eyeL).magnitude - eyeRadius, SegmentDist(p, eyeL, eyeL + outDir) - rr), eyeCarveBlend);
+            skin = SMax(skin, -Mathf.Min((p - eyeR).magnitude - eyeRadius, SegmentDist(p, eyeR, eyeR + outDir) - rr), eyeCarveBlend);
         }
         if (cutMode > 0) skin = Cut(p, skin);
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };

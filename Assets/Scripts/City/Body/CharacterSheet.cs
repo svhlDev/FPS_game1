@@ -13,10 +13,12 @@ public struct CharacterSheet
     [Range(1, 20)] public int INT;
     [Range(1, 20)] public int DEX;
     public int seed;
+    // Per-character face edits (Head spec Part D; the face customizer's data). Null = the generated face.
+    public FacePartOverride[] face;
 
     public CharacterSheet(Sex sex, int str, int intel, int dex, int seed)
     {
-        this.sex = sex; STR = Mathf.Clamp(str, 1, 20); INT = Mathf.Clamp(intel, 1, 20); DEX = Mathf.Clamp(dex, 1, 20); this.seed = seed;
+        this.sex = sex; STR = Mathf.Clamp(str, 1, 20); INT = Mathf.Clamp(intel, 1, 20); DEX = Mathf.Clamp(dex, 1, 20); this.seed = seed; face = null;
     }
 
     public float S => Norm(STR);

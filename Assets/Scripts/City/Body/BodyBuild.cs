@@ -212,8 +212,10 @@ public class BodyBuild
             handle = JobHandle.CombineDependencies(handle, hf);
         }
         handle = default;
-        AddBody(sdf.bounds, ms.cell, (byte)(hands ? 1 : 0), ms.targetTriangles);
+        AddBody(sdf.bounds, ms.cell, (byte)(hands || sdf.HasHeadPiece ? 1 : 0), ms.targetTriangles);
         for (int h = 0; h < sdf.HandCount; h++) AddBody(sdf.HandBounds[h], handCell, (byte)(2 + h), hr.triangles);
+        // The head on its own finer grid (the face parts are ~1 cm).
+        if (sdf.HasHeadPiece) AddBody(sdf.HeadBounds, BodyRules.Default.mesh.headCell, (byte)sdf.HeadMode, BodyRules.Default.mesh.headTriangles);
 
         // Garments: each field rests on the body and the garments before it (chained), then its surface
         // is sampled on its own grid.
@@ -311,8 +313,10 @@ public class BodyBuild
         covered = new NativeArray<byte>(n, Allocator.Persistent);
         pieceN = new NativeArray<byte>(vertPiece, Allocator.Persistent);
         float cell = ms.cell;
-        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, cell = cell, handCell = handCell, steps = 3 }.Schedule(n, 64);
-        var h = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, h = ms.normalStep * cell, hHand = ms.normalStep * handCell, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
+        int headMode = sdf.HasHeadPiece ? sdf.HeadMode : 255;
+        var hp = new BodyMesher.ProjectJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, cell = cell, handCell = handCell, headCell = BodyRules.Default.mesh.headCell, headMode = headMode, steps = 3 }.Schedule(n, 64);
+        var h = new BodyMesher.AttribJob { kernel = sdf.Kernel, positions = pos, piece = pieceN, h = ms.normalStep * cell, hHand = ms.normalStep * handCell, hHead = ms.normalStep * BodyRules.Default.mesh.headCell,
+                                           headMode = headMode, normals = nrm, region = reg, layers = lay }.Schedule(n, 64, hp);
         if (fields.Count > 0)
             h = JobHandle.CombineDependencies(h, new GarmentMeshJobs.BodyCoverJob { kernel = dressed, positions = pos, coverMargin = margin, covered = covered }.Schedule(n, 64, hp));
         if (weights)

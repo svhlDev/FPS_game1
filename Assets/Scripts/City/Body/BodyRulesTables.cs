@@ -129,6 +129,11 @@ public class MeshRules
     public float normalStep = 1f;
     [Tooltip("Decimation keeps more detail where this is higher.")]
     public float headImportance = 6f, handImportance = 4f, footImportance = 2f, neckImportance = 2f;
+    [Tooltip("The head is meshed on its own finer grid (face parts are ~1 cm), cut from the body a little down the neck.")]
+    public float headCell = 0.005f;
+    public int headTriangles = 3200;
+    [Tooltip("The head cut sits this far down the neck from the head joint (m), so the chin and jaw are in the head's grid.")]
+    public float headCutBelow = 0.04f;
 }
 
 [Serializable]
@@ -202,25 +207,3 @@ public class MuscleBlobRule
     };
 }
 
-public enum FaceScale { Brow, Cheekbones, Jaw, Nose, Chin }
-
-// A face feature: an ellipsoid at `at` (fractions of the skull radii from its centre), `size` (same
-// units), scaled by the seed's value for `scale`; mirror: a pair at +-x.
-[Serializable]
-public class FaceFeatureRule
-{
-    public FaceScale scale;
-    public Vector3 at, size;
-    public bool mirror;
-
-    static FaceFeatureRule F(FaceScale s, Vector3 at, Vector3 size, bool mirror = false) => new FaceFeatureRule { scale = s, at = at, size = size, mirror = mirror };
-
-    public static List<FaceFeatureRule> Defaults() => new List<FaceFeatureRule>
-    {
-        F(FaceScale.Brow, new Vector3(0f, 0.18f, 0.82f), new Vector3(0.75f, 0.11f, 0.16f)),
-        F(FaceScale.Cheekbones, new Vector3(0.55f, -0.08f, 0.68f), new Vector3(0.24f, 0.14f, 0.24f), mirror: true),
-        F(FaceScale.Jaw, new Vector3(0f, -0.48f, 0.32f), new Vector3(0.72f, 0.36f, 0.68f)),
-        F(FaceScale.Nose, new Vector3(0f, -0.12f, 0.98f), new Vector3(0.11f, 0.22f, 0.2f)),
-        F(FaceScale.Chin, new Vector3(0f, -0.8f, 0.72f), new Vector3(0.28f, 0.15f, 0.2f)),
-    };
-}

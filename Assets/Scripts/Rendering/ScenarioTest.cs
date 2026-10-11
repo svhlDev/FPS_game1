@@ -746,6 +746,18 @@ public partial class ScenarioTest : MonoBehaviour
             new List<(string, CharacterSheet)> { ("F DEX1", new CharacterSheet(Sex.Female, 10, 10, 1, 3201)), ("F DEX10", new CharacterSheet(Sex.Female, 10, 10, 10, 3202)), ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) },
             new List<(string, CharacterSheet)> { ("M INT1", new CharacterSheet(Sex.Male, 10, 1, 10, 3301)), ("M INT20", new CharacterSheet(Sex.Male, 10, 20, 10, 3302)), ("F INT1", new CharacterSheet(Sex.Female, 10, 1, 10, 3303)), ("F INT20", new CharacterSheet(Sex.Female, 10, 20, 10, 3304)) },
         };
+        // Part D: one part exaggerated per head through the per-character overrides (move, rotate, scale).
+        CharacterSheet Ov(params FacePartOverride[] o) { var sh = new CharacterSheet(Sex.Male, 10, 10, 14, 3401); sh.face = o; return sh; }
+        FacePartOverride O(string part, Vector3 move = default, Vector3 rotate = default, Vector3 scale = default) => new FacePartOverride { part = part, move = move, rotate = rotate, scale = scale };
+        rows.Add(new List<(string, CharacterSheet)>
+        {
+            ("base", Ov()),
+            ("brow up+big", Ov(O("Brow", new Vector3(0f, 0.06f, 0f), new Vector3(0f, 0f, 15f), new Vector3(1.6f, 1.3f, 1f)))),
+            ("nose big", Ov(O("NoseBridge", scale: new Vector3(1.5f, 1.4f, 1f)), O("NoseUnder", scale: new Vector3(1.5f, 1.3f, 1f)), O("Nostril", scale: new Vector3(1.6f, 1.4f, 1f)))),
+            ("lips full", Ov(O("LipUpper", scale: new Vector3(1.9f, 1.2f, 1f)), O("LipLower", scale: new Vector3(1.9f, 1.2f, 1f)))),
+            ("cheeks", Ov(O("Cheek", new Vector3(0.05f, 0.05f, 0.05f), scale: new Vector3(1.5f, 1.4f, 1.6f)))),
+            ("chin out", Ov(O("Chin", new Vector3(0f, -0.05f, 0.15f), scale: new Vector3(1.4f, 1f, 1f)), O("Jaw", scale: new Vector3(1.2f, 1.1f, 1.1f)))),
+        });
         return rows.ConvertAll(r => r).ToArray();
     }
 
