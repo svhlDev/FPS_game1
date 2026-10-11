@@ -740,6 +740,31 @@ public partial class ScenarioTest : MonoBehaviour
     // Rows of heads, each row shot from the front and three-quarter: both sexes at DEX 1 / 10 / 20 (fat
     // softens the face), INT 1 / 20 (egg elongation), and (Part D) one part exaggerated per head through
     // the per-character face overrides. Neutral key + fill light, no outfit, so the face reads.
+    // Edges used by one triangle only (holes; the wig's brow strips are closed too).
+    static string lastOpen = "";
+    static int OpenEdges(Mesh m)
+    {
+        if (m == null) return 0;
+        var t = m.triangles; var use = new Dictionary<long, int>();
+        for (int i = 0; i < t.Length; i += 3)
+            for (int e = 0; e < 3; e++)
+            {
+                int a = t[i + e], b = t[i + (e + 1) % 3];
+                long key = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                use.TryGetValue(key, out int c); use[key] = c + 1;
+            }
+        int open = 0; var v = m.vertices; var sb = new System.Text.StringBuilder();
+        foreach (var kv in use)
+            if (kv.Value == 1)
+            {
+                if (open < 6) { var p = v[(int)(kv.Key >> 32)]; sb.Append($"({p.x * 100f:0.0},{p.y * 100f:0.0},{p.z * 100f:0.0}) "); }
+                open++;
+            }
+        if (open > 0) Debug.Log($"open wig edges at (cm, head joint space): {sb}");
+        lastOpen = sb.ToString();
+        return open;
+    }
+
     // Face Fix Part 1: a head's canon and how its mesh (rest pose) measures against it: crown, chin and
     // width at the eye line (cm, mesh - canon), the eyes' height and spacing.
     static string CanonReport(CharacterFigure f)
@@ -821,6 +846,7 @@ public partial class ScenarioTest : MonoBehaviour
         fill.transform.rotation = Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, 1f));
         var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(12f); }
         var rows = customRows ?? HeadRows();
+        int wigsChecked = 0, wigsOpen = 0;
         float totalMs = 0f; int built = 0, headTris = 0;
         for (int r = 0; r < rows.Length; r++)
         {
@@ -847,7 +873,8 @@ public partial class ScenarioTest : MonoBehaviour
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
                 HeadCanonOverlay.Attach(f);
-                Log($"  {lbl}: {CanonReport(f)}");
+                Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges");
+                if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);
                 yield return null;
             }
@@ -919,6 +946,7 @@ public partial class ScenarioTest : MonoBehaviour
             }
         }
         Log(rigs == anims.Count && rigs > 0 ? "PASS every face has a jaw and eyelids" : "FAIL face rig");
+        Log(wigsOpen == 0 ? $"PASS every wig mesh is closed ({wigsChecked} wigs)" : $"FAIL {wigsOpen} of {wigsChecked} wig meshes have holes (open edges)");
         Log($"heads: {built} built, {totalMs / Mathf.Max(1, built):0} ms each (whole body, sync), head mesh {headTris / Mathf.Max(1, built)} triangles avg");
         Log(built > 0 ? "PASS heads built" : "FAIL no heads");
         if (fpc != null) fpc.enabled = true;

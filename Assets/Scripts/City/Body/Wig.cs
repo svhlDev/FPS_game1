@@ -118,15 +118,33 @@ public static class WigBuilder
             return Mathf.Max(d, cutAll * R.x);
         }
 
-        // Sample a grid round the head (long hair reaches down the back).
+        // Sample a grid round the head (long hair reaches down the back). The box reaches the hair's widest
+        // point (the egg's crown scale + the scalp offset + thickness + locks + the curtain) with room to
+        // spare; if any hair still touches its edge, the box grows and is sampled again (a surface cut by
+        // the box would be left open: holes at the hair's outermost points).
         float down = style == WigStyle.Long ? 2.6f * R.y : style == WigStyle.Ponytail ? 2.1f * R.y : 1.2f * R.y;
-        Vector3 lo = new Vector3(-R.x * 1.5f, -down, -R.z * 1.9f), hi = new Vector3(R.x * 1.5f, R.y * 1.5f, R.z * 1.3f);
-        int nx = Mathf.CeilToInt((hi.x - lo.x) / Cell) + 1, ny = Mathf.CeilToInt((hi.y - lo.y) / Cell) + 1, nz = Mathf.CeilToInt((hi.z - lo.z) / Cell) + 1;
-        var grid = new float[nx * ny * nz];
-        for (int z = 0; z < nz; z++)
-            for (int y = 0; y < ny; y++)
-                for (int x = 0; x < nx; x++)
-                    grid[x + nx * (y + ny * z)] = Sdf(lo + new Vector3(x, y, z) * Cell);
+        float pad = scalp + thick + top + 0.03f;
+        float lean = style == WigStyle.Long ? 0.35f * down : style == WigStyle.Bob ? 0.05f * down : 0f;   // the curtain leans back as it falls
+        Vector3 lo = new Vector3(-(R.x * k.eggTop * 1.1f + pad), -down - pad, -(R.z * k.eggTop * 1.4f + lean + pad));
+        Vector3 hi = new Vector3(R.x * k.eggTop * 1.1f + pad, R.y * 1.1f + pad, R.z * k.eggTop * 1.1f + pad);
+        float[] grid = null; int nx = 0, ny = 0, nz = 0;
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            nx = Mathf.CeilToInt((hi.x - lo.x) / Cell) + 1; ny = Mathf.CeilToInt((hi.y - lo.y) / Cell) + 1; nz = Mathf.CeilToInt((hi.z - lo.z) / Cell) + 1;
+            grid = new float[nx * ny * nz];
+            bool touches = false;
+            for (int z = 0; z < nz; z++)
+                for (int y = 0; y < ny; y++)
+                    for (int x = 0; x < nx; x++)
+                    {
+                        float d = Sdf(lo + new Vector3(x, y, z) * Cell);
+                        grid[x + nx * (y + ny * z)] = d;
+                        if (d <= 0f && (x == 0 || y == 0 || z == 0 || x == nx - 1 || y == ny - 1 || z == nz - 1)) touches = true;
+                    }
+            if (!touches) break;
+            Vector3 grow = (hi - lo) * 0.15f;
+            lo -= grow; hi += grow;
+        }
         var v = new List<Vector3>(); var t = new List<int>();
         SurfaceNets.Extract(grid, nx, ny, nz, lo, Cell, v, t);
         if (t.Count == 0 && bt.Count == 0) return false;
