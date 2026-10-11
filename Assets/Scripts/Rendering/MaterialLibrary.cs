@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-public enum SurfaceType { Concrete, Asphalt, PaintedMetal, BrushedMetal, Chrome, Glass, Rubber, CarPaint, Cotton, Denim, Wool, Leather, Vinyl, RoadPaint, Hazard }
+public enum SurfaceType { Concrete, Asphalt, PaintedMetal, BrushedMetal, Chrome, Glass, Rubber, CarPaint, Cotton, Denim, Wool, Leather, Vinyl, RoadPaint, Hazard, Hair }
 
 // Graphics Phase 2: every lit material in the game comes from here: one shared FPS/Surface material per
 // (type, colour, variant), cached, never one per object (SRP Batcher and instancing friendly).
@@ -51,6 +51,8 @@ public static class MaterialLibrary
             // Road markings: worn through to the asphalt (second colour) in patches, faintly retroreflective.
             case SurfaceType.RoadPaint:    p.smoothMin = 0.25f; p.smoothMax = 0.4f; p.detailStrength = 0f; p.wear = 0.6f; p.grime = 0.3f;
                                            p.second = c => new Color(0.06f, 0.06f, 0.07f); break;
+            // Hair: strands along the flow (down from the crown) and a stretched highlight band.
+            case SurfaceType.Hair:         p.smoothMin = 0.25f; p.smoothMax = 0.45f; p.detailStrength = 0.8f; p.wear = 0f; p.grime = 0f; p.sheen = 0.25f; break;
             // Hazard striping: the colour and black diagonals, chipped to bare metal on edges.
             case SurfaceType.Hazard:       p.smoothMin = 0.3f; p.smoothMax = 0.45f; p.detailStrength = 0.3f; p.wear = 0.6f; p.grime = 0.5f;
                                            p.second = c => new Color(0.03f, 0.03f, 0.03f); break;

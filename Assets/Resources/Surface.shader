@@ -4,7 +4,7 @@
 // shares one set of variants and batches with the rest.
 //   Types: 0 concrete, 1 asphalt, 2 painted metal, 3 brushed metal, 4 chrome, 5 glass, 6 rubber / plastic,
 //          7 car paint (clear coat, optional flakes), 8 cotton, 9 denim, 10 wool, 11 leather, 12 vinyl,
-//          13 road paint (worn markings), 14 hazard stripes.
+//          13 road paint (worn markings), 14 hazard stripes, 15 hair (strands along the flow, Kajiya-Kay band).
 //   Pattern space (_Space): 0 world (static city), 1 object (rigid movers), 2 rest pose (TEXCOORD3, baked
 //          by the body pipeline for skinned meshes; Phase 3).
 //   Edges / cavities (_EdgeSource): 0 none, 1 box faces (per-face UVs: primitives and slabs, survives
@@ -137,6 +137,18 @@ Shader "FPS/Surface"
             #define T_VINYL 12
             #define T_ROADPAINT 13
             #define T_HAZARD 14
+            #define T_HAIR 15
+
+            // Hair: Kajiya-Kay highlight for strand direction t (world), shifted along the normal so the
+            // band sits a little toward the root; tinted by the hair colour.
+            half3 HairSpec(float3 t, float3 n, float3 l, float3 v, half3 tint)
+            {
+                float3 h = normalize(l + v);
+                float3 ts = normalize(t + n * 0.15);
+                float th = dot(ts, h);
+                float band = pow(saturate(sqrt(saturate(1.0 - th * th))), 90.0);
+                return band * (0.35 + 0.65 * tint) * 0.35 * saturate(dot(n, l) * 0.8 + 0.2);
+            }
 
             // Pattern frequencies (cycles per metre at detail scale 1): fabric threads and leather grain.
             #define COTTON_F 420.0
@@ -344,6 +356,14 @@ Shader "FPS/Surface"
                         s.smoothness = lerp(_SmoothMax, 0.45, chip);
                         break;
                     }
+                    case T_HAIR:
+                    {
+                        s.albedo = base;
+                        s.smoothness = _SmoothMin;
+                        s.sheen = base * _Sheen;
+                        s.porosity = 0.3;
+                        break;
+                    }
                     case T_VINYL:
                     {
                         float f = Fbm(p * 0.6, 2);
@@ -402,7 +422,29 @@ Shader "FPS/Surface"
                 // Break the edge up so wear isn't a clean line.
                 edge *= smoothstep(0.2, 0.7, VNoise(p * 5.0) * 0.6 + edge * 0.6);
 
+                float3 nGeomHair = nGeom;
                 Surf s = Evaluate(type, p, w, edge, cavity, box, hasBox, nGeom);
+
+                // Hair: strands run down from the crown (in object / rest space: down along the surface,
+                // outward from the top of the head). Fine noise across them, long along them, bumps the
+                // normal and darkens the gaps; the strand direction drives the highlight band.
+                float3 hairT = 0;
+                if (type == T_HAIR)
+                {
+                    float3 no = normalize(i.patternNrm);
+                    float3 down = float3(0, -1, 0) - no * dot(float3(0, -1, 0), no);
+                    float3 radial = float3(no.x, 0.0, no.z) + float3(1e-4, 0.0, 0.0);
+                    float3 flow = normalize(lerp(down + 1e-4, normalize(radial), saturate(no.y * 2.0 - 1.0)));
+                    float3 across = normalize(cross(flow, no));
+                    float fadeH = DetailFade(p, 300.0);
+                    float a0 = dot(p, across) * 300.0, f0 = dot(p, flow) * 6.0;
+                    float hh = VNoise(float3(a0, f0, 7.0)) * 0.7 + VNoise(float3(a0 * 2.3, f0 * 1.7, 3.0)) * 0.3;
+                    float hh1 = VNoise(float3(a0 + 0.35, f0, 7.0)) * 0.7 + VNoise(float3((a0 + 0.35) * 2.3, f0 * 1.7, 3.0)) * 0.3;
+                    float3 gObj = across * (hh1 - hh) * 0.6 * fadeH * (1.0 - _QualityDetailCut);
+                    nGeomHair = DetailNormal(nGeom, gObj, toWorld);
+                    s.albedo *= lerp(1.0, lerp(0.7, 1.15, hh), fadeH);
+                    hairT = normalize(mul(toWorld, flow));
+                }
 
                 // Garments (Phase 3): darker fold valleys, hem stitching ~1 cm in from every opening,
                 // side seams (a darker groove with a stitch line each side), all fading with distance.
@@ -431,7 +473,8 @@ Shader "FPS/Surface"
                 float fade = DetailFade(p, freq);
                 float3 n = nGeom;
                 float strength = _DetailStrength * fade * (1.0 - _QualityDetailCut);
-                if (strength > 0.01 && type != T_CHROME && type != T_GLASS && type != T_VINYL)
+                if (type == T_HAIR) n = nGeomHair;
+                else if (strength > 0.01 && type != T_CHROME && type != T_GLASS && type != T_VINYL)
                 {
                     float e = 0.25 / freq;
                     float h0 = HeightOf(type, p, w);
@@ -470,6 +513,7 @@ Shader "FPS/Surface"
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
                 mainLight.color *= ao.directAmbientOcclusion * (1.0 - contact * 0.3);
                 color += LightingPhysicallyBased(brdf, coat, mainLight, n, v, s.coat, false);
+                if (type == T_HAIR) color += HairSpec(hairT, n, mainLight.direction, v, s.albedo) * mainLight.color * mainLight.shadowAttenuation;
                 sheenLight += mainLight.color * mainLight.shadowAttenuation * saturate((dot(n, mainLight.direction) + 0.5) / 1.5);
 
                 #if defined(_ADDITIONAL_LIGHTS)
@@ -479,12 +523,14 @@ Shader "FPS/Surface"
                     {
                         Light dl = GetAdditionalLight(li, i.positionWS, half4(1, 1, 1, 1));
                         color += LightingPhysicallyBased(brdf, coat, dl, n, v, s.coat, false);
+                        if (type == T_HAIR) color += HairSpec(hairT, n, dl.direction, v, s.albedo) * dl.color * dl.distanceAttenuation;
                         sheenLight += dl.color * dl.distanceAttenuation * dl.shadowAttenuation * saturate((dot(n, dl.direction) + 0.5) / 1.5);
                     }
                     #endif
                     LIGHT_LOOP_BEGIN(pixelLightCount)
                         Light al = GetAdditionalLight(lightIndex, i.positionWS, half4(1, 1, 1, 1));
                         color += LightingPhysicallyBased(brdf, coat, al, n, v, s.coat, false);
+                        if (type == T_HAIR) color += HairSpec(hairT, n, al.direction, v, s.albedo) * al.color * al.distanceAttenuation;
                         sheenLight += al.color * al.distanceAttenuation * al.shadowAttenuation * saturate((dot(n, al.direction) + 0.5) / 1.5);
                     LIGHT_LOOP_END
                 #endif

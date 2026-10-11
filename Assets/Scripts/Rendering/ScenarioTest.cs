@@ -758,6 +758,8 @@ public partial class ScenarioTest : MonoBehaviour
             ("cheeks", Ov(O("Cheek", new Vector3(0.05f, 0.05f, 0.05f), scale: new Vector3(1.5f, 1.4f, 1.6f)))),
             ("chin out", Ov(O("Chin", new Vector3(0f, -0.05f, 0.15f), scale: new Vector3(1.4f, 1f, 1f)), O("Jaw", scale: new Vector3(1.2f, 1.1f, 1.1f)))),
         });
+        // Dressed (layering: long hair over the coat collar), last row.
+        rows.Add(new List<(string, CharacterSheet)> { ("dressed F coat", new CharacterSheet(Sex.Female, 10, 10, 12, 3501)), ("dressed M", new CharacterSheet(Sex.Male, 12, 10, 12, 3502)) });
         return rows.ConvertAll(r => r).ToArray();
     }
 
@@ -785,7 +787,15 @@ public partial class ScenarioTest : MonoBehaviour
                 go.transform.position = origin + new Vector3(i * 1.2f, 0f, r * 4f);
                 go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                var f = CharacterFigure.BuildGenerated(go.transform, row[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, Outfit.None());
+                // Hair only (Part E), so the face and the hair read; the last row is fully dressed (layering).
+                var outfit = new Outfit { garments = { Wardrobe.Hair(row[i].sheet.sex) } };
+                if (r == rows.Length - 1)
+                {
+                    outfit = Outfit.Casual(row[i].sheet.sex == Sex.Female);
+                    if (row[i].sheet.sex == Sex.Female) outfit.garments.Add(GarmentDef.Coat());
+                    outfit.garments.Add(Wardrobe.Hair(row[i].sheet.sex));
+                }
+                var f = CharacterFigure.BuildGenerated(go.transform, row[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, outfit);
                 totalMs += (float)sw.Elapsed.TotalMilliseconds; built++;
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
@@ -800,7 +810,8 @@ public partial class ScenarioTest : MonoBehaviour
                 foreach (var t in f.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
                 Vector3 c = hc != null ? hc.position : f.transform.position + Vector3.up * 1.6f;
                 Vector3 fwd = f.transform.forward, right = f.transform.right;
-                foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("34", c + fwd * 0.48f + right * 0.42f + Vector3.up * 0.04f) })
+                foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("34", c + fwd * 0.48f + right * 0.42f + Vector3.up * 0.04f),
+                                                     ("back", c - fwd * 0.75f + right * 0.25f - Vector3.up * 0.12f) })
                 {
                     cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(c - from));
                     yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
@@ -809,6 +820,27 @@ public partial class ScenarioTest : MonoBehaviour
                 }
             }
         }
+        // Long hair swings: turn the dressed woman sharply and see the hair chains leave their rest.
+        var woman = GameObject.Find("dressed F coat");
+        var dangle = woman != null ? woman.GetComponent<ClothDangle>() : null;
+        if (dangle != null)
+        {
+            cam.transform.position = woman.transform.position + new Vector3(0f, 1.5f, -2.5f);
+            float maxOff = 0f;
+            int hairSet = -1;
+            for (int k = 0; k < 4; k++) { try { if (dangle.BonesOf(k).Count > 0 && dangle.BonesOf(k)[0].name.StartsWith("Hair")) { hairSet = k; break; } } catch { break; } }
+            for (int fr = 0; fr < 40 && hairSet >= 0; fr++)
+            {
+                woman.transform.Rotate(0f, fr < 10 ? 18f : 0f, 0f);
+                yield return null;
+                for (int pnl = 0; pnl < 5; pnl++) maxOff = Mathf.Max(maxOff, (dangle.DebugJoint(hairSet, pnl, 3) - dangle.DebugRest(hairSet, pnl, 3)).magnitude);
+            }
+            string where = "";
+            int inside = hairSet >= 0 ? dangle.DebugInsideLegs(hairSet, out where) : -1;
+            Log($"long hair: chain set {hairSet}, ends swing up to {maxOff * 100f:0.0} cm off rest on a fast head turn, {inside} joints inside the head / neck / shoulders {where}");
+            Log(hairSet >= 0 && maxOff > 0.02f && inside == 0 ? "PASS long hair swings and stays out of the body" : "FAIL long hair dangle");
+        }
+        else Log("FAIL no dangle on the long-haired woman");
         Log($"heads: {built} built, {totalMs / Mathf.Max(1, built):0} ms each (whole body, sync), head mesh {headTris / Mathf.Max(1, built)} triangles avg");
         Log(built > 0 ? "PASS heads built" : "FAIL no heads");
         if (fpc != null) fpc.enabled = true;
@@ -1054,7 +1086,7 @@ public partial class ScenarioTest : MonoBehaviour
             if (i == 0)
             {
                 // Stage timing, one body sequentially (as the pool runs it) and blocking.
-                var bb = new BodyBuild(sh, null, Wardrobe.For(role, sh.seed));
+                var bb = new BodyBuild(sh, null, Wardrobe.For(role, sh));
                 while (!bb.Step()) yield return null;
                 Log($"  pool-style build: {bb.Asset.wallMs:0} ms wall: " + string.Join(", ", System.Linq.Enumerable.Select(System.Linq.Enumerable.Range(0, 7), s => $"{(BodyBuild.Stage)s} {bb.StageWallMs[s]:0}")));
                 var nb = new BodyBuild(sh, null, Outfit.None());

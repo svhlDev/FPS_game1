@@ -76,7 +76,8 @@ public static class BodyMaterials
         {
             var def = i - 1 < garments.Count ? garments[i - 1] : null;
             var slot = def != null ? def.slot : GarmentSlot.Top;
-            var colour = slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet : outer;
+            var colour = slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet
+                       : slot == GarmentSlot.Head ? HairColour(asset != null ? asset.sheet.seed : seed) : outer;
             mats[i] = Garment(def != null ? def.fabric : Fabric.Cotton, colour);
         }
         return mats;
@@ -87,10 +88,27 @@ public static class BodyMaterials
     public static SurfaceType SurfaceOf(Fabric f) => f switch
     {
         Fabric.Denim => SurfaceType.Denim, Fabric.Wool => SurfaceType.Wool, Fabric.Leather => SurfaceType.Leather,
-        Fabric.Vinyl => SurfaceType.Vinyl, _ => SurfaceType.Cotton,
+        Fabric.Vinyl => SurfaceType.Vinyl, Fabric.Hair => SurfaceType.Hair, _ => SurfaceType.Cotton,
     };
 
     public static Material Garment(Fabric fabric, Color colour) => MaterialLibrary.Get(SurfaceOf(fabric), colour, MaterialLibrary.Variant.Skinned);
+
+    // Hair colours (Head spec Part E): black, dark brown, brown, auburn, blond, grey; rarely a dyed neon.
+    static readonly Color[] HairColours =
+    {
+        new Color(0.03f, 0.025f, 0.02f), new Color(0.07f, 0.045f, 0.03f), new Color(0.16f, 0.1f, 0.06f),
+        new Color(0.3f, 0.1f, 0.04f), new Color(0.62f, 0.48f, 0.26f), new Color(0.45f, 0.44f, 0.43f),
+    };
+    static readonly Color[] NeonHair = { new Color(0.9f, 0.1f, 0.6f), new Color(0.1f, 0.75f, 0.9f), new Color(0.5f, 0.2f, 0.95f) };
+
+    public static Color HairColour(int seed)
+    {
+        var r = new PcgRandom(seed, "hairColour");
+        if (r.Value() < 0.05f) return NeonHair[r.Range(0, NeonHair.Length)];
+        float v = r.Value();   // dark hair most common, grey rarest
+        int i = v < 0.3f ? 0 : v < 0.55f ? 1 : v < 0.75f ? 2 : v < 0.85f ? 3 : v < 0.95f ? 4 : 5;
+        return HairColours[i];
+    }
 
     public static Material Sclera()
     {

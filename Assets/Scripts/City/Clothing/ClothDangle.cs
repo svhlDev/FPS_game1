@@ -25,6 +25,7 @@ public class ClothDangle : MonoBehaviour
         public Vector3[] x, xp;        // simulated joints (world)
         public float[] seg;            // rest segment lengths [panel * bones + b]
         public Vector3[] rest;         // this frame's rest joints (world), cached
+        public Transform anchor;       // the joint the ring follows (pelvis, or the head for long hair)
     }
     // This frame's capsule ends (cached: transform reads are the expensive part).
     Vector3[] capA, capB; float[] capR;
@@ -48,16 +49,20 @@ public class ClothDangle : MonoBehaviour
         var d = f.gameObject.AddComponent<ClothDangle>();
         d.fig = f;
         d.pelvis = f.Hips;
-        Vector3 pelvisRest = a.plan.JointPos(a.plan.Index("Hips"));
+        bool hair = false;
         foreach (var cs in a.chains)
         {
-            var s = new Set { def = cs, bones = new Transform[cs.BoneCount], restLocal = new Vector3[cs.joints.Length], x = new Vector3[cs.joints.Length], xp = new Vector3[cs.joints.Length], seg = new float[cs.BoneCount] };
-            for (int i = 0; i < cs.joints.Length; i++) s.restLocal[i] = cs.joints[i] - pelvisRest;
+            bool head = cs.anchor == "Head" && f.HeadJoint != null;
+            hair |= head;
+            var anchor = head ? f.HeadJoint : f.Hips;
+            Vector3 anchorRest = a.plan.JointPos(a.plan.Index(head ? "Head" : "Hips"));
+            var s = new Set { def = cs, anchor = anchor, bones = new Transform[cs.BoneCount], restLocal = new Vector3[cs.joints.Length], x = new Vector3[cs.joints.Length], xp = new Vector3[cs.joints.Length], seg = new float[cs.BoneCount] };
+            for (int i = 0; i < cs.joints.Length; i++) s.restLocal[i] = cs.joints[i] - anchorRest;
             for (int p = 0; p < cs.panels; p++)
                 for (int b = 0; b < cs.bones; b++)
                 {
-                    var t = new GameObject($"Coat{p}_{b}").transform;
-                    t.SetParent(f.Hips, false);
+                    var t = new GameObject($"{(head ? "Hair" : "Coat")}{p}_{b}").transform;
+                    t.SetParent(anchor, false);
                     t.localPosition = s.restLocal[p * (cs.bones + 1) + b];
                     t.gameObject.layer = f.gameObject.layer;
                     s.bones[p * cs.bones + b] = t;
@@ -71,6 +76,16 @@ public class ClothDangle : MonoBehaviour
         d.capsules.Add((f.HipL, f.KneeL, R("HipL"))); d.capsules.Add((f.HipR, f.KneeR, R("HipR")));
         d.capsules.Add((f.KneeL, f.AnkleL, R("KneeL"))); d.capsules.Add((f.KneeR, f.AnkleR, R("KneeR")));
         d.capsules.Add((f.Hips, f.Spine, R("Hips")));
+        if (hair)
+        {
+            // Long hair: the head, neck, upper back and shoulders.
+            float hm = 0.015f;
+            float Rh(string bone) { int i = a.plan.Index(bone); var b = a.plan.bones[i]; return Mathf.Max(b.Outer.x, Mathf.Max(b.Outer.y, b.Outer.z)) + hm; }
+            if (f.Head != null) d.capsules.Add((f.HeadJoint, f.Head, Rh("Head")));
+            d.capsules.Add((f.Neck, f.HeadJoint, Rh("Neck")));
+            d.capsules.Add((f.Chest, f.Neck, Rh("Chest") * 0.6f));   // the torso is flat front to back: its widest girth would swallow the back
+            d.capsules.Add((f.ShoulderL, f.ElbowL, Rh("ShoulderL"))); d.capsules.Add((f.ShoulderR, f.ElbowR, Rh("ShoulderR")));
+        }
         return list;
     }
 
@@ -80,9 +95,9 @@ public class ClothDangle : MonoBehaviour
 
     void CacheFrame()
     {
-        var m = pelvis.localToWorldMatrix;
         foreach (var s in sets)
         {
+            var m = s.anchor.localToWorldMatrix;
             if (s.rest == null || s.rest.Length != s.restLocal.Length) s.rest = new Vector3[s.restLocal.Length];
             for (int i = 0; i < s.rest.Length; i++) s.rest[i] = m.MultiplyPoint3x4(s.restLocal[i]);
         }
@@ -229,7 +244,7 @@ public class ClothDangle : MonoBehaviour
                 Vector3 a = Vector3.Lerp(r0, s.x[i], simBlend), e = Vector3.Lerp(r1, s.x[i + 1], simBlend);
                 var t = s.bones[p * c.bones + b];
                 t.position = a;
-                t.rotation = Quaternion.FromToRotation(r1 - r0, e - a) * pelvis.rotation;
+                t.rotation = Quaternion.FromToRotation(r1 - r0, e - a) * s.anchor.rotation;
             }
     }
 

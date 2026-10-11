@@ -76,7 +76,7 @@ public class MaterialLab : MonoBehaviour
             ("T-shirt", new CharacterSheet(Sex.Male, 10, 10, 10, 2001), CharacterFigure.Role.Civilian, Outfit.Casual(false)),
             ("Long sleeves", new CharacterSheet(Sex.Female, 10, 10, 12, 2002), CharacterFigure.Role.Civilian, Outfit.Casual(true)),
             ("Trench coat", new CharacterSheet(Sex.Male, 13, 10, 9, 2003), CharacterFigure.Role.Civilian, coat),
-            ("Police", new CharacterSheet(Sex.Male, 14, 10, 13, 2004), CharacterFigure.Role.Police, Wardrobe.For(CharacterFigure.Role.Police, 2004)),
+            ("Police", new CharacterSheet(Sex.Male, 14, 10, 13, 2004), CharacterFigure.Role.Police, Wardrobe.For(CharacterFigure.Role.Police, new CharacterSheet(Sex.Male, 14, 10, 13, 2004))),
             ("Heavy, coat", new CharacterSheet(Sex.Female, 11, 10, 2, 2005), CharacterFigure.Role.Civilian, coat),
         };
         for (int i = 0; i < looks.Length; i++)

@@ -186,7 +186,7 @@ public class CharacterFigure : MonoBehaviour
                                                  GenerationStats stats = null, ISpeciesTemplate template = null, Outfit outfit = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var asset = new BodyBuild(sheet, template, outfit ?? Wardrobe.For(role, sheet.seed)).RunSync();
+        var asset = new BodyBuild(sheet, template, outfit ?? Wardrobe.For(role, sheet)).RunSync();
         float genMs = (float)sw.Elapsed.TotalMilliseconds;
         var f = Assemble(root, asset, role, shadows, hitColliders, sheet.seed);
         if (stats != null) { stats.meshMs = genMs; stats.triangles = asset.triangles; stats.totalMs = (float)sw.Elapsed.TotalMilliseconds; stats.skinMs = stats.totalMs - genMs; }

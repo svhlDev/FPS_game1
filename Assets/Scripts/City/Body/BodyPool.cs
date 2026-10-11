@@ -148,7 +148,7 @@ public class BodyPool : MonoBehaviour
     // A pool slot's sheet and outfit (the editor bake makes exactly what the pool would).
     public static CharacterSheet SheetFor(int index, bool officer, float strBias, float dexBias) =>
         officer ? CharacterSheet.Roll(50000 + index, strBias, 0f, dexBias) : CharacterSheet.Roll(1000 + index);
-    public static Outfit OutfitFor(CharacterSheet sheet, bool officer) => Wardrobe.For(officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian, sheet.seed);
+    public static Outfit OutfitFor(CharacterSheet sheet, bool officer) => Wardrobe.For(officer ? CharacterFigure.Role.Police : CharacterFigure.Role.Civilian, sheet);
 
     void Update()
     {
@@ -159,7 +159,7 @@ public class BodyPool : MonoBehaviour
         while (inFlight.Count < maxInFlight && requests.Count > 0)
         {
             var (sheet, done) = requests.Dequeue();
-            inFlight.Add((new BodyBuild(sheet, null, Wardrobe.For(CharacterFigure.Role.Player, sheet.seed)), -1, false, done));
+            inFlight.Add((new BodyBuild(sheet, null, Wardrobe.For(CharacterFigure.Role.Player, sheet)), -1, false, done));
         }
         int arg = CommandLineInFlight();
         if (arg > 0) maxInFlight = arg;

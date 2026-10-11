@@ -259,8 +259,17 @@ public class BodyBuild
         for (int g = 0; g < fields.Count; g++)
         {
             var def = outfit.garments[g];
-            if (!def.HasSkirt) continue;
-            var cs = ClothChainSet.Build(fields[g].Kernel, def, g, fields[g].SkirtHemY, nextBone);
+            ClothChainSet cs;
+            if (def.HasSkirt) cs = ClothChainSet.Build(fields[g].Kernel, def, g, fields[g].SkirtHemY, nextBone);
+            else if (def.IsHair && def.hair.style == HairStyle.Long && def.hair.dangle != null)
+            {
+                // Long hair: from the nape (the head joint) down to the cut on the chest (the shoulder blades).
+                int head = plan.Index("Head"), chest = plan.Index("Chest");
+                Vector3 hj = plan.JointPos(head);
+                float endY = plan.JointPos(chest).y + plan.bones[chest].length * 0.5f;
+                cs = ClothChainSet.BuildHair(fields[g].Kernel, def, g, new Vector2(hj.x, hj.z), hj.y - 0.01f, endY, nextBone);
+            }
+            else continue;
             chainSets.Add(cs);
             nextBone += cs.BoneCount;
         }

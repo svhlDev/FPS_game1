@@ -7,7 +7,7 @@ using UnityEngine;
 // high points by `hangLength` / `slope`), kept where the garment covers (`covers`: by nearest bone) and
 // cut at its ends (`cuts`). GarmentField turns one into a distance field; adding a garment type is a
 // new GarmentDef, no new mesh code.
-public enum Fabric { Cotton, Denim, Wool, Leather, Vinyl }
+public enum Fabric { Cotton, Denim, Wool, Leather, Vinyl, Hair }
 // What a garment is for (picks its colour from the wardrobe's palettes).
 public enum GarmentSlot { Top, Bottom, Feet, Outer, Head }
 
@@ -28,6 +28,24 @@ public class GarmentCut
     public static GarmentCut AtBone(BoneKind b, float at, bool keepStart = true) => new GarmentCut { kind = Kind.Bone, bone = b, at = at, keepStart = keepStart };
     public static GarmentCut AtHeight(float hipMultiple, bool keepAbove, params BoneKind[] applyTo) =>
         new GarmentCut { kind = Kind.Height, at = hipMultiple, keepStart = keepAbove, applyTo = applyTo };
+}
+
+// Head spec Part E: hair is a garment on the head (same field and meshing path as clothes): a shell over
+// the cranium within a hairline cut in skull space (the face, the ears / temples, the nape; the face is
+// never covered), fuller on top, a seed side part. Long: the same cap draped down the back to the shoulder
+// blades and beside the face to the jaw line, on spring chains (`dangle`).
+public enum HairStyle { None, Short, Long }
+
+[Serializable]
+public class HairDef
+{
+    public HairStyle style = HairStyle.Short;
+    [Tooltip("Extra thickness on top of the head (m), fading to none at ear height.")]
+    public float topVolume = 0.008f;
+    [Tooltip("Side part: one side up to this much fuller than the other (m); the seed picks the side.")]
+    public float partOffset = 0.004f;
+    [Tooltip("Long: spring chains for the hair below the nape (lighter and faster than the coat's).")]
+    public SkirtDef dangle;
 }
 
 [Serializable]
@@ -73,6 +91,9 @@ public class GarmentDef
 
     public GarmentDef Clone() { var c = (GarmentDef)MemberwiseClone(); c.cuts = new List<GarmentCut>(cuts); return c; }
     public bool HasSkirt => skirt != null && skirt.enabled;
+    [Header("Hair (Head spec Part E)")]
+    public HairDef hair;
+    public bool IsHair => hair != null && hair.style != HairStyle.None;
 
     static readonly BoneKind[] Torso = { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest };
 
@@ -126,6 +147,32 @@ public class GarmentDef
         fabric = Fabric.Leather, color = new Color(0.07f, 0.07f, 0.08f), drapeOn = new BoneKind[0],
         covers = new[] { BoneKind.Foot, BoneKind.Shin },
         cuts = { GarmentCut.AtBone(BoneKind.Shin, 0.9f, false) },   // just above the ankle
+    };
+
+    // Hair. Short (male default): a 1.2 cm shell over the cranium, cut at the hairline and the nape.
+    public static GarmentDef HairShort() => new GarmentDef
+    {
+        name = "Short hair", layer = 9, slot = GarmentSlot.Head, fabric = Fabric.Hair, color = new Color(0.08f, 0.06f, 0.05f),
+        covers = new[] { BoneKind.Head }, drapeOn = new BoneKind[0], ease = 0.01f, thickness = 0.012f, gap = 0.002f, hangLength = 0f,
+        hemBlend = 0.004f, meshCell = 0.006f, triangles = 1600,
+        hair = new HairDef { style = HairStyle.Short },
+    };
+
+    // Long (female default): the cap, plus hair hanging from the head's widest point down the back to the
+    // shoulder blades and beside the face to the jaw line, slightly flared; it rests on the shoulders and
+    // any collar (it's the outfit's last layer); spring chains below the nape.
+    public static GarmentDef HairLong() => new GarmentDef
+    {
+        name = "Long hair", layer = 9, slot = GarmentSlot.Head, fabric = Fabric.Hair, color = new Color(0.08f, 0.06f, 0.05f),
+        covers = new[] { BoneKind.Head, BoneKind.Neck, BoneKind.Chest }, drapeOn = new[] { BoneKind.Head }, ease = 0.012f, thickness = 0.02f, gap = 0.002f,
+        hangLength = 0.4f, slope = 0.06f, hemBlend = 0.006f, meshCell = 0.006f, triangles = 2600,
+        cuts = { GarmentCut.AtBone(BoneKind.Chest, 0.5f, false) },          // down to the shoulder blades
+        hair = new HairDef
+        {
+            style = HairStyle.Long,
+            dangle = new SkirtDef { enabled = false, panels = 5, bonesPerPanel = 3, stiffnessRoot = 22f, stiffnessTip = 6f, damping = 0.8f,
+                                    gravityScale = 0.8f, drag = 2.2f, maxAngle = 55f, neighbour = 0.35f },
+        },
     };
 
     public static GarmentDef Shorts()
@@ -206,6 +253,16 @@ public class Outfit
 // Who wears what: an outfit per role from the seed (shapes; colours come from BodyMaterials.Clothes).
 public static class Wardrobe
 {
+    // With hair for the sheet's sex (short for men, long for women, for now).
+    public static Outfit For(CharacterFigure.Role role, CharacterSheet sheet)
+    {
+        var o = For(role, sheet.seed);
+        o.garments.Add(Hair(sheet.sex));
+        return o;
+    }
+
+    public static GarmentDef Hair(Sex sex) => sex == Sex.Female ? GarmentDef.HairLong() : GarmentDef.HairShort();
+
     public static Outfit For(CharacterFigure.Role role, int seed)
     {
         switch (role)
