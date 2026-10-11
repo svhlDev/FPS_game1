@@ -1,6 +1,34 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
---- !u!114 &-7196070739632250119
+--- !u!114 &-2879229458079950500
+MonoBehaviour:
+  m_ObjectHideFlags: 3
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 66f335fb1ffd8684294ad653bf1c7564, type: 3}
+  m_Name: ColorAdjustments
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.ColorAdjustments
+  active: 1
+  postExposure:
+    m_OverrideState: 1
+    m_Value: -0.4
+  contrast:
+    m_OverrideState: 1
+    m_Value: 8
+  colorFilter:
+    m_OverrideState: 1
+    m_Value: {r: 1, g: 1, b: 1, a: 1}
+  hueShift:
+    m_OverrideState: 1
+    m_Value: 0
+  saturation:
+    m_OverrideState: 1
+    m_Value: 8
+--- !u!114 &-1846408108462887783
 MonoBehaviour:
   m_ObjectHideFlags: 3
   m_CorrespondingSourceObject: {fileID: 0}
@@ -53,34 +81,12 @@ MonoBehaviour:
   m_Name: District_Post
   m_EditorClassIdentifier: Unity.RenderPipelines.Core.Runtime::UnityEngine.Rendering.VolumeProfile
   components:
-  - {fileID: 1640449951520838302}
-  - {fileID: -7196070739632250119}
-  - {fileID: 3142902170957151126}
-  - {fileID: 1556602448573307190}
-  - {fileID: 2333760428282058283}
---- !u!114 &1556602448573307190
-MonoBehaviour:
-  m_ObjectHideFlags: 3
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 70afe9e12c7a7ed47911bb608a23a8ff, type: 3}
-  m_Name: SplitToning
-  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.SplitToning
-  active: 1
-  shadows:
-    m_OverrideState: 1
-    m_Value: {r: 0.42, g: 0.56, b: 0.56, a: 1}
-  highlights:
-    m_OverrideState: 1
-    m_Value: {r: 0.5, g: 0.5, b: 0.5, a: 1}
-  balance:
-    m_OverrideState: 1
-    m_Value: 0
---- !u!114 &1640449951520838302
+  - {fileID: 1632185114616387149}
+  - {fileID: -1846408108462887783}
+  - {fileID: -2879229458079950500}
+  - {fileID: 8090981447464210662}
+  - {fileID: 8066175396321886486}
+--- !u!114 &1632185114616387149
 MonoBehaviour:
   m_ObjectHideFlags: 3
   m_CorrespondingSourceObject: {fileID: 0}
@@ -130,7 +136,7 @@ MonoBehaviour:
   dirtIntensity:
     m_OverrideState: 1
     m_Value: 0
---- !u!114 &2333760428282058283
+--- !u!114 &8066175396321886486
 MonoBehaviour:
   m_ObjectHideFlags: 3
   m_CorrespondingSourceObject: {fileID: 0}
@@ -158,7 +164,7 @@ MonoBehaviour:
   rounded:
     m_OverrideState: 1
     m_Value: 0
---- !u!114 &3142902170957151126
+--- !u!114 &8090981447464210662
 MonoBehaviour:
   m_ObjectHideFlags: 3
   m_CorrespondingSourceObject: {fileID: 0}
@@ -167,22 +173,16 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 66f335fb1ffd8684294ad653bf1c7564, type: 3}
-  m_Name: ColorAdjustments
-  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.ColorAdjustments
+  m_Script: {fileID: 11500000, guid: 70afe9e12c7a7ed47911bb608a23a8ff, type: 3}
+  m_Name: SplitToning
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.SplitToning
   active: 1
-  postExposure:
+  shadows:
     m_OverrideState: 1
-    m_Value: -0.4
-  contrast:
+    m_Value: {r: 0.42, g: 0.56, b: 0.56, a: 1}
+  highlights:
     m_OverrideState: 1
-    m_Value: 8
-  colorFilter:
-    m_OverrideState: 1
-    m_Value: {r: 1, g: 1, b: 1, a: 1}
-  hueShift:
+    m_Value: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  balance:
     m_OverrideState: 1
     m_Value: 0
-  saturation:
-    m_OverrideState: 1
-    m_Value: 8
