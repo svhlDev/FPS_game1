@@ -13,6 +13,11 @@
 //   - Vertex colour: rgb = this building's wall tint, a = building seed (set by the builder, so per-building
 //     variation survives static batching without MaterialPropertyBlocks).
 //   - Roofs (up-facing) get no windows.
+//   - Graphics Phase 4: full URP PBR (main light + shadows, every additional light so neon lights the
+//     towers, reflection probes in the glass, SSAO, fog); wall weathering (macro variation per building,
+//     darker toward the street, rain streaks under the windows); interior mapping (a room box behind
+//     every window: lit rooms glow, dark ones show faint shapes, some blinds down); recessed windows
+//     (a 10 cm reveal by normal bending, a shadow under the lintel).
 //   - Far away (window cells smaller than ~0.25-0.6 px) the pattern fades to its average colour,
 //     so distant facades don't sparkle or crawl.
 // Altitude bands (world Y): below _BandHeights.x = underworld, up to _BandHeights.y = traffic band, above = upper city.
@@ -67,14 +72,16 @@ Shader "FPS/CityFacade"
             #pragma fragment frag
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fragment _ _SHADOWS_SOFT
-            #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
+            #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
             #pragma multi_compile_fog
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
-            #include "HashPCG.hlsl"
+            #include "Assets/Shaders/SurfaceLib.hlsl"
 
             struct Attributes
             {
@@ -133,49 +140,54 @@ Shader "FPS/CityFacade"
             }
 
 
+            // Interior mapping: the room behind a window, as a box (window-sized, ROOM_DEPTH deep) seen
+            // through the glass. wf: position in the window (0..1), d: the view ray in (window u, window v,
+            // depth) units. Returns the shade of the face hit (ceiling brightest, floor darkest) and which
+            // face (for variety).
+            #define ROOM_DEPTH 4.0
+            float RoomShade(float2 wf, float3 d, out float face)
+            {
+                float3 o = float3(wf, 0.0);
+                float tx = ((d.x > 0.0 ? 1.0 : 0.0) - o.x) / (abs(d.x) > 1e-5 ? d.x : 1e-5);
+                float ty = ((d.y > 0.0 ? 1.0 : 0.0) - o.y) / (abs(d.y) > 1e-5 ? d.y : 1e-5);
+                float tz = 1.0 / max(d.z, 1e-4);
+                // Nearest face, picked by comparison (not equality: seams would speckle).
+                float t = tz; face = 0.0;
+                if (tx < t) { t = tx; face = 1.0; }
+                if (ty < t) { t = ty; face = d.y > 0.0 ? 2.0 : 3.0; }
+                float z = saturate(d.z * t);
+                if (face < 0.5) return 0.9;                                       // back wall
+                if (face < 1.5) return 0.65 - 0.2 * z;                            // side walls, darker deeper
+                return face < 2.5 ? 1.15 - 0.4 * z : 0.45 - 0.15 * z;             // ceiling / floor
+            }
+
             half4 frag(Varyings i) : SV_Target
             {
-                float3 n = normalize(i.normalWS);
-                float3 wall = _WallColor.rgb * i.color.rgb;
+                float3 nGeom = normalize(i.normalWS);
+                float3 n = nGeom;
+                float3 P = i.positionWS;
+                float3 V = GetWorldSpaceNormalizeViewDir(P);
+                uint seed = (uint)round(i.color.a * 255.0);
+                float y = P.y;
 
-                // Diffuse light: ambient (SSAO-darkened), the moon / sun, and every additional light (neon
-                // signs, street lamps, headlights: Graphics Phase 1). Full PBR comes with Phase 4.
-                InputData inputData = (InputData)0;
-                inputData.positionWS = i.positionWS;
-                inputData.normalWS = n;
-                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
-                AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(inputData.normalizedScreenSpaceUV);
-                Light mainLight = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
-                float3 light = SampleSH(n) * ao.indirectAmbientOcclusion
-                             + mainLight.color * saturate(dot(n, mainLight.direction)) * mainLight.shadowAttenuation * ao.directAmbientOcclusion;
-                #if defined(_ADDITIONAL_LIGHTS)
-                    uint pixelLightCount = GetAdditionalLightsCount();
-                    #if USE_CLUSTER_LIGHT_LOOP
-                    [loop] for (uint li = 0; li < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); li++)
-                    {
-                        Light dl = GetAdditionalLight(li, i.positionWS, half4(1, 1, 1, 1));
-                        light += dl.color * saturate(dot(n, dl.direction)) * dl.distanceAttenuation * dl.shadowAttenuation;
-                    }
-                    #endif
-                    LIGHT_LOOP_BEGIN(pixelLightCount)
-                        Light al = GetAdditionalLight(lightIndex, i.positionWS, half4(1, 1, 1, 1));
-                        light += al.color * saturate(dot(n, al.direction)) * al.distanceAttenuation * al.shadowAttenuation;
-                    LIGHT_LOOP_END
-                #endif
+                // Wall weathering (every face): macro variation per building, darker toward the street.
+                float macro = Fbm(P * 0.035 + float(seed) * 7.13, 2);
+                float toStreet = lerp(0.6, 1.0, saturate(y / 45.0));
+                half3 wallAlb = _WallColor.rgb * i.color.rgb * lerp(0.72, 1.18, macro) * toStreet;
+                half wallSmooth = 0.15;
 
-                float3 color;
+                half3 albedo = wallAlb;
+                half smooth = wallSmooth;
+                half3 emission = 0;
+                half occl = 1.0;
+
                 if (n.y > 0.5)
                 {
-                    color = _RoofColor.rgb * light;
+                    albedo = _RoofColor.rgb * lerp(0.8, 1.2, Fbm(P * 0.15, 2));
+                    smooth = 0.2;
                 }
-                else if (n.y < -0.5)
+                else if (n.y >= -0.5)
                 {
-                    color = wall * light;
-                }
-                else
-                {
-                    float y = i.positionWS.y;
-                    uint seed = (uint)round(i.color.a * 255.0);
                     uint style = min((uint)round(i.style), 4u);
                     if (y < _BandHeights.x && (seed & 3u) != 0u) style = 4u;   // industrial dominates the underworld
                     bool storefront = y < _StreetHeight;
@@ -185,7 +197,9 @@ Shader "FPS/CityFacade"
 
                     // Side face: project onto the face's plane (Z-Y for X-facing, X-Y for Z-facing).
                     bool facesX = abs(n.x) > abs(n.z);
-                    float2 uv = facesX ? i.positionWS.zy : i.positionWS.xy;
+                    float3 T = facesX ? float3(0, 0, 1) : float3(1, 0, 0);
+                    float3 B = float3(0, 1, 0);
+                    float2 uv = facesX ? P.zy : P.xy;
                     float2 g = uv / cellDef.xy;
                     float2 cell = floor(g);
                     float2 f = frac(g);
@@ -202,12 +216,13 @@ Shader "FPS/CityFacade"
                     uint3 r = Pcg3d(uint3(c.x + 32768, c.y + 32768, faceId * 256u + seed));
                     float h = U01(r.x);
                     float h2 = U01(r.y);
+                    float h3 = U01(r.z);
 
                     float bandMul = y < _BandHeights.x ? _BandLit.x : (y < _BandHeights.y ? _BandLit.y : _BandLit.z);
                     // Per-building occupancy, skewed low: some towers are nearly dark.
                     float occupancy = lerp(0.2, 1.0, pow(U01(Pcg3d(uint3(seed, 9u, 41u)).x), 1.5));
                     float litFraction = storefront ? look.x : saturate(look.x * _LitFraction * bandMul * occupancy);
-                    float emission = _EmissionStrength * kStyleEmission[style];
+                    float emissionK = _EmissionStrength * kStyleEmission[style];
                     float isLit = step(h, litFraction);
 
                     float3 tint = lerp(_WarmColor.rgb, _CoolColor.rgb, step(0.5, h2));
@@ -225,22 +240,92 @@ Shader "FPS/CityFacade"
                         tint = lerp(tint, _CoolColor.rgb, 0.7);
                         avgTint = lerp(avgTint, _CoolColor.rgb, 0.7);
                     }
-
                     // Most lit windows are dim, a few are bright.
                     float brightness = lerp(0.35, 1.0, pow(h2, 1.5));
-                    float3 glass = _GlassColor.rgb * light + look.w * _GlassReflect.rgb * SampleSH(reflect(-GetWorldSpaceNormalizeViewDir(i.positionWS), n));
-                    float3 window = isLit > 0.5 ? tint * emission * brightness : glass;
-                    float3 nearColor = lerp(wall * light, window, win);
 
-                    // Distance filtering: as cells shrink below a few pixels, blend to the pattern's average
-                    // (this style's opening area and lit fraction).
-                    // Mean brightness of lerp(0.35, 1, h^1.5) over uniform h is 0.35 + 0.65 / 2.5.
+                    // Pixel footprint of one window cell: full detail when cells are big on screen; the
+                    // interior, reveals and streaks fade first, then the pattern fades to its average.
                     float px = max(fwidth(g).x, fwidth(g).y);
-                    float3 avgWindow = avgTint * emission * (0.35 + 0.65 / 2.5) * litFraction + glass * (1.0 - litFraction);
-                    float3 farColor = lerp(wall * light, avgWindow, cellDef.z * cellDef.w);
-                    color = lerp(nearColor, farColor, smoothstep(0.25, 0.6, px));
+                    float detail = 1.0 - smoothstep(0.03, 0.12, px);
+                    float nearK = 1.0 - smoothstep(0.25, 0.6, px);
+
+                    // ---- near: the window, its reveal, the room behind it ----
+                    float2 ws = cellDef.xy * cellDef.zw;                                      // window size (m)
+                    float2 wf = saturate((f - margin) / cellDef.zw);                          // 0..1 across the window
+                    float2 toEdge = min(wf, 1.0 - wf) * ws;                                   // metres to the window edge
+                    // Recessed window: a 10 cm reveal inside the opening, its faces bent toward the centre.
+                    float reveal = (1.0 - smoothstep(0.07, 0.1, min(toEdge.x, toEdge.y))) * win * detail;
+                    float3 toCentre = toEdge.x < toEdge.y ? T * sign(0.5 - wf.x) : B * sign(0.5 - wf.y);
+                    float3 nNear = normalize(nGeom + toCentre * reveal * 2.5);
+                    float topShadow = (1.0 - smoothstep(0.0, 0.12, (1.0 - wf.y) * ws.y)) * win;  // under the lintel
+                    float glassMask = win * (1.0 - reveal);
+
+                    // The room: the view ray in window units (u along T, v up, depth into the wall).
+                    float3 rd = -V;
+                    float3 d = float3(dot(rd, T) / ws.x, dot(rd, B) / ws.y, dot(rd, -nGeom) / ROOM_DEPTH);
+                    float face;
+                    float shade = RoomShade(wf, d, face);
+                    float roomVar = lerp(0.6, 1.1, U01(r.z ^ ((uint)face * 747796405u)));
+                    // Some windows have blinds down partway (flat; glowing softly when lit).
+                    float blind = step(0.7, h3) * step(1.0 - lerp(0.2, 1.0, frac(h3 * 7.3)), wf.y);
+                    float3 litRoom = tint * emissionK * brightness * lerp(shade * roomVar, 0.55, blind);
+                    float3 darkRoom = (0.004 + 0.01 * shade * roomVar) * lerp(1.0, 2.0, blind) * avgTint;
+                    float3 room = isLit > 0.5 ? litRoom : darkRoom;
+                    float3 flatWindow = isLit > 0.5 ? tint * emissionK * brightness : 0.0;
+                    float3 winEmission = lerp(flatWindow, room, detail);
+
+                    // Rain streaks under each window (in its column), and faint ones down the wall.
+                    float below = margin.y - f.y;
+                    float under = step(0.0, below) * (1.0 - smoothstep(0.0, margin.y * 1.6, below))
+                                * step(margin.x, f.x) * step(f.x, 1.0 - margin.x);
+                    float streak = VNoise(float3(uv.x * 9.0, uv.y * 0.35, float(seed))) * under * detail;
+                    float wallStreak = Streaks(float3(uv.x, uv.y, float(seed)), 6.0) * 0.6;
+                    half3 nearWall = wallAlb * (1.0 - streak * 0.45) * (1.0 - wallStreak * 0.3);
+
+                    // ---- far: the pattern's average ----
+                    float open = cellDef.z * cellDef.w;
+                    float3 farEmission = avgTint * emissionK * (0.35 + 0.65 / 2.5) * litFraction * open;
+                    half3 farAlbedo = lerp(wallAlb, _GlassColor.rgb, open);
+                    half farSmooth = lerp(wallSmooth, 0.9, open);
+
+                    // Glass (dark, very smooth: the reflection probes show in it) over the room; the reveal
+                    // is wall; a darker strip under the lintel.
+                    half3 nearAlbedo = lerp(nearWall, _GlassColor.rgb, glassMask);
+                    half nearSmooth = lerp(wallSmooth, 0.95, glassMask);
+                    albedo = lerp(farAlbedo, nearAlbedo, nearK);
+                    smooth = lerp(farSmooth, nearSmooth, nearK);
+                    emission = lerp(farEmission, winEmission * glassMask, nearK);
+                    n = normalize(lerp(nGeom, nNear, nearK));
+                    occl = 1.0 - topShadow * 0.5 * nearK * detail;
                 }
 
+                // Lighting: URP PBR (main light + shadows, every additional light, reflection probes on the
+                // glass, SSAO, fog), plus the windows' emission.
+                half alpha = 1.0;
+                BRDFData brdf;
+                InitializeBRDFData(albedo, 0.0, half3(0, 0, 0), smooth, alpha, brdf);
+                float2 suv = GetNormalizedScreenSpaceUV(i.positionCS);
+                AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(suv);
+                InputData inputData = (InputData)0;
+                inputData.positionWS = P;
+                inputData.normalWS = n;
+                inputData.normalizedScreenSpaceUV = suv;
+
+                half3 color = GlobalIllumination(brdf, (BRDFData)0, 0.0, SampleSH(n), ao.indirectAmbientOcclusion * occl, P, n, V, suv);
+                Light mainLight = GetMainLight(TransformWorldToShadowCoord(P));
+                mainLight.color *= ao.directAmbientOcclusion;
+                color += LightingPhysicallyBased(brdf, mainLight, n, V);
+                #if defined(_ADDITIONAL_LIGHTS)
+                    uint pixelLightCount = GetAdditionalLightsCount();
+                    #if USE_CLUSTER_LIGHT_LOOP
+                    [loop] for (uint li = 0; li < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); li++)
+                        color += LightingPhysicallyBased(brdf, GetAdditionalLight(li, P, half4(1, 1, 1, 1)), n, V);
+                    #endif
+                    LIGHT_LOOP_BEGIN(pixelLightCount)
+                        color += LightingPhysicallyBased(brdf, GetAdditionalLight(lightIndex, P, half4(1, 1, 1, 1)), n, V);
+                    LIGHT_LOOP_END
+                #endif
+                color += emission;
                 color = MixFog(color, i.fogFactor);
                 return half4(color, 1.0);
             }
