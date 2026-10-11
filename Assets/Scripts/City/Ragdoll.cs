@@ -111,7 +111,8 @@ public class Ragdoll : MonoBehaviour
         for (int i = 0; i < parts.Count; i++)
         {
             var p = parts[i];
-            var rb = p.t.GetComponent<Rigidbody>() ?? p.t.gameObject.AddComponent<Rigidbody>();
+            var rb = p.t.GetComponent<Rigidbody>();
+            if (rb == null) rb = p.t.gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = false;
             rb.useGravity = true;
             rb.mass = Mathf.Max(0.3f, p.mass * mScale);

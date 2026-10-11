@@ -205,6 +205,7 @@ public class FirstPersonController : MonoBehaviour
         Instance = this;
         cc = GetComponent<CharacterController>();
         fists = GetComponent<PlayerFists>();
+        if (fists == null) fists = gameObject.AddComponent<PlayerFists>(); // older scenes have none
         cc.minMoveDistance = 0f; // small carry/slide moves must not be dropped
         if (cameraRoot == null) cameraRoot = playerCamera.transform.parent;
         // Older scenes carry a capsule + visor body: hide it, the figure replaces it.

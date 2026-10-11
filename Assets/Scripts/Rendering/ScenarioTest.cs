@@ -40,6 +40,14 @@ public partial class ScenarioTest : MonoBehaviour
         Application.runInBackground = true; // keep going when the window loses focus
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 60;
+        // -scene <name>: run in another scene of the build.
+        var argv = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < argv.Length - 1; i++)
+            if (argv[i] == "-scene" && UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != argv[i + 1])
+            {
+                UnityEngine.SceneManagement.SceneManager.LoadScene(argv[i + 1]);
+                yield return null; yield return null;
+            }
         t0 = Time.time;
         Log($"scenario {scenarioName}, scene {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
         yield return new WaitForSeconds(3f); // traffic settles

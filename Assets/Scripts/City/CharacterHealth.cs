@@ -55,7 +55,8 @@ public class CharacterHealth : MonoBehaviour
 
     public static CharacterHealth Add(GameObject go, CharacterFigure.Role role)
     {
-        var h = go.GetComponent<CharacterHealth>() ?? go.AddComponent<CharacterHealth>();
+        var h = go.GetComponent<CharacterHealth>();
+        if (h == null) h = go.AddComponent<CharacterHealth>();
         h.Role = role;
         h.IsPlayer = role == CharacterFigure.Role.Player;
         h.maxHealth = role == CharacterFigure.Role.Police ? OfficerHealth : role == CharacterFigure.Role.Player ? PlayerHealth : CivilianHealth;

@@ -44,7 +44,7 @@ public class FigureAnimator : MonoBehaviour
     public bool ThrowReady { get; set; }   // grenade: right arm drawn back
 
     // Fight stance (metres at figure height 1.5, from the eyes along the look).
-    public float guardForward = 0.2f, guardDrop = 0.07f, guardSide = 0.12f;
+    public float guardForward = 0.2f, guardDrop = 0.11f, guardSide = 0.12f;
     public const float PunchReach = 0.97f;
     // A jab reached full extension: hand (0 left, 1 right), fist position as posed this frame.
     public event System.Action<int, Vector3> PunchExtended;

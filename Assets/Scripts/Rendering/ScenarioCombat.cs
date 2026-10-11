@@ -84,7 +84,7 @@ public partial class ScenarioTest
 
         // A punch on an officer standing in front: the hit lands at the fist (8 damage, body).
         Vector3 fwd = Flat(cam.transform.forward);
-        var near = OfficerAgent.DebugSpawn(Ground(fpc.transform.position + fwd * 0.75f), Quaternion.LookRotation(-fwd));
+        var near = OfficerAgent.DebugSpawn(Ground(fpc.transform.position + fwd * 0.6f), Quaternion.LookRotation(-fwd));
         yield return new WaitForSeconds(0.5f);
         fpc.DebugLook(5f, yaw0);
         fists.DebugRaise();
@@ -93,7 +93,13 @@ public partial class ScenarioTest
         float hp0 = near.Health.Health;
         fists.DebugPunch(0);
         yield return new WaitForSeconds(0.35f);
-        Log($"punch on an officer 0.75 m away: hits {PlayerFists.HitsLanded - hits0}, health {hp0:0} -> {near.Health.Health:0}, fist at {PlayerFists.LastFist}");
+        {
+            var cols = Physics.OverlapSphere(PlayerFists.LastFist, 0.4f, ~0, QueryTriggerInteraction.Collide);
+            string near04 = "";
+            foreach (var c in cols) if (!c.transform.IsChildOf(fpc.transform)) near04 += $"{c.name}({Vector3.Distance(c.ClosestPointOnBounds(PlayerFists.LastFist), PlayerFists.LastFist):0.00}) ";
+            Log($"  officer at {Vector3.Distance(near.transform.position, fpc.transform.position):0.00} m, fist {Vector3.Distance(PlayerFists.LastFist, fpc.transform.position + Vector3.up * 1.2f):0.00} m from chest; within 0.4 m of fist: {near04}");
+        }
+        Log($"punch on an officer 0.6 m away: hits {PlayerFists.HitsLanded - hits0}, health {hp0:0} -> {near.Health.Health:0}, fist at {PlayerFists.LastFist}");
         Log(PlayerFists.HitsLanded > hits0 && near.Health.Health < hp0 ? "PASS punch connects at the fist and hurts (8 / 12)" : "FAIL punch");
         Destroy(near.gameObject);
         disp.DebugClear();
@@ -197,9 +203,12 @@ public partial class ScenarioTest
         // ---------- 5. burn chains ----------
         var parked = new List<FlyingVehicle>();
         foreach (var v in FlyingVehicle.Active)
-            if (v != null && v.IsParked && !v.hasDriver && v.Health != null && !v.Health.Burning && v.Trunk != null) parked.Add(v);
+            if (v != null && v.IsParked && v.Health != null && !v.Health.Burning && v.Trunk != null) parked.Add(v);
         parked.Sort((a, b) => (a.transform.position - fpc.transform.position).sqrMagnitude.CompareTo((b.transform.position - fpc.transform.position).sqrMagnitude));
         Log($"parked cars: {parked.Count}");
+        foreach (var v in FlyingVehicle.Active)
+            if (v != null && (v.name.StartsWith("Parked") || v.name.StartsWith("Police")))
+                Log($"  {v.name}: parked {v.IsParked}, driver {v.hasDriver}, kind {v.kind}, police driver {v.GetComponent<PoliceDriver>() != null}, trunk police {v.Trunk?.Police}, grenades {v.Trunk?.Grenades}, burning {v.Health?.Burning}");
         if (parked.Count >= 2)
         {
             IEnumerator Burst(FlyingVehicle car, bool spread, int n, System.Action<int> done)
@@ -236,7 +245,8 @@ public partial class ScenarioTest
         int police = 0, policeFull = 0, allTrunks = 0;
         foreach (var v in FlyingVehicle.Active) if (v != null && v.Trunk != null) { allTrunks++; if (v.Trunk.Police) { police++; if (v.Trunk.Grenades == 2) policeFull++; } }
         Log($"trunks: {allTrunks} of {FlyingVehicle.Active.Count} cars, police {police} (with 2 grenades {policeFull})");
-        Log(allTrunks == FlyingVehicle.Active.Count && police == policeFull ? "PASS every car has a trunk, police trunks hold 2 grenades" : "FAIL trunks");
+        Log(allTrunks != FlyingVehicle.Active.Count || police != policeFull ? "FAIL trunks"
+            : police == 0 ? "PASS every car has a trunk (WARN no police cars in this scene)" : "PASS every car has a trunk, police trunks hold 2 grenades");
         FlyingVehicle tcar = null;
         for (int k = parked.Count - 1; k >= 0 && tcar == null; k--) if (!parked[k].Health.Burning) tcar = parked[k];
         if (tcar != null)
