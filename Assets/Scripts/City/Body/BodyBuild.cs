@@ -21,6 +21,7 @@ public class BodyAsset
     public int triangles, skinTriangles, skinTrianglesBeforeRemoval;
     public int[] garmentTriangles;       // per garment, after hidden parts were dropped
     public float wallMs, mainThreadMs;   // generation: start to finish, and main-thread time spent on it
+    public readonly List<ClothChainSet> chains = new List<ClothChainSet>();   // skirts' spring chains (bones after the plan's)
     public const int Skin = 0;           // submesh; garment g is submesh 1 + g
 }
 
@@ -93,6 +94,7 @@ public class BodyBuild
     NativeArray<Vector3> cpos, cnrm, conBody; NativeArray<Vector2> creg, clay; NativeArray<BoneWeight> cwts; NativeArray<byte> cgarm, cflags;
     NativeArray<float> gCells, gGaps;
     Parts bodyParts, headParts;
+    readonly List<ClothChainSet> chainSets = new List<ClothChainSet>();
     Matrix4x4[] bindposes;
     int skinBefore;
 
@@ -225,7 +227,8 @@ public class BodyBuild
             {
                 var def = outfit.garments[g];
                 var below = DressedKernel.Make(sdf.Kernel, kernels, dummy);
-                var f = new GarmentField(sdf, def, below, fieldDep);
+                // Field grid: fine enough for its ease (a 5 cm coat closing doesn't need 1 cm cells).
+                var f = new GarmentField(sdf, def, below, fieldDep, Mathf.Clamp(def.ease / 2.5f, 0.01f, 0.02f));
                 fields.Add(f);
                 kernels.Add(f.Kernel);
                 fieldDep = f.Handle;
@@ -249,6 +252,16 @@ public class BodyBuild
     void AfterSampling()
     {
         foreach (var f in fields) f.Complete();   // (frees the fields' temporaries; their grids stay)
+        // Skirts: their spring chains, measured on the finished fields (a few hundred samples).
+        int nextBone = plan.bones.Count;
+        for (int g = 0; g < fields.Count; g++)
+        {
+            var def = outfit.garments[g];
+            if (!def.HasSkirt) continue;
+            var cs = ClothChainSet.Build(fields[g].Kernel, def, g, fields[g].SkirtHemY, nextBone);
+            chainSets.Add(cs);
+            nextBone += cs.BoneCount;
+        }
         int iters = ms.smoothIterations; float strength = ms.smoothStrength;
         // (The grids are copied out on the workers; their native arrays are freed after.)
         task = Task.Run(() =>
@@ -426,9 +439,19 @@ public class BodyBuild
         var CG = vertGarment;
         DisposeVertexArrays();
         bindposes = BodySkinner.BindPoses(sdf);
+        if (chainSets.Count > 0)
+        {
+            // Chain bones after the plan's: bind = each joint, unrotated, in root space.
+            var bp = new List<Matrix4x4>(bindposes);
+            foreach (var cs in chainSets)
+                for (int p = 0; p < cs.panels; p++)
+                    for (int b = 0; b < cs.bones; b++) bp.Add(Matrix4x4.Translate(cs.Joint(p, b)).inverse);
+            bindposes = bp.ToArray();
+        }
+        int pelvisBone = plan.Index("Hips");
         var T = tris.ToArray(); var CT = ctris.ToArray();
         int ng = fields.Count;
-        task = Task.Run(() => SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng));
+        task = Task.Run(() => SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone));
         CurrentStage = Stage.Split;
     }
 
@@ -438,9 +461,13 @@ public class BodyBuild
     // weights are smoothed over the garment surface first (cloth spanning a crotch or an armpit mustn't
     // snap to one bone).
     void SplitParts(Vector3[] V, Vector3[] N, Vector2[] R, Vector2[] L, BoneWeight[] W, byte[] Cov, int[] T,
-                    Vector3[] CV, Vector3[] CN, Vector2[] CR, Vector2[] CL, BoneWeight[] CW, byte[] CF, byte[] CG, int[] CT, int ng)
+                    Vector3[] CV, Vector3[] CN, Vector2[] CR, Vector2[] CL, BoneWeight[] CW, byte[] CF, byte[] CG, int[] CT, int ng, int pelvisBone)
     {
         if (CV.Length > 0) CW = SmoothWeights(CW, CT, 3);
+        // Skirts: their vertices below the ring go to the spring chains.
+        foreach (var cs in chainSets)
+            for (int i = 0; i < CV.Length; i++)
+                if (CG[i] == cs.garment && cs.Weight(CV[i], CW[i], pelvisBone) is BoneWeight w) CW[i] = w;
         // One vertex list: body vertices then cloth vertices.
         int nb = V.Length;
         Vector3 Pv(int i) => i < nb ? V[i] : CV[i - nb];
@@ -562,6 +589,7 @@ public class BodyBuild
             height = plan.height, width = width, triangles = triCount,
             skinTriangles = bodyParts.subs[0].Count / 3, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = gt,
         };
+        Asset.chains.AddRange(chainSets);
         DisposeFields();
         sdf.Dispose(); sdf = null;
         wall.Stop();

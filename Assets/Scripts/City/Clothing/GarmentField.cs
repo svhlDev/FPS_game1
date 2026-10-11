@@ -110,7 +110,7 @@ public class GarmentField : IDisposable
         // Nearest bone per cell: kept with the kernel (garment surfaces look it up instead of evaluating the body).
         var nearest = new NativeArray<byte>(n, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         var h = new BaseCoarseJob { kernel = below, min = min, step = cell * C, nx = mx, ny = my, values = coarse }.Schedule(coarse.Length, 64, dep);
-        float band = Mathf.Max(cell * C * 1.9f, g.ease * 2f + g.thickness + g.hangLength * 0.5f + 0.03f);
+        float band = Mathf.Max(cell * C * 1.9f, g.ease * 2f + g.thickness + 0.03f);
         h = new SampleJob { kernel = below, coarse = coarse, min = min, cell = cell, band = band, nx = nx, ny = ny, mx = mx, my = my, values = values, nearest = nearest }.Schedule(n, 256, h);
 
         // 2. closing (per leg for split garments)
@@ -181,6 +181,7 @@ public class GarmentField : IDisposable
             body = body, drape = drape, nearest = nearest, min = min, cell = cell, nx = nx, ny = ny, nz = nz, cuts = cuts, coverMask = cover, hipY = hipY,
             thickness = g.thickness, gap = g.gap, hemBlend = g.hemBlend,
         };
+        if (g.HasSkirt) SetSkirt(sdf, g.skirt, hipY);
     }
 
     public void Dispose()
@@ -188,6 +189,35 @@ public class GarmentField : IDisposable
         Complete();
         Kernel.Dispose();
     }
+
+    // Skirt geometry from the plan: its axis under the hips, the hem at mid-shin (the shin cut), the slit
+    // tops between the knee and the hip.
+    void SetSkirt(BodySDF sdf, SkirtDef sk, float hipY)
+    {
+        var plan = sdf.Plan;
+        int hips = plan.Index("Hips"), kneeL = plan.Index("KneeL"), chest = plan.Index("Chest");
+        float hipWidth = 2f * Mathf.Abs(sdf.start[plan.Index("HipL")].x) + 2f * plan.bones[plan.Index("HipL")].Outer.x;
+        float shinAt = 0.5f;
+        foreach (var c in def.cuts) if (c.kind == GarmentCut.Kind.Bone && c.bone == BoneKind.Shin) shinAt = c.at;
+        float hem = Mathf.Lerp(sdf.start[kneeL].y, sdf.end[kneeL].y, shinAt);
+        float knee = sdf.start[kneeL].y;
+        Kernel.hasSkirt = 1;
+        Kernel.skirtTop = sk.startAt * hipY;
+        Kernel.axis = new Vector2(sdf.start[hips].x, sdf.start[hips].z);
+        // radius r0 ~ half the hip width; r = r0 + flare * hipWidth * drop  ->  k = 1 + 2 flare drop
+        Kernel.flareK = 2f * sk.flare * hipWidth / Mathf.Max(0.05f, hipWidth);
+        Kernel.hemY = hem;
+        Kernel.chestY = chest >= 0 ? (sdf.start[chest].y + sdf.end[chest].y) * 0.5f : hipY * 1.5f;
+        Kernel.openHem = sk.openingHem * 0.5f; Kernel.openChest = sk.openingChest * 0.5f;
+        Kernel.lapel = sk.lapel; Kernel.lapelWidth = sk.lapelWidth;
+        Kernel.slitTopY = Mathf.Lerp(knee, hipY, sk.slitTop);
+        Kernel.slitHalf = sk.slitHalfWidth;
+        Kernel.slitCount = Mathf.Min(4, sk.slitAngles.Length);
+        for (int i = 0; i < Kernel.slitCount; i++) Kernel.slitAngles[i] = sk.slitAngles[i];
+        SkirtHemY = hem;
+    }
+
+    public float SkirtHemY { get; private set; }
 
     // Debug view (Phase 1 check): the outer solid quick-meshed (surface nets at `cell`, one smoothing pass,
     // triangle normals). The body pokes out where the garment doesn't cover.
@@ -424,6 +454,12 @@ public struct GarmentKernel
     public float cell;
     public int nx, ny, nz, coverMask;
     public float hipY, thickness, gap, hemBlend;
+    // Skirt (coats): below skirtTop one cone (the hip cross-section scaled out by 1 + flareK * drop), an
+    // open front (half width openHem at hemY .. openChest at chestY), lapels, slits, a level hem.
+    public int hasSkirt, slitCount;
+    public float skirtTop, flareK, hemY, chestY, openHem, openChest, lapel, lapelWidth, slitTopY, slitHalf;
+    public Vector2 axis;          // the skirt's axis (x, z)
+    public Vector4 slitAngles;    // degrees, 0 = front, + = right
 
     // The draped, eased body distance (trilinear on the grid).
     public float Draped(Vector3 p)
@@ -440,12 +476,63 @@ public struct GarmentKernel
         return Mathf.Lerp(Mathf.Lerp(c00, c10, fy), Mathf.Lerp(c01, c11, fy), fz);
     }
 
+    // The draped field, with the coat's skirt and lapels.
+    public float Shape(Vector3 p)
+    {
+        float d = Draped(p);
+        if (hasSkirt == 0) return d;
+        if (p.y < skirtTop + 0.04f)
+        {
+            // The hip slice, scaled out with the drop (torso cells only: the hanging arms aren't skirt).
+            float k = 1f + flareK * Mathf.Max(0f, skirtTop - p.y);
+            Vector3 q = new Vector3(axis.x + (p.x - axis.x) / k, skirtTop, axis.y + (p.z - axis.y) / k);
+            byte nb = NearestAt(q);
+            int kind = nb == 255 ? -1 : body.bones[nb].kind;
+            bool torso = kind == (int)BoneKind.Pelvis || kind == (int)BoneKind.Lumbar || kind == (int)BoneKind.Thigh;
+            float skirt = torso ? k * Draped(q) : 0.3f;
+            float t = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(skirtTop + 0.04f, skirtTop - 0.04f, p.y));
+            d = Mathf.Lerp(d, skirt, t);
+        }
+        // Lapels: the opening's edges stand out a little (above the skirt).
+        float e = Mathf.Abs(p.x - axis.x) - OpenHalf(p.y);
+        if (p.z > axis.y && p.y > skirtTop && e > 0f && e < lapelWidth) d -= lapel * (1f - Mathf.SmoothStep(0f, 1f, e / lapelWidth));
+        return d;
+    }
+
+    float OpenHalf(float y) => Mathf.Lerp(openHem, openChest, Mathf.Clamp01((y - hemY) / Mathf.Max(0.01f, chestY - hemY)));
+
+    public byte NearestAt(Vector3 p)
+    {
+        Vector3 g = (p - min) / cell;
+        int x = Mathf.Clamp(Mathf.RoundToInt(g.x), 0, nx - 1), y = Mathf.Clamp(Mathf.RoundToInt(g.y), 0, ny - 1), z = Mathf.Clamp(Mathf.RoundToInt(g.z), 0, nz - 1);
+        return nearest[x + nx * (y + ny * z)];
+    }
+
+    // Open front, slits from the hem to mid-thigh, a level hem.
+    public float SkirtRegion(Vector3 p)
+    {
+        float d = -0.05f;
+        Vector2 v = new Vector2(p.x - axis.x, p.z - axis.y);
+        if (v.y > 0f) d = Mathf.Max(d, OpenHalf(p.y) - Mathf.Abs(v.x));
+        for (int i = 0; i < slitCount; i++)
+        {
+            float a = slitAngles[i] * Mathf.Deg2Rad;
+            Vector2 dir = new Vector2(Mathf.Sin(a), Mathf.Cos(a)), n = new Vector2(dir.y, -dir.x);
+            if (Vector2.Dot(v, dir) > 0f) d = Mathf.Max(d, Mathf.Min(slitHalf - Mathf.Abs(Vector2.Dot(v, n)), slitTopY - p.y));
+        }
+        return Mathf.Max(d, hemY - p.y);
+    }
+
+    // Covers the layers under it here (they can be dropped)? Not under the skirt: the legs move inside it.
+    public bool Covers(Vector3 p, int nearestBone, float margin) => Region(p, nearestBone) < -margin && (hasSkirt == 0 || p.y > skirtTop);
+
     // Where the garment is (negative inside): covered by nearest bone, inside every cut.
     public float Region(Vector3 p, int nearest)
     {
         var b = body.bones[nearest];
         if ((coverMask & (1 << b.kind)) == 0) return 0.05f;
         float d = -0.05f;
+        if (hasSkirt != 0) d = Mathf.Max(d, SkirtRegion(p));
         for (int i = 0; i < cuts.Length; i++)
         {
             var c = cuts[i];
@@ -468,7 +555,7 @@ public struct GarmentKernel
     public float Eval(Vector3 p)
     {
         var s = body.Eval(p);
-        float outer = Draped(p) - thickness - gap, inner = s.skin - gap;
+        float outer = Shape(p) - thickness - gap, inner = s.skin - gap;
         return BodySdfKernel.SMax(Mathf.Max(outer, -inner), Region(p, s.nearest), hemBlend);
     }
 
@@ -477,11 +564,10 @@ public struct GarmentKernel
     // the grid's nearest bone (no body evaluation: meshing samples this a lot).
     public float OuterSolid(Vector3 p)
     {
-        Vector3 g = (p - min) / cell;
-        int x = Mathf.Clamp(Mathf.RoundToInt(g.x), 0, nx - 1), y = Mathf.Clamp(Mathf.RoundToInt(g.y), 0, ny - 1), z = Mathf.Clamp(Mathf.RoundToInt(g.z), 0, nz - 1);
-        byte nb = nearest[x + nx * (y + ny * z)];
-        float region = nb == 255 ? 0.05f : Region(p, nb);
-        return BodySdfKernel.SMax(Draped(p) - thickness - gap, region, hemBlend);
+        byte nb = NearestAt(p);
+        // Far from the body (outside the sampled band): only a skirt reaches out there.
+        float region = nb != 255 ? Region(p, nb) : hasSkirt != 0 && p.y < skirtTop ? SkirtRegion(p) : 0.05f;
+        return BodySdfKernel.SMax(Shape(p) - thickness - gap, region, hemBlend);
     }
     public float OuterSolidGiven(Vector3 p, BodySdfKernel.Sample s) => OuterSolid(p);
 
@@ -632,7 +718,7 @@ public static class GarmentMeshJobs
             for (int k = gi + 1; k < kernel.count; k++)
             {
                 var o = kernel.Get(k);
-                if (o.Region(p, s.nearest) < -coverMargin && o.OuterSolidGiven(p, s) < -0.002f) { f |= 2; break; }
+                if (o.Covers(p, s.nearest, coverMargin) && o.OuterSolidGiven(p, s) < -0.002f) { f |= 2; break; }
             }
             flags[i] = f;
             // The body surface point under the vertex (one step along the skin's gradient).
@@ -655,7 +741,7 @@ public static class GarmentMeshJobs
             var s = kernel.body.Eval(p);
             byte c = 0;
             for (int k = 0; k < kernel.count; k++)
-                if (kernel.Get(k).Region(p, s.nearest) < -coverMargin) { c = 1; break; }
+                if (kernel.Get(k).Covers(p, s.nearest, coverMargin)) { c = 1; break; }
             covered[i] = c;
         }
     }

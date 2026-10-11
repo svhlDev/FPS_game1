@@ -74,6 +74,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "daynight": yield return DayNightTest(); break;
             case "garments": yield return GarmentsTest(); break;
             case "dressed": yield return DressedTest(); break;
+            case "coat": yield return CoatTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
@@ -617,6 +618,136 @@ public partial class ScenarioTest : MonoBehaviour
         yield return Shot("lineup", row, row + new Vector3(0f, 0.1f, -3.4f), 50f);
         cam.fieldOfView = fov;
         foreach (var g in lights) Destroy(g);
+        FlyingVehicle.CameraOverride = false;
+    }
+
+    // ---------- clothing part B: the trench coat ----------
+
+    IEnumerator CoatTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        TimeOfDay.Instance?.SetHour(12f);
+        var outfit = Outfit.Casual(); outfit.garments.Add(GarmentDef.Coat());
+        var specs = new (string, CharacterSheet)[]
+        {
+            ("man", new CharacterSheet(Sex.Male, 10, 10, 10, 1000)), ("woman", new CharacterSheet(Sex.Female, 10, 10, 10, 1001)),
+            ("heavy man", new CharacterSheet(Sex.Male, 14, 10, 2, 1002)),
+        };
+        var figs = new List<(CharacterFigure f, FigureAnimator a, ClothDangle d)>();
+        for (int i = 0; i < specs.Length; i++)
+        {
+            var (name, sh) = specs[i];
+            var go = new GameObject(name);
+            go.transform.position = origin + new Vector3(i * 1.4f, 0f, 0f);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var f = CharacterFigure.BuildGenerated(go.transform, sh, CharacterFigure.Role.Civilian, true, false, null, null, outfit);
+            float ms = (float)sw.Elapsed.TotalMilliseconds;
+            var an = go.AddComponent<FigureAnimator>(); an.Grounded = true;
+            var d = go.GetComponent<ClothDangle>();
+            figs.Add((f, an, d));
+            var asset = f.Asset;
+            var sb = new StringBuilder();
+            for (int g = 0; g < asset.outfit.Count; g++) sb.Append($"{asset.outfit.garments[g].name} {asset.garmentTriangles[g]}, ");
+            Log($"{name}: {asset.triangles} tris (skin {asset.skinTriangles}, {sb}), chains {asset.chains.Count} x {(asset.chains.Count > 0 ? asset.chains[0].panels + " panels x " + asset.chains[0].bones + " bones" : "-")}; generated in {ms:0} ms");
+            yield return null;
+        }
+        bool built = figs.TrueForAll(x => x.d != null && x.f.Asset.chains.Count == 1);
+        Log(built ? "PASS the coat builds with its spring chains (6 panels x 3 bones)" : "FAIL no coat chains");
+        if (!built) yield break;
+
+        var (f0, a0, d0) = figs[0];
+        var cs = f0.Asset.chains[0];
+        int hem = cs.bones;
+        float Avg(System.Func<int, float> v) { float sum = 0f; for (int p = 0; p < cs.panels; p++) sum += v(p); return sum / cs.panels; }
+        // Hem joints relative to their rest: backward (-forward) and up.
+        float Back() => Avg(p => -Vector3.Dot(d0.DebugJoint(0, p, hem) - d0.DebugRest(0, p, hem), f0.transform.forward));
+        float Up() => Avg(p => d0.DebugJoint(0, p, hem).y - d0.DebugRest(0, p, hem).y);
+        float Dev() => Avg(p => (d0.DebugJoint(0, p, hem) - d0.DebugRest(0, p, hem)).magnitude);
+        int iFL = System.Array.FindIndex(cs.angles, x => Mathf.Abs(x + 30f) < 1f), iFR = System.Array.FindIndex(cs.angles, x => Mathf.Abs(x - 30f) < 1f);
+        float Opening() => (d0.DebugJoint(0, iFL, hem) - d0.DebugJoint(0, iFR, hem)).magnitude;
+        int inside = 0; string insideAt = "";
+        IEnumerator Run(float seconds, Vector3 v, float yaw = 0f)
+        {
+            foreach (var (f, an, d) in figs) an.Velocity = v;
+            for (float t = 0f; t < seconds; t += Time.deltaTime)
+            {
+                foreach (var (f, an, d) in figs)
+                {
+                    f.transform.position += v * Time.deltaTime;
+                    if (yaw != 0f) f.transform.Rotate(0f, yaw * Time.deltaTime / seconds, 0f);
+                }
+                yield return new WaitForEndOfFrame();   // (after the pose and the chains this frame)
+                foreach (var (f, an, d) in figs)
+                {
+                    int n = d.DebugInsideLegs(0, out string w);
+                    if (n > inside) { inside = n; insideAt = $"{f.name}, {an.CurrentPose}, v {an.Velocity}: {w}"; }
+                }
+            }
+        }
+        var cam = Camera.main; cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        var lg = new GameObject("CoatKey"); var l = lg.AddComponent<Light>(); l.type = LightType.Directional; l.intensity = 1.2f;
+        lg.transform.rotation = Quaternion.LookRotation(new Vector3(-0.4f, -0.5f, 0.8f));
+        Coroutine follow = null;
+        IEnumerator Shot(string n, Vector3 at, Vector3 from)
+        {
+            if (follow != null) StopCoroutine(follow);
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"coat_{n}.png"));
+            yield return null;
+            follow = StartCoroutine(Follow());
+        }
+        Vector3 Mid() => (figs[0].f.transform.position + figs[figs.Count - 1].f.transform.position) * 0.5f + Vector3.up * 0.85f;
+        // The camera stays on the group (chains only simulate near the camera and on screen).
+        IEnumerator Follow() { while (true) { cam.transform.SetPositionAndRotation(Mid() + new Vector3(-3.5f, 0.6f, 3.5f), Quaternion.LookRotation(new Vector3(3.5f, -0.6f, -3.5f))); yield return null; } }
+        follow = StartCoroutine(Follow());
+
+        yield return Run(1.5f, Vector3.zero);
+        float standDev = Dev(), standOpen = Opening();
+        Log($"standing: hem {standDev * 100f:0.0} cm off rest, front opening {standOpen * 100f:0.0} cm");
+        yield return Shot("front", Mid(), Mid() + new Vector3(0f, 0.2f, 4.6f));
+        yield return Shot("back", Mid(), Mid() + new Vector3(0.4f, 0.3f, -4.6f));
+        yield return Shot("side", figs[0].f.transform.position + Vector3.up * 0.85f, figs[0].f.transform.position + new Vector3(-2.6f, 0.4f, 0.4f));
+
+        // Run (forward = +z): the tails trail and the front opens.
+        yield return Run(0.8f, Vector3.forward * 5f);
+        float runBack = 0f, runOpen = 0f;
+        for (int k = 0; k < 20; k++) { yield return Run(0.05f, Vector3.forward * 5f); runBack = Mathf.Max(runBack, Back()); runOpen = Mathf.Max(runOpen, Opening()); }
+        yield return Shot("run", figs[0].f.transform.position + Vector3.up * 0.8f, figs[0].f.transform.position + new Vector3(-2.4f, 0.5f, 0.6f));
+        Log($"running 5 m/s: tails {runBack * 100f:0.0} cm behind rest, front opening up to {runOpen * 100f:0.0} cm (standing {standOpen * 100f:0.0})");
+        Log(runBack > 0.04f && runOpen > standOpen + 0.02f ? "PASS running: the tails trail and the front opens" : "FAIL coat doesn't react to running");
+
+        // Sudden stop: swings, then settles.
+        yield return Run(0.3f, Vector3.zero);
+        float swing = Dev();
+        yield return Run(1.8f, Vector3.zero);
+        float settled = Dev();
+        Log($"stop: hem {swing * 100f:0.0} cm off rest right after, {settled * 100f:0.0} cm after 2 s (standing {standDev * 100f:0.0})");
+        Log(settled < swing && settled < standDev + 0.03f ? "PASS the coat swings on a stop and settles" : "FAIL coat doesn't settle");
+
+        // Turn on the spot.
+        float turnMax = 0f;
+        for (int k = 0; k < 12; k++) { yield return Run(0.05f, Vector3.zero, 180f / 12f / 0.05f * 0.05f); turnMax = Mathf.Max(turnMax, Dev()); }
+        yield return Run(1.5f, Vector3.zero);
+        Log($"turn 180 deg in 0.6 s: hem swings {turnMax * 100f:0.0} cm off rest");
+
+        // Fall (the air rushes up): the skirt flares; then glide.
+        foreach (var (f, an, d) in figs) { an.Grounded = false; an.CurrentPose = FigureAnimator.Pose.Air; }
+        float flare = 0f;
+        for (float t = 0f; t < 1.2f; t += 0.05f) { yield return Run(0.05f, Vector3.down * Mathf.Min(25f, 9.8f * (t + 0.05f))); flare = Mathf.Max(flare, Up()); }
+        yield return Shot("fall", figs[0].f.transform.position + Vector3.up * 0.6f, figs[0].f.transform.position + new Vector3(-2.6f, 0.2f, 1.2f));
+        Log($"falling: hem rises up to {flare * 100f:0.0} cm above rest");
+        Log(flare > 0.05f ? "PASS falling flares the skirt up" : "FAIL no flare when falling");
+        foreach (var (f, an, d) in figs) an.CurrentPose = FigureAnimator.Pose.Glide;
+        yield return Run(1.2f, new Vector3(0f, -2f, 10f));
+        yield return Shot("glide", figs[0].f.transform.position + Vector3.up * 0.6f, figs[0].f.transform.position + new Vector3(-2.6f, 0.6f, 0.4f));
+        foreach (var (f, an, d) in figs) { an.Grounded = true; an.CurrentPose = FigureAnimator.Pose.Normal; }
+        Log($"legs: at most {inside} chain joints inside a leg (80% of its radius) on any frame {insideAt}");
+        Log(inside == 0 ? "PASS the legs never pass through the coat panels" : "FAIL chain joints inside the legs");
+        Log($"simulated chain sets last frame: {ClothDangle.Simulated}");
+        if (follow != null) StopCoroutine(follow);
+        Destroy(lg);
         FlyingVehicle.CameraOverride = false;
     }
 

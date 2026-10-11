@@ -222,8 +222,11 @@ public class CharacterFigure : MonoBehaviour
         f.armLength = plan.bones[plan.Index("ShoulderL")].length + plan.bones[plan.Index("ElbowL")].length + plan.bones[plan.Index("WristL")].length;
 
         // Renderers (meshes shared by every character using this body).
-        var bones = new Transform[sk.Bones.Count];
-        for (int i = 0; i < bones.Length; i++) bones[i] = sk.Bones[i].joint;
+        // Renderer bones: the skeleton's, then the skirts' spring-chain bones (ClothDangle).
+        var chainBones = ClothDangle.Attach(f, a);
+        var bones = new Transform[sk.Bones.Count + chainBones.Count];
+        for (int i = 0; i < sk.Bones.Count; i++) bones[i] = sk.Bones[i].joint;
+        for (int i = 0; i < chainBones.Count; i++) bones[sk.Bones.Count + i] = chainBones[i];
         var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed));
         var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", a.body, bones, sk.Hips, skin, shadows);
         bodyR.sharedMaterials = BodyMaterials.Clothes(a, role, colorSeed, skin);
@@ -312,6 +315,7 @@ public class CharacterFigure : MonoBehaviour
     {
         var sk = GetComponent<BodySkeleton>(); if (sk != null) DestroyImmediate(sk);
         var el = GetComponent<EyeLook>(); if (el != null) DestroyImmediate(el);
+        var cd = GetComponent<ClothDangle>(); if (cd != null) DestroyImmediate(cd);
         foreach (var r in Renderers)
             if (r != null && r.transform.parent == transform) DestroyImmediate(r.gameObject); // skinned renderers on the root
         if (Hips != null) DestroyImmediate(Hips.gameObject);

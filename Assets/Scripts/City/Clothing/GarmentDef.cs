@@ -55,6 +55,9 @@ public class GarmentDef
     [Tooltip("Hem: the cut's rounding radius (m).")]
     public float hemBlend = 0.004f;
 
+    [Header("Skirt (coats): below the hips one flared cone, the legs free inside; dangles on spring chains")]
+    public SkirtDef skirt;
+
     [Header("Mesh")]
     [Tooltip("Meshing grid cell (m) for the garment's surface.")]
     public float meshCell = 0.015f;
@@ -69,6 +72,7 @@ public class GarmentDef
     public int layer;
 
     public GarmentDef Clone() { var c = (GarmentDef)MemberwiseClone(); c.cuts = new List<GarmentCut>(cuts); return c; }
+    public bool HasSkirt => skirt != null && skirt.enabled;
 
     static readonly BoneKind[] Torso = { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest };
 
@@ -134,19 +138,58 @@ public class GarmentDef
     }
 
     // Long coat: torso to the knees, wide ease, heavy drape (Phase 7 adds the flare, slits and collar).
+    // Trench coat: worn over an outfit, to mid-shin, open down the front with lapels, a high collar, a
+    // flared skirt below the hips with side slits and a back vent, the skirt on spring chains.
     public static GarmentDef Coat() => new GarmentDef
     {
-        name = "Coat", layer = 2, slot = GarmentSlot.Outer, triangles = 3500, ease = 0.06f, thickness = 0.015f, hangLength = 0.3f, slope = 0.15f,
+        name = "Trench coat", layer = 2, slot = GarmentSlot.Outer, triangles = 4000, ease = 0.05f, thickness = 0.015f, hangLength = 0.3f, slope = 0.15f,
         fabric = Fabric.Wool, color = new Color(0.25f, 0.2f, 0.16f),
-        covers = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Neck, BoneKind.UpperArm, BoneKind.Forearm, BoneKind.Thigh },
-        drapeOn = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Thigh },
+        covers = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest, BoneKind.Neck, BoneKind.UpperArm, BoneKind.Forearm, BoneKind.Thigh, BoneKind.Shin },
+        drapeOn = new[] { BoneKind.Pelvis, BoneKind.Lumbar, BoneKind.Chest },
         cuts =
         {
-            GarmentCut.AtBone(BoneKind.Neck, 0.4f),
+            GarmentCut.AtBone(BoneKind.Neck, 0.7f),       // high collar (the ease stands it off the neck)
             GarmentCut.AtBone(BoneKind.Forearm, 0.9f),
-            GarmentCut.AtBone(BoneKind.Thigh, 0.95f),
+            GarmentCut.AtBone(BoneKind.Shin, 0.5f),       // mid-shin
         },
+        skirt = new SkirtDef { enabled = true },
     };
+}
+
+[Serializable]
+public class SkirtDef
+{
+    public bool enabled;
+    [Tooltip("Where the skirt leaves the body: this x the hip joints' height.")]
+    public float startAt = 1f;
+    [Tooltip("The cone's radius grows by this x the hip width per metre down.")]
+    public float flare = 0.25f;
+    [Tooltip("Front opening (m): full width at the hem, narrowing to the chest (the lapels nearly meet up top).")]
+    public float openingHem = 0.12f, openingChest = 0.06f;
+    [Tooltip("Lapels: the opening's edges thicken outward by this (m), over lapelWidth.")]
+    public float lapel = 0.012f, lapelWidth = 0.04f;
+    [Tooltip("Slits from the hem up to mid-thigh: angles round the body (deg, 0 = front, + = right), half width (m).")]
+    public float[] slitAngles = { -65f, 65f, 180f };
+    public float slitHalfWidth = 0.012f;
+    [Tooltip("Slit tops: this far from the knee to the hip (0.5 = mid-thigh).")]
+    public float slitTop = 0.5f;
+
+    [Header("Dangle (spring chains)")]
+    public int panels = 6;
+    public int bonesPerPanel = 3;
+    [Tooltip("Pull back toward the animated rest (1/s): at the ring and at the hem.")]
+    public float stiffnessRoot = 14f, stiffnessTip = 3f;
+    [Tooltip("Velocity kept per frame at 60 fps.")]
+    public float damping = 0.85f;
+    public float gravityScale = 1f;
+    [Tooltip("How strongly the air (wind minus the character's own motion) drags the panels.")]
+    public float drag = 1.6f;
+    [Tooltip("Furthest a segment swings from its rest direction (deg).")]
+    public float maxAngle = 70f;
+    [Tooltip("Keeps neighbouring panels together (0-1 per step).")]
+    public float neighbour = 0.25f;
+    [Tooltip("Simulated within this distance of the camera; beyond it the chains rest.")]
+    public float simDistance = 40f;
 }
 
 [Serializable]
@@ -171,7 +214,9 @@ public static class Wardrobe
             case CharacterFigure.Role.Player: return Outfit.Casual(false);
             default:
                 var r = new PcgRandom(seed, "outfit");
-                return Outfit.Casual(r.Value() < 0.35f);
+                var o = Outfit.Casual(r.Value() < 0.35f);
+                if (r.Value() < 0.3f) o.garments.Add(GarmentDef.Coat());   // the coat always goes over a casual outfit
+                return o;
         }
     }
 }
