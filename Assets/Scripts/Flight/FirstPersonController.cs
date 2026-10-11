@@ -155,6 +155,8 @@ public class FirstPersonController : MonoBehaviour
 
     CharacterController cc;
     float pitch;
+    [Tooltip("First person: how far (m, for a 1.5 m body) the eyes move forward when looking straight down.")]
+    public float lookDownForward = 0.07f;
     float verticalVelocity;
     int blockInteractFrame = -1;
     bool grounded;
@@ -418,8 +420,15 @@ public class FirstPersonController : MonoBehaviour
         PoseBody();
         // The eyes: just in front of the head's centre, wherever the posed head is now.
         if (Figure != null)
+        {
             // The gait's hip drop is damped: the eyes keep 30% of it (a full stride's dip reads as bouncing).
-            cameraRoot.position = Figure.EyePosition(transform.eulerAngles.y) + Vector3.up * ((Animator != null ? Animator.GaitDrop * 0.7f : 0f) + dip);
+            Vector3 eye = Figure.EyePosition(transform.eulerAngles.y) + Vector3.up * ((Animator != null ? Animator.GaitDrop * 0.7f : 0f) + dip);
+            // First person looking down: the eyes move forward clear of the chest (the bent neck would
+            // otherwise sink them into the shirt and you'd look out through the inside of the torso).
+            float down = Mathf.Clamp01(pitch / 75f) * (1f - Mathf.Clamp01(z * 4f));
+            eye += Quaternion.Euler(0f, transform.eulerAngles.y, 0f) * Vector3.forward * (lookDownForward * down * Figure.Height / CharacterFigure.DefaultHeight);
+            cameraRoot.position = eye;
+        }
 
         var cam = playerCamera.transform;
         if (cam.parent == cameraRoot)
@@ -500,6 +509,7 @@ public class FirstPersonController : MonoBehaviour
         var mode = show ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
         foreach (var r in bodyRenderers)
             if (r != null) r.shadowCastingMode = mode;
+        Figure?.SetFirstPerson(!show);
     }
 
     void CreateBlob()

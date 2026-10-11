@@ -143,6 +143,43 @@ public class CharacterFigure : MonoBehaviour
 
     public BodyAsset Asset { get; private set; }
 
+    // First person: the body mesh without what sits right at the camera (the collar and the neck skin,
+    // within FirstPersonCut x height of the neck's top), so looking down shows the chest and arms, not the
+    // inside of a collar. Built once per body asset, swapped in by SetFirstPerson.
+    public static float FirstPersonCut = 0.075f;
+    Mesh fpMesh; BodyAsset fpFor;
+    public void SetFirstPerson(bool on)
+    {
+        if (!Generated || Asset == null || Renderers.Count == 0 || !(Renderers[0] is SkinnedMeshRenderer smr)) return;
+        if (on && (fpMesh == null || fpFor != Asset)) { fpMesh = FirstPersonMesh(Asset); fpFor = Asset; }
+        smr.sharedMesh = on ? fpMesh : Asset.body;
+    }
+
+    static readonly Dictionary<BodyAsset, Mesh> fpCache = new Dictionary<BodyAsset, Mesh>();
+    static Mesh FirstPersonMesh(BodyAsset a)
+    {
+        if (fpCache.TryGetValue(a, out var cached) && cached != null) return cached;
+        var m = Instantiate(a.body);
+        m.name = a.body.name + " (first person)";
+        int neck = a.plan.Index("Neck");
+        Vector3 eye = Vector3.Lerp(a.plan.JointPos(neck), a.plan.BoneEnd(neck), 0.6f);
+        float r2 = Mathf.Pow(FirstPersonCut * a.height, 2f);
+        var v = m.vertices;
+        for (int s = 0; s < m.subMeshCount; s++)
+        {
+            var t = m.GetTriangles(s);
+            var keep = new List<int>(t.Length);
+            for (int i = 0; i < t.Length; i += 3)
+            {
+                if ((v[t[i]] - eye).sqrMagnitude < r2 || (v[t[i + 1]] - eye).sqrMagnitude < r2 || (v[t[i + 2]] - eye).sqrMagnitude < r2) continue;
+                keep.Add(t[i]); keep.Add(t[i + 1]); keep.Add(t[i + 2]);
+            }
+            m.SetTriangles(keep, s, false);
+        }
+        fpCache[a] = m;
+        return m;
+    }
+
     // Generate a body for this sheet right now (blocking; the pool generates without blocking) and
     // assemble it.
     public static CharacterFigure BuildGenerated(Transform root, CharacterSheet sheet, Role role, bool shadows = false, bool hitColliders = true,

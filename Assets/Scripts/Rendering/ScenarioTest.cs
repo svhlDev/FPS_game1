@@ -853,6 +853,66 @@ public partial class ScenarioTest : MonoBehaviour
             Log($"city: {near} generated characters near, {dressed} in garment meshes; pool filled: {(pool != null ? (!pool.Filling).ToString() : "-")}");
             Log(near > 0 && dressed == near ? "PASS near characters in the city wear garments" : "FAIL city characters undressed");
         }
+
+        // An ejected driver (pool body) and the player (their own body: first person looking down, third person).
+        FlyingVehicle withDriver = null;
+        foreach (var c in FlyingVehicle.Active) if (c.hasDriver && !c.IsOccupied && !c.Disabled) { withDriver = c; break; }
+        if (withDriver != null)
+        {
+            var npc = withDriver.EjectDriver(1);
+            yield return null;
+            var nf = npc != null ? npc.GetComponent<CharacterFigure>() : null;
+            bool ok = nf != null && nf.Generated && nf.Asset.outfit.Count > 0;
+            Log($"ejected driver: {(nf == null ? "none" : nf.Generated ? string.Join(", ", nf.Asset.outfit.garments.ConvertAll(g => g.name)) : "primitive figure")}");
+            Log(ok ? "PASS an ejected driver wears garments" : "FAIL ejected driver undressed");
+        }
+        var fpc = FirstPersonController.Instance;
+        if (fpc != null)
+        {
+            if (fpc.Figure == null || !fpc.Figure.Generated)
+            {
+                fpc.SetSheet(new CharacterSheet(Sex.Male, 10, 10, 10, 4242));
+                for (float t = 0f; t < 20f && fpc.BodyPending; t += Time.deltaTime) yield return null;
+            }
+            var pf = fpc.Figure;
+            bool pOk = pf != null && pf.Generated && pf.Asset.outfit.Count > 0;
+            Log($"player: {(pf != null && pf.Generated ? string.Join(", ", pf.Asset.outfit.garments.ConvertAll(g => g.name)) : "no generated body")}");
+            Log(pOk ? "PASS the player wears garments" : "FAIL player undressed");
+            var pcam = Camera.main;
+            fpc.AttachCamera(pcam);
+            FlyingVehicle.CameraOverride = false;
+            fpc.zoom.Snap(0f);
+            foreach (float pitch in new[] { 45f, 70f })
+            {
+                fpc.DebugLook(pitch, fpc.transform.eulerAngles.y);
+                for (int k = 0; k < 10; k++) yield return null;
+                yield return new WaitForEndOfFrame();
+                ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"dressed_player_fp_{pitch:0}.png"));
+                yield return null;
+                // Where the eye is: a marker, seen from the side by a second camera.
+                var eyeAt = pcam.transform.position;
+                var marker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                Destroy(marker.GetComponent<Collider>());
+                marker.transform.position = eyeAt; marker.transform.localScale = Vector3.one * 0.03f;
+                marker.GetComponent<Renderer>().sharedMaterial = CharacterFigure.Mat(Color.red);
+                var side = new GameObject("SideCam").AddComponent<Camera>();
+                Vector3 r = fpc.transform.right;
+                side.transform.SetPositionAndRotation(fpc.transform.position + Vector3.up * 1.3f + r * 1.4f, Quaternion.LookRotation(-r));
+                side.fieldOfView = 40f; side.depth = pcam.depth + 1;
+                var prevMode = fpc.Figure.Renderers[0] is SkinnedMeshRenderer sm0 ? sm0.sharedMesh : null;
+                yield return new WaitForEndOfFrame();
+                ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"dressed_player_fp_{pitch:0}_side.png"));
+                yield return null;
+                Log($"first person at {pitch:0} deg pitch: eye {fpc.transform.InverseTransformPoint(eyeAt)} (player space), camera fwd {fpc.transform.InverseTransformDirection(pcam.transform.forward)}");
+                Destroy(side.gameObject); Destroy(marker);
+            }
+            fpc.zoom.Snap(1f);
+            fpc.DebugLook(15f, fpc.transform.eulerAngles.y);
+            for (int k = 0; k < 10; k++) yield return null;
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, "dressed_player_third.png"));
+            yield return null;
+        }
     }
 
     // ---------- clothing phase 1: garment fields ----------
