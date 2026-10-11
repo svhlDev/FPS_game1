@@ -1,0 +1,46 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: RoadPaint_CCCCBF_City
+  m_Shader: {fileID: 4800000, guid: bc8d02351aacbc64ea5938a0c6a76f35, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 1
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs: []
+    m_Ints: []
+    m_Floats:
+    - _DetailScale: 1
+    - _DetailStrength: 0
+    - _EdgeSource: 1
+    - _EdgeWidth: 0.04
+    - _Flake: 0
+    - _Grime: 0.3
+    - _Metallic: 0
+    - _Sheen: 0
+    - _SmoothMax: 0.4
+    - _SmoothMin: 0.25
+    - _Space: 0
+    - _Type: 13
+    - _Wear: 0.6
+    m_Colors:
+    - _BaseColor: {r: 0.8, g: 0.8, b: 0.75, a: 1}
+    - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
+    - _SecondColor: {r: 0.06, g: 0.06, b: 0.07, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1
