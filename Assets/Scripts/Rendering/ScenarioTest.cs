@@ -77,6 +77,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "coat": yield return CoatTest(); break;
             case "lab": yield return LabTest(); break;
             case "heads": yield return HeadsTest(); break;
+            case "headsfat": yield return HeadsTest(LowDexRows(), false); break;
             case "facesanity": { bool ok = FaceSanity.Run(out string rep); foreach (var l in rep.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd()); yield return null; break; }
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
@@ -792,7 +793,22 @@ public partial class ScenarioTest : MonoBehaviour
         return rows.ConvertAll(r => r).ToArray();
     }
 
-    IEnumerator HeadsTest()
+    // Face Fix Part 0: the face sanity test's low-DEX heads (thick face fat: where the "tentacles" grew), rows of 4.
+    static List<(string label, CharacterSheet sheet)>[] LowDexRows()
+    {
+        var rows = new List<List<(string, CharacterSheet)>>();
+        foreach (var cs in FaceSanity.Cases())
+        {
+            if (cs.sheet.DEX > 7) continue;
+            var sh = cs.sheet;
+            string lbl = $"{(sh.sex == Sex.Male ? "M" : "F")} STR{sh.STR} INT{sh.INT} DEX{sh.DEX} s{sh.seed}";
+            if (rows.Count == 0 || rows[rows.Count - 1].Count == 4) rows.Add(new List<(string, CharacterSheet)>());
+            rows[rows.Count - 1].Add((lbl, sh));
+        }
+        return rows.ToArray();
+    }
+
+    IEnumerator HeadsTest(List<(string label, CharacterSheet sheet)>[] customRows = null, bool dressLast = true)
     {
         string dir = Path.GetDirectoryName(Application.dataPath);
         var origin = new Vector3(0f, 1500f, 0f);
@@ -804,7 +820,7 @@ public partial class ScenarioTest : MonoBehaviour
         var fill = new GameObject("HeadFill").AddComponent<Light>(); fill.type = LightType.Directional; fill.intensity = 0.35f;
         fill.transform.rotation = Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, 1f));
         var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(12f); }
-        var rows = HeadRows();
+        var rows = customRows ?? HeadRows();
         float totalMs = 0f; int built = 0, headTris = 0;
         for (int r = 0; r < rows.Length; r++)
         {
@@ -818,7 +834,7 @@ public partial class ScenarioTest : MonoBehaviour
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 // No outfit (the face and the wig read); the last row is dressed (a coat over a casual outfit).
                 var outfit = Outfit.None();
-                if (r == rows.Length - 1)
+                if (dressLast && r == rows.Length - 1)
                 {
                     outfit = Outfit.Casual(row[i].sheet.sex == Sex.Female);
                     if (row[i].sheet.sex == Sex.Female) outfit.garments.Add(GarmentDef.Coat());
