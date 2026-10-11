@@ -738,6 +738,27 @@ public partial class ScenarioTest : MonoBehaviour
     // Rows of heads, each row shot from the front and three-quarter: both sexes at DEX 1 / 10 / 20 (fat
     // softens the face), INT 1 / 20 (egg elongation), and (Part D) one part exaggerated per head through
     // the per-character face overrides. Neutral key + fill light, no outfit, so the face reads.
+    // Face Fix Part 1: a head's canon and how its mesh (rest pose) measures against it: crown, chin and
+    // width at the eye line (cm, mesh - canon), the eyes' height and spacing.
+    static string CanonReport(CharacterFigure f)
+    {
+        if (f == null || !f.Generated || f.Asset == null || f.Asset.head == null) return "no head";
+        var plan = f.Plan; int hi = plan.Index("Head");
+        var c = HeadCanon.From(plan, hi, plan.JointPos(hi), Vector3.right, Vector3.up, Vector3.forward);
+        var v = f.Asset.head.vertices;
+        float top = float.MinValue, chin = float.MaxValue, wid = 0f;
+        foreach (var p in v)
+        {
+            Vector3 d = p - c.o;
+            top = Mathf.Max(top, d.y);
+            if (Mathf.Abs(d.y) < 0.005f) wid = Mathf.Max(wid, Mathf.Abs(d.x));
+            if (d.z > c.halfD * 0.3f && Mathf.Abs(d.x) < c.halfW * 0.3f) chin = Mathf.Min(chin, d.y);
+        }
+        Vector3 em = (f.Asset.eyeL + f.Asset.eyeR) * 0.5f - c.o;
+        return $"{c}; mesh vs canon: crown {(top - c.crown) * 100f:+0.0;-0.0} cm, chin {(chin - c.chin) * 100f:+0.0;-0.0} cm, half width at eyes {(wid - c.halfW) * 100f:+0.0;-0.0} cm; " +
+               $"eyes {em.y * 100f:+0.0;-0.0} cm off the eye line, {(f.Asset.eyeR - f.Asset.eyeL).magnitude * 0.5f / c.eyeWidth:0.00} eye-widths from the midline; body {plan.height:0.00} m";
+    }
+
     public static List<(string label, CharacterSheet sheet)>[] HeadRows()
     {
         var rows = new List<List<(string, CharacterSheet)>>
@@ -808,6 +829,8 @@ public partial class ScenarioTest : MonoBehaviour
                 totalMs += (float)sw.Elapsed.TotalMilliseconds; built++;
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
+                HeadCanonOverlay.Attach(f);
+                Log($"  {lbl}: {CanonReport(f)}");
                 figs.Add(f);
                 yield return null;
             }
@@ -819,16 +842,25 @@ public partial class ScenarioTest : MonoBehaviour
                 foreach (var t in f.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
                 Vector3 c = hc != null ? hc.position : f.transform.position + Vector3.up * 1.6f;
                 Vector3 fwd = f.transform.forward, right = f.transform.right;
-                foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("34", c + fwd * 0.48f + right * 0.42f + Vector3.up * 0.04f),
-                                                     ("back", c - fwd * 0.75f + right * 0.25f - Vector3.up * 0.12f),
+                var ov = f.HeadJoint != null ? f.HeadJoint.GetComponent<HeadCanonOverlay>() : null;
+                // front / side with the canon (orthographic, so the lines and the head share one scale), the
+                // three-quarter, back and body views without.
+                foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("canon", c + fwd * 0.45f), ("side", c + right * 0.45f),
+                                                     ("34", c + fwd * 0.36f + right * 0.3f + Vector3.up * 0.03f),
+                                                     ("back", c - fwd * 0.5f + right * 0.2f - Vector3.up * 0.06f),
                                                      ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
                     Vector3 at = view == "body" ? c - Vector3.up * 0.75f : c;
+                    bool ortho = view == "canon" || view == "side";
+                    cam.orthographic = ortho; cam.orthographicSize = 0.17f;
+                    if (ov != null) ov.Show(view == "canon" ? HeadCanonOverlay.View.Front : view == "side" ? HeadCanonOverlay.View.Side : HeadCanonOverlay.View.Off);
                     cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
                     yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
                     ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_r{r}_{f.name.Replace(' ', '_')}_{view}.png"));
                     yield return null; yield return null;
                 }
+                cam.orthographic = false;
+                if (ov != null) ov.Show(HeadCanonOverlay.View.Off);
             }
         }
         // The face rig: wigs, eyelids, the jaw. Close the eyes and open every mouth, shoot the first row again.

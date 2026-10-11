@@ -51,6 +51,7 @@ public class BodySDF : IDisposable
     public float EggTop, EggBottom;
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
+    public HeadCanon Canon;                        // Face Fix Part 1: the proportions the face is built on
     public Bounds bounds;
     readonly float[] jointK;
     readonly int headIndex;
@@ -397,8 +398,10 @@ public class BodySDF : IDisposable
         var b = plan.bones[headIndex];
         var f = frames[headIndex];
         var dna = plan.dna;
-        float rx = b.Outer.y, ry = b.length * 0.5f, rz = b.Outer.y * 1.08f;
-        // INT elongation: longer up and toward the back of the skull.
+        // The canon (Face Fix Part 1): the face hangs from its lines; the eye line's centre is face space's origin.
+        Canon = HeadCanon.From(plan, headIndex, f.o, f.x, f.y, f.z);
+        float rx = Canon.halfW, ry = b.length * 0.5f, rz = Canon.halfD, hy = Canon.halfH;
+        // INT elongation: the cranium grows up and toward the back (the face stays on the canon).
         float el = dna != null ? dna.headElongation : 0f;
         Vector3 c = f.o + f.y * ry * (1f + el * 0.3f) - f.z * rz * el * 0.5f;
         skull = new Feature { f = new Frame { o = c, x = f.x, y = f.y, z = f.z }, r = new Vector3(rx, ry * (1f + el * 0.3f), rz * (1f + el * 0.6f)) };
@@ -407,12 +410,16 @@ public class BodySDF : IDisposable
         EggTop = SR.eggTop + SR.eggVariation * eggRng.Signed();
         EggBottom = SR.eggBottom + SR.eggVariation * eggRng.Signed();
         float skullRy = skull.r.y;
-        // Face space -> root space: fractions of the radii, x / z narrowed by the egg at that height.
+        Vector3 O = Canon.o;
+        float eggDy = Vector3.Dot(O - c, f.y);
+        // Face space -> root space: fractions of the half width / height / depth from the eye line's centre,
+        // x / z narrowed by the egg at that height.
         Vector3 FacePoint(Vector3 at)
         {
-            float s = BodySdfKernel.EggScale(at.y * ry, skullRy, EggBottom, EggTop);
-            return c + f.x * at.x * rx * s + f.y * at.y * ry + f.z * at.z * rz * s + f.z * rz * el * 0.5f;
+            float s = BodySdfKernel.EggScale(at.y * hy + eggDy, skullRy, EggBottom, EggTop);
+            return O + f.x * at.x * rx * s + f.y * at.y * hy + f.z * at.z * rz * s;
         }
+        float Anchor(FaceLine l) => Canon.Line(l) / hy;
         // Face parts (Head spec Part D): data in face space -> primitives in root space. Per part: the
         // sex's factors, the seed's variation (mirrored pairs share it, plus a little asymmetry each),
         // the DNA face scale, then the character's own overrides.
@@ -432,6 +439,7 @@ public class BodySDF : IDisposable
                 string inst = part.mirrored ? part.name + (side < 0 ? ".L" : ".R") : part.name;
                 var asym = new PcgRandom(plan.sheet.seed, "face." + inst);
                 Vector3 pos = part.position + dPos + V3(asym, part.positionVar) * faceDef.asymmetry + (female ? part.femaleOffset : Vector3.zero);
+                pos.y += Anchor(part.anchor);
                 Vector3 rot = part.rotationEuler + dRot + V3(asym, part.rotationVar) * faceDef.asymmetry;
                 Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy);
                 if (female) size = Vector3.Scale(size, part.femaleSize);
@@ -445,22 +453,24 @@ public class BodySDF : IDisposable
                 if (side < 0) { pos.x = -pos.x; rot.y = -rot.y; rot.z = -rot.z; }
                 var q = Quaternion.Euler(rot);
                 Vector3 r = part.shape == FacePartShape.Capsule || part.shape == FacePartShape.Sphere
-                    ? new Vector3(size.x * rx, size.x * rx, size.x * rx) : new Vector3(size.x * rx, size.y * ry, size.z * rz);
+                    ? new Vector3(size.x * rx, size.x * rx, size.x * rx) : new Vector3(size.x * rx, size.y * hy, size.z * rz);
                 faceParts.Add(new BodySdfKernel.FacePrim
                 {
                     o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
-                    halfLen = part.shape == FacePartShape.Capsule ? size.y * ry : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
+                    halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
                 });
                 FacePartNames.Add(inst);
             }
         }
-        EyeRadius = rx * SR.eyeRadius;
-        // The jaw hinges under the ears (face space), the mouth line from its part.
-        JawPivot = FacePoint(new Vector3(0f, -0.22f, -0.15f));
-        MouthCentre = FacePoint(new Vector3(0f, -0.483f, 1.0f));
+        // The eyes on the canon: on the eye line, one eye-width either side of the midline, canon size.
+        EyeRadius = Canon.eyeballRadius;
+        float ex = Canon.eyeSpacing / (rx * BodySdfKernel.EggScale(eggDy, skullRy, EggBottom, EggTop));   // (FacePoint narrows x)
+        EyeL = FacePoint(new Vector3(-ex, 0f, faceDef.eyeDepth));
+        EyeR = FacePoint(new Vector3(ex, 0f, faceDef.eyeDepth));
+        // The jaw hinges in front of the ears, a little above the nose base; the mouth line from its part.
+        JawPivot = FacePoint(new Vector3(0f, Anchor(FaceLine.NoseBase) + 0.12f, -0.15f));
+        MouthCentre = FacePoint(new Vector3(0f, Anchor(FaceLine.Mouth), 1.0f));
         for (int j = 0; j < FacePartNames.Count; j++) if (FacePartNames[j] == "MouthLine") MouthCentre = faceParts[j].o;
-        EyeL = FacePoint(new Vector3(-SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
-        EyeR = FacePoint(new Vector3(SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
     }
 
     void BuildBreasts()

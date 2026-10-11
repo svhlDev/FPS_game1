@@ -41,10 +41,6 @@ public class SdfRules
     public float armSpread = 38f;
     public float legSpread = 4f;
 
-    [Header("Eyes (fractions of the skull radii)")]
-    public float eyeRadius = 0.17f;
-    public Vector3 eyePosition = new Vector3(0.38f, 0.06f, 0.86f);
-
     [Header("Egg head (Head spec Part C): horizontal radii scale from eggBottom (jaw) to eggTop (cranium)")]
     public float eggTop = 1.08f;
     public float eggBottom = 0.78f;
