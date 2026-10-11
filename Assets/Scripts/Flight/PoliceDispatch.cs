@@ -213,7 +213,7 @@ public class PoliceDispatch : MonoBehaviour
     bool PoliceSees(Vector3 p, float range, out PoliceDriver seenBy)
     {
         float r2 = range * range;
-        foreach (var o in officers)
+        foreach (var o in officers.ToArray())
         {
             if (o == null) continue;
             Vector3 eye = o.transform.position + Vector3.up * 1.6f;
@@ -429,7 +429,7 @@ public class PoliceDispatch : MonoBehaviour
         }
 
         if (!seen)
-            foreach (var o in officers)
+            foreach (var o in officers.ToArray())
                 if (o != null && Sees(o.transform.position + Vector3.up * 1.6f)) { seen = true; witness = o.Home; break; }
         if (!seen)
             foreach (var u in units)
@@ -496,7 +496,7 @@ public class PoliceDispatch : MonoBehaviour
         Vector3 p = fpc.transform.position + Vector3.up * 1.2f;
         bool seen = PoliceSees(p, triggerRange, out var by);
         if (!seen)
-            foreach (var o in officers)
+            foreach (var o in officers.ToArray())
                 if (o != null && (o.transform.position - p).sqrMagnitude < 40f * 40f && LineOfSight(o.transform.position + Vector3.up * 1.4f, p)) { seen = true; break; }
         if (!seen) return;
         EnsureWanted(1, by);
@@ -628,7 +628,7 @@ public class PoliceDispatch : MonoBehaviour
         officers.RemoveAll(o => o == null || o.State == OfficerAgent.Phase.Return);
         CheckBrandishing();
         UpdateReports();
-        foreach (var o in officers)
+        foreach (var o in officers.ToArray())
         {
             o.ActionPose = o != cuffer ? FigureAnimator.Pose.Normal
                          : arrest == Arrest.Cuffing ? FigureAnimator.Pose.Cuffing
@@ -1003,9 +1003,11 @@ public class PoliceDispatch : MonoBehaviour
         // Weapons, while nobody has hands on the player.
         if (arrest != Arrest.None) return;
         Vector3 aim = p + Vector3.up * 1.2f;
-        foreach (var o in officers)
+        // (Snapshots: an officer can go down mid-loop, e.g. hit by another officer's shot, and
+        // OnOfficerDown takes it off the list.)
+        foreach (var o in officers.ToArray())
         {
-            if (o == null) continue;
+            if (o == null || !officers.Contains(o)) continue;
             if (ForceLevel != Force.None) o.AimAt(aim);
             if (ForceLevel == Force.NonLethal && !fpc.Stunned)
             {
@@ -1033,7 +1035,7 @@ public class PoliceDispatch : MonoBehaviour
             case Arrest.None:
             {
                 OfficerAgent nearest = null; float best = float.MaxValue;
-                foreach (var o in officers)
+                foreach (var o in officers.ToArray())
                 {
                     o.Goal = p; o.StopDistance = cuffRange; o.LookAt = p; o.SpeedOverride = null;
                     if (o.State != OfficerAgent.Phase.Foot || o.Staggered) continue;
@@ -1051,7 +1053,7 @@ public class PoliceDispatch : MonoBehaviour
             }
             case Arrest.Cuffing:
             {
-                foreach (var o in officers) { o.Goal = p; o.StopDistance = cuffRange; o.LookAt = p; o.SpeedOverride = null; }
+                foreach (var o in officers.ToArray()) { o.Goal = p; o.StopDistance = cuffRange; o.LookAt = p; o.SpeedOverride = null; }
                 if (cuffer == null || cuffer.Staggered || Flat(cuffer.transform.position - p).magnitude > resistDistance)
                 {
                     arrest = Arrest.None;
@@ -1120,7 +1122,7 @@ public class PoliceDispatch : MonoBehaviour
         Vector3 door = car.transform.position + rot * Vector3.right * sideSign * (car.BodyHalfExtents.x + 0.9f);
 
         cuffer.Goal = door; cuffer.StopDistance = 0.2f; cuffer.LookAt = null; cuffer.SpeedOverride = dragSpeed;
-        foreach (var o in officers) if (o != cuffer) { o.Goal = p; o.StopDistance = 2f; o.LookAt = p; o.SpeedOverride = null; }
+        foreach (var o in officers.ToArray()) if (o != cuffer) { o.Goal = p; o.StopDistance = 2f; o.LookAt = p; o.SpeedOverride = null; }
 
         // The player is pulled along just behind the officer.
         Vector3 want = cuffer.transform.position - cuffer.transform.forward * 0.8f;
@@ -1306,7 +1308,7 @@ public class PoliceDispatch : MonoBehaviour
 
     void ReturnOfficers()
     {
-        foreach (var o in officers) if (o != null) o.ReturnToUnit();
+        foreach (var o in officers.ToArray()) if (o != null) o.ReturnToUnit();
         officers.Clear();
         if (arrest != Arrest.None)
         {
