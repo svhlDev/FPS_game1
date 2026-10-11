@@ -145,7 +145,7 @@ public struct BodySdfKernel : IDisposable
         float ax = Mathf.Abs(u.x);
         float G(float x) => Mathf.Exp(-x * x);
         float front = Mathf.Clamp01(u.z * 2f + 0.6f);
-        float cheeks = G((ax - 0.5f) / 0.28f) * G((u.y + 0.38f) / 0.28f) * front;
+        float cheeks = G((ax - 0.36f) / 0.2f) * G((u.y + 0.15f) / 0.2f) * front;   // under the eyes, toward the nose
         float jowls = G((ax - 0.45f) / 0.3f) * G((u.y + 0.72f) / 0.22f);
         float chin = G(ax / 0.55f) * G((u.y + 0.92f) / 0.25f);
         float pool = Mathf.Max(cheeks, Mathf.Max(jowls, chin));

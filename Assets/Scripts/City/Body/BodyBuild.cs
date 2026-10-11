@@ -472,15 +472,17 @@ public class BodyBuild
         int pelvisBone = plan.Index("Hips");
         var T = tris.ToArray(); var CT = ctris.ToArray();
         int ng = fields.Count;
-        faceMarks = BodySurfaceBake.FaceMarks.From(sdf);
+        wigStyle = WigBuilder.Pick(sheet);
+        faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
+        var browPrims = new List<BodySdfKernel.FacePrim>();
+        for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow")) browPrims.Add(sdf.FacePrims[j]);
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre;
         var kernelCopy = sdf.Kernel;
-        wigStyle = WigBuilder.Pick(sheet);
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
         task = Task.Run(() =>
         {
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
-            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, out wigV, out wigN, out wigT);
+            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT);
         });
         CurrentStage = Stage.Split;
     }
@@ -571,24 +573,45 @@ public class BodyBuild
             var mk = head.bake.uv4[i];
             head.bake.uv4[i] = new Vector3(mk.x, Mathf.Max(mk.y, Mathf.Clamp01(lip)), mk.z);
         }
+        // The bridging triangles get their own copies of their vertices (dark: the inside of the mouth), so
+        // the lips next to them never darken; closed, every bridging vertex sits on the mouth line (the
+        // band has no area: nothing dark shows), and the jaw opens it.
         var ht = head.subs[0];
+        var dup = new Dictionary<int, int>();
+        var V2 = new List<Vector3>(head.v); var N2 = new List<Vector3>(head.n); var R2 = new List<Vector2>(head.r); var L2 = new List<Vector2>(head.l);
+        var W2 = new List<BoneWeight>(head.w); var C2 = new List<Color>(head.bake.colors); var U0 = new List<Vector2>(head.bake.uv0);
+        var U3 = new List<Vector3>(head.bake.uv3); var U4 = new List<Vector3>(head.bake.uv4);
+        var bridge = new HashSet<int>();
         for (int k2 = 0; k2 + 2 < ht.Count; k2 += 3)
         {
             int a = ht[k2], b = ht[k2 + 1], c = ht[k2 + 2];
             bool mouthTri = inM[a] > 0.5f && inM[b] > 0.5f && inM[c] > 0.5f;
             float lo = Mathf.Min(wjs[a], Mathf.Min(wjs[b], wjs[c])), hi = Mathf.Max(wjs[a], Mathf.Max(wjs[b], wjs[c]));
             if (!mouthTri || hi - lo < 0.5f) continue;
-            foreach (int v in new[] { a, b, c }) { var mk = head.bake.uv4[v]; head.bake.uv4[v] = new Vector3(mk.x, mk.y, 0.9f); inM[v] = 2f; }
+            for (int q = 0; q < 3; q++)
+            {
+                int v = ht[k2 + q];
+                bridge.Add(v);
+                if (!dup.TryGetValue(v, out int nvx))
+                {
+                    nvx = V2.Count; dup[v] = nvx;
+                    V2.Add(V2[v]); N2.Add(N2[v]); R2.Add(R2[v]); L2.Add(L2[v]); W2.Add(W2[v]); C2.Add(C2[v]); U0.Add(U0[v]); U3.Add(U3[v]);
+                    U4.Add(new Vector3(U4[v].x, 0f, 1f));
+                }
+                ht[k2 + q] = nvx;
+            }
         }
-        // Closed, the lips meet: the bridging vertices are pulled most of the way to the mouth line, so the
-        // dark inside is a thin line until the jaw drops.
-        for (int i = 0; i < head.v.Length; i++)
+        foreach (int v in new List<int>(bridge)) U4[v] = new Vector3(U4[v].x, U4[v].y, 0f);   // the originals: lip, not inside
+        foreach (int v in dup.Values) bridge.Add(v);
+        for (int i = 0; i < V2.Count; i++)
         {
-            if (inM[i] < 1.5f) continue;
-            float dy = Vector3.Dot(head.v[i] - mouthCentre, skullCopy.y);
-            head.v[i] -= skullCopy.y * (dy * 0.75f);
-            head.bake.uv3[i] = head.v[i];
+            if (!bridge.Contains(i)) continue;
+            float dy = Vector3.Dot(V2[i] - mouthCentre, skullCopy.y);
+            V2[i] -= skullCopy.y * dy;
+            U3[i] = V2[i];
         }
+        head.v = V2.ToArray(); head.n = N2.ToArray(); head.r = R2.ToArray(); head.l = L2.ToArray(); head.w = W2.ToArray();
+        var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); head.bake = hb;
         bodyParts = body; headParts = head;
     }
 

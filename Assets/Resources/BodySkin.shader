@@ -20,6 +20,7 @@ Shader "FPS/BodySkin"
         _ScatterStrength ("Scatter strength", Range(0, 2)) = 0.9
         _PoreStrength ("Pore / micro relief strength", Range(0, 3)) = 1
         _Redness ("Redness (knuckles, nose, ears, creases)", Range(0, 1)) = 0.6
+        _HairColor ("Hair colour (scalp stubble)", Color) = (0.08, 0.06, 0.05, 1)
     }
 
     SubShader
@@ -33,6 +34,7 @@ Shader "FPS/BodySkin"
             half _Smoothness, _Wrap, _ScatterStrength;
             half4 _ScatterColor;
             half _PoreStrength, _Redness;
+            half4 _HairColor;
         CBUFFER_END
         ENDHLSL
 
@@ -128,9 +130,10 @@ Shader "FPS/BodySkin"
                 half4 vc = dot(i.color, 1.0) > 3.99 ? half4(0, 0, 0, 0) : i.color;
                 albedo = lerp(albedo, albedo * half3(1.18, 0.78, 0.76), vc.a * _Redness);
                 albedo *= 1.0h - vc.g * 0.25h;
-                // Brows (dark, hair-like), lips (rosier, a little glossier), the mouth's inside (dark red).
+                // Scalp stubble (short hair in the hair colour, speckled), lips (rosier), the mouth's inside (dark red).
                 half3 mk = saturate(i.marks);
-                albedo = lerp(albedo, albedo * 0.22h + half3(0.02h, 0.015h, 0.01h), mk.x * 0.9h);
+                float stubbleFine = lerp(0.5, VNoise(i.restPos * 1100.0), DetailFade(i.restPos, 1100.0));
+                albedo = lerp(albedo, _HairColor.rgb * lerp(0.75h, 1.15h, (half)stubbleFine), mk.x * lerp(0.55h, 0.9h, (half)stubbleFine));
                 albedo = lerp(albedo, albedo * half3(1.08h, 0.66h, 0.66h), mk.y * 0.75h);
                 albedo = lerp(albedo, half3(0.09h, 0.02h, 0.02h), mk.z);
 

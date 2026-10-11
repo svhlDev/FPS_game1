@@ -277,7 +277,7 @@ public class CharacterFigure : MonoBehaviour
             f.Jaw = jaw;
         }
         for (int i = 0; i < bones.Length; i++) if (bones[i] == null) bones[i] = sk.Hips;
-        var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed));
+        var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed), BodyMaterials.HairColour(a.sheet.seed));
         var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", a.body, bones, sk.Hips, skin, shadows);
         bodyR.sharedMaterials = BodyMaterials.Clothes(a, role, colorSeed, skin);
         var headR = BodySkinner.AddRenderer(root, "HeadMesh", a.head, bones, sk.Hips, skin, shadows);
@@ -323,13 +323,17 @@ public class CharacterFigure : MonoBehaviour
         face.Jaw = f.Jaw;
         foreach (var eye in new[] { f.EyeL, f.EyeR })
         {
+            // The socket: at the eyeball, rolled so the outer corner sits a little higher (almond tilt).
+            var socket = new GameObject(eye.name + "Lids").transform;
+            socket.SetParent(sk.Head, false);
+            socket.localPosition = eye.localPosition;
+            socket.localRotation = Quaternion.Euler(0f, 0f, eye == f.EyeL ? -7f : 7f);
             Transform Lid(string n, bool upper)
             {
                 var go = new GameObject(n);
                 go.layer = layer;
-                go.transform.SetParent(sk.Head, false);
-                go.transform.localPosition = eye.localPosition;
-                go.AddComponent<MeshFilter>().sharedMesh = FaceAnimator.LidMesh(er * 1.18f, upper);
+                go.transform.SetParent(socket, false);
+                go.AddComponent<MeshFilter>().sharedMesh = FaceAnimator.LidMesh(er * 1.14f, upper);
                 var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = skin;
                 r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 f.FaceRenderers.Add(r);

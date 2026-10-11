@@ -10,8 +10,8 @@ using UnityEngine;
 //           g  cavities and fold valleys (concave curvature): grime, darker folds, skin creases
 //           b  contact shadow: garment near its hems, skin just outside each cuff / hem / collar
 //           a  skin redness: knuckles, nose, ears, lips (convex head / hand parts) and creases
-//   uv4     (head skin) brow, lip, mouth-interior masks from the face parts: brows darkened like hair,
-//           lips tinted, the mouth line dark inside (it shows when the jaw opens)
+//   uv4     (head skin) x: scalp stubble (short hair coloured on the skin the wig leaves bare: nape,
+//           sides; none on bald heads), y: lips (tinted), z: the inside of the mouth (BodyBuild)
 //   uv0     x  distance (m) to the garment's nearest hem / cuff / opening (stitching runs ~1 cm in)
 //           y  side-seam coordinate: the rest normal's z where the normal points sideways (seam where
 //              it crosses 0), else 1
@@ -26,9 +26,11 @@ public static class BodySurfaceBake
     {
         public readonly List<BodySdfKernel.FacePrim> prims = new List<BodySdfKernel.FacePrim>();
         public readonly List<byte> kinds = new List<byte>();
-        public static FaceMarks From(BodySDF sdf)
+        public BodySdfKernel.Ellipsoid skull;
+        public bool stubble;            // the scalp gets short hair (not on bald heads)
+        public static FaceMarks From(BodySDF sdf, WigStyle wig)
         {
-            var m = new FaceMarks();
+            var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None };
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {
                 string n = sdf.FacePartNames[i];
@@ -128,15 +130,21 @@ public static class BodySurfaceBake
             for (int i = 0; i < nv; i++)
             {
                 if (sub[i] != 0) continue;
-                float brow = 9f, lip = 9f, mouth = 9f;
+                float lip = 9f;
                 for (int j = 0; j < face.prims.Count; j++)
+                    if (face.kinds[j] == 2) lip = Mathf.Min(lip, Mathf.Max(0f, BodySdfKernel.FaceDist(face.prims[j], v[i])));
+                // Scalp: outside the face window (the same ellipse as the wigs' hairline), down to a nape line.
+                float stub = 0f;
+                if (face.stubble)
                 {
-                    float d = Mathf.Max(0f, BodySdfKernel.FaceDist(face.prims[j], v[i]));
-                    if (face.kinds[j] == 1) brow = Mathf.Min(brow, d); else if (face.kinds[j] == 2) lip = Mathf.Min(lip, d); else mouth = Mathf.Min(mouth, d);
+                    var sk = face.skull;
+                    Vector3 l = sk.ToLocal(v[i]);
+                    Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
+                    float window = Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y + 0.2f) / 0.78f).magnitude);
+                    stub = Mathf.Clamp01(-window / 0.06f) * Mathf.Clamp01((u.y + 0.62f) / 0.1f);
                 }
-                // The parts lie under the face fat: the skin over them is a few mm out.
-                res.uv4[i] = new Vector3(1f - Mathf.SmoothStep(0f, 1f, (brow - 0.003f) / 0.005f), 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f),
-                                         1f - Mathf.SmoothStep(0f, 1f, (mouth - 0.003f) / 0.005f));
+                // The lips lie under a little fat: the skin over them is a few mm out.
+                res.uv4[i] = new Vector3(stub, 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f), 0f);
             }
         }
         return res;

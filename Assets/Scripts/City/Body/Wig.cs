@@ -32,10 +32,19 @@ public static class WigBuilder
 
     // The wig's mesh in the head joint's space (its rest frame is unrotated: subtract the joint's rest
     // position). k: the body's kernel (the egg: skull frame, radii, egg scales). Safe on a worker thread.
-    public static bool Build(BodySdfKernel k, WigStyle style, int seed, Vector3 headJoint, out Vector3[] verts, out Vector3[] normals, out int[] tris)
+    public static bool Build(BodySdfKernel k, WigStyle style, int seed, Vector3 headJoint, IList<BodySdfKernel.FacePrim> brows,
+                             out Vector3[] verts, out Vector3[] normals, out int[] tris)
     {
         verts = null; normals = null; tris = null;
-        if (style == WigStyle.None) return false;
+        var bv = new List<Vector3>(); var bn = new List<Vector3>(); var bt = new List<int>();
+        if (brows != null && brows.Count > 0) BuildBrows(k, brows, seed, bv, bn, bt);
+        if (style == WigStyle.None)
+        {
+            if (bt.Count == 0) return false;
+            verts = new Vector3[bv.Count]; normals = bn.ToArray(); tris = bt.ToArray();
+            for (int i = 0; i < bv.Count; i++) verts[i] = bv[i] - headJoint;
+            return true;
+        }
         var sk = k.skull;
         Vector3 R = sk.r;
         var rng = new PcgRandom(seed, "wigShape");
@@ -120,7 +129,7 @@ public static class WigBuilder
                     grid[x + nx * (y + ny * z)] = Sdf(lo + new Vector3(x, y, z) * Cell);
         var v = new List<Vector3>(); var t = new List<int>();
         SurfaceNets.Extract(grid, nx, ny, nz, lo, Cell, v, t);
-        if (t.Count == 0) return false;
+        if (t.Count == 0 && bt.Count == 0) return false;
         if (t.Count / 3 > TargetTriangles)
         {
             var imp = new float[v.Count]; for (int i = 0; i < imp.Length; i++) imp[i] = 1f;
@@ -141,7 +150,76 @@ public static class WigBuilder
             verts[i] = origin + sk.x * l.x + sk.y * l.y + sk.z * l.z;
             normals[i] = (sk.x * nl.x + sk.y * nl.y + sk.z * nl.z).normalized;
         }
-        tris = t.ToArray();
+        // Append the brows (root space -> head joint space).
+        var allV = new List<Vector3>(verts); var allN = new List<Vector3>(normals); var allT = new List<int>(t);
+        int o0 = allV.Count;
+        for (int i = 0; i < bv.Count; i++) { allV.Add(bv[i] - headJoint); allN.Add(bn[i]); }
+        foreach (int i in bt) allT.Add(o0 + i);
+        verts = allV.ToArray(); normals = allN.ToArray(); tris = allT.ToArray();
         return true;
+    }
+
+    // Brows as hair: along each brow part, a flattened tapering ridge just on the skin (thicker at the
+    // inner end), its surface broken into fine strands by noise; meshed on a 1.5 mm grid. Root space.
+    public const float BrowCell = 0.0015f;
+    static void BuildBrows(BodySdfKernel k, IList<BodySdfKernel.FacePrim> brows, int seed, List<Vector3> outV, List<Vector3> outN, List<int> outT)
+    {
+        var segs = new List<(Vector3 a, Vector3 b, Vector3 n, float rIn, float rOut)>();
+        var bounds = new Bounds();
+        bool any = false;
+        foreach (var f in brows)
+        {
+            Vector3 a = f.o - f.y * f.halfLen, b = f.o + f.y * f.halfLen;
+            // Inner end first (nearer the face's midline).
+            if (Mathf.Abs(Vector3.Dot(a - k.skull.o, k.skull.x)) > Mathf.Abs(Vector3.Dot(b - k.skull.o, k.skull.x))) { var tmp = a; a = b; b = tmp; }
+            Vector3 n = (f.o - k.skull.o).normalized;
+            // Onto the skin: out by how deep the part lies under it.
+            float depthA = Mathf.Max(0f, -k.Skin(a)), depthB = Mathf.Max(0f, -k.Skin(b));
+            a += n * (depthA + 0.0008f); b += n * (depthB + 0.0008f);
+            float r = Mathf.Clamp(f.r.x * 0.55f, 0.0022f, 0.0045f);
+            segs.Add((a, b, n, r, r * 0.45f));
+            var e = new Bounds(a, Vector3.one * 0.016f); e.Encapsulate(new Bounds(b, Vector3.one * 0.016f));
+            if (!any) { bounds = e; any = true; } else bounds.Encapsulate(e);
+        }
+        if (!any) return;
+        float Sdf(Vector3 p)
+        {
+            float d = 1f;
+            foreach (var s in segs)
+            {
+                Vector3 ab = s.b - s.a; float h = Mathf.Clamp01(Vector3.Dot(p - s.a, ab) / ab.sqrMagnitude);
+                Vector3 q = p - (s.a + ab * h);
+                float qn = Vector3.Dot(q, s.n);
+                Vector3 qt = q - s.n * qn;
+                float r = Mathf.Lerp(s.rIn, s.rOut, h);
+                d = Mathf.Min(d, new Vector2(qt.magnitude, qn * 2.2f).magnitude - r);
+            }
+            // Strands: fine noise stretched along the brow (the hairs lie outward along it).
+            d += (Pcg.Noise3(p * 900f, seed + 31) - 0.5f) * 0.0012f;
+            return d;
+        }
+        Vector3 lo = bounds.min;
+        int nx = Mathf.CeilToInt(bounds.size.x / BrowCell) + 1, ny = Mathf.CeilToInt(bounds.size.y / BrowCell) + 1, nz = Mathf.CeilToInt(bounds.size.z / BrowCell) + 1;
+        var grid = new float[nx * ny * nz];
+        for (int z = 0; z < nz; z++)
+            for (int y = 0; y < ny; y++)
+                for (int x = 0; x < nx; x++)
+                    grid[x + nx * (y + ny * z)] = Sdf(lo + new Vector3(x, y, z) * BrowCell);
+        var v = new List<Vector3>(); var t = new List<int>();
+        SurfaceNets.Extract(grid, nx, ny, nz, lo, BrowCell, v, t);
+        if (t.Count / 3 > 900)
+        {
+            var imp = new float[v.Count]; for (int i = 0; i < imp.Length; i++) imp[i] = 1f;
+            MeshDecimator.Run(v, t, imp, 900, out var dv, out var dt, out _);
+            v = dv; t = dt;
+        }
+        foreach (var p in v)
+        {
+            const float h = 0.0006f;
+            Vector3 g = new Vector3(Sdf(p + new Vector3(h, 0, 0)) - Sdf(p - new Vector3(h, 0, 0)), Sdf(p + new Vector3(0, h, 0)) - Sdf(p - new Vector3(0, h, 0)),
+                                    Sdf(p + new Vector3(0, 0, h)) - Sdf(p - new Vector3(0, 0, h)));
+            outV.Add(p); outN.Add(g.sqrMagnitude > 1e-14f ? g.normalized : Vector3.up);
+        }
+        outT.AddRange(t);
     }
 }

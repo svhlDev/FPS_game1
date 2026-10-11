@@ -34,6 +34,17 @@ public static class BodyMaterials
 
     public static Color SkinTone(int seed) => SkinTones[new PcgRandom(seed, "skinTone").Range(0, SkinTones.Length)];
 
+    // Skin with a hair colour (the scalp's stubble): one material per tone and hair colour.
+    static readonly Dictionary<(Color, Color), Material> hairSkins = new Dictionary<(Color, Color), Material>();
+    public static Material Skin(Color tone, Color hair)
+    {
+        if (hairSkins.TryGetValue((tone, hair), out var m) && m != null) return m;
+        m = new Material(Skin(tone)) { name = $"Skin {ColorUtility.ToHtmlStringRGB(tone)} hair {ColorUtility.ToHtmlStringRGB(hair)}" };
+        m.SetColor("_HairColor", hair);
+        hairSkins[(tone, hair)] = m;
+        return m;
+    }
+
     public static Material Skin(Color tone)
     {
         if (skins.TryGetValue(tone, out var m) && m != null) return m;
