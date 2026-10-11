@@ -26,6 +26,8 @@ public class TimeOfDay : MonoBehaviour
     [Range(0f, 24f)] public float startHour = 22f;
     [Tooltip("T skips this many hours (testing).")]
     public float skipHours = 3f;
+    [Tooltip("Hold the clock (the Material Lab's presets).")]
+    public bool freeze;
     public Vector2 dawn = new Vector2(5f, 7f), dusk = new Vector2(18f, 20f);
 
     [System.Serializable]
@@ -179,7 +181,7 @@ public class TimeOfDay : MonoBehaviour
     {
         var kb = Keyboard.current;
         if (kb != null && kb.tKey.wasPressedThisFrame) Hour = Mathf.Repeat(Hour + skipHours, 24f);
-        Hour = Mathf.Repeat(Hour + Time.deltaTime * 24f / Mathf.Max(0.01f, dayMinutes * 60f), 24f);
+        if (!freeze) Hour = Mathf.Repeat(Hour + Time.deltaTime * 24f / Mathf.Max(0.01f, dayMinutes * 60f), 24f);
         Apply();
     }
 

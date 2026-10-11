@@ -75,6 +75,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "garments": yield return GarmentsTest(); break;
             case "dressed": yield return DressedTest(); break;
             case "coat": yield return CoatTest(); break;
+            case "lab": yield return LabTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
@@ -620,6 +621,43 @@ public partial class ScenarioTest : MonoBehaviour
         foreach (var g in lights) Destroy(g);
         FlyingVehicle.CameraOverride = false;
     }
+
+    // ---------- graphics: the Material Lab ----------
+
+    IEnumerator LabTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var lab = MaterialLab.Instance;
+        if (lab == null) { Log("FAIL not in the Material Lab scene"); yield break; }
+        yield return new WaitForSeconds(1.5f);
+        int chars = lab.characterRow != null ? lab.characterRow.childCount : 0;
+        Log($"lab: {MaterialLabPresetCount()} material rows, {chars} characters, {lab.neon.Count} orbiting neon lights, {GraphicsFeatures.All.Count} feature toggles: {string.Join(", ", System.Linq.Enumerable.Select(GraphicsFeatures.All, f => f.name))}");
+        Log(chars >= 4 && lab.neon.Count > 0 && GraphicsFeatures.All.Count > 0 ? "PASS the lab has its exhibits, lights and toggles" : "FAIL lab incomplete");
+        var cam = Camera.main;
+        IEnumerator Shot(string n)
+        {
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"lab_{n}.png"));
+            yield return null; yield return null;
+        }
+        void View(Vector3 at, Vector3 from) => cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
+        Vector3 rows = new Vector3(0f, 0.6f, 2f), people = lab.characterRow.position + new Vector3(-2.6f, 1f, 0f);
+        foreach (MaterialLab.Preset pr in System.Enum.GetValues(typeof(MaterialLab.Preset)))
+        {
+            lab.SetPreset(pr);
+            yield return new WaitForSeconds(0.3f);
+            View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot(pr + "_materials");
+            View(people, people + new Vector3(0.5f, 0.6f, -5f)); yield return Shot(pr + "_people");
+        }
+        lab.SetPreset(MaterialLab.Preset.NightNeon);
+        lab.SetWet(true); View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot("wet"); lab.SetWet(false);
+        GraphicsFeatures.Set("Post-processing", false); yield return Shot("post_off"); GraphicsFeatures.Set("Post-processing", true);
+        View(new Vector3(0f, 5f, 38f), new Vector3(-18f, 8f, 10f)); yield return Shot("facade_road");
+        lab.focus.position = rows; View(rows, rows + new Vector3(0f, 2f, -12f)); lab.SetDistance(120f); yield return Shot("far_120m");
+        Log("lab screenshots: presets x (materials, people), wet, post off, facade + road, 120 m");
+    }
+
+    static int MaterialLabPresetCount() { var m = GameObject.Find("Materials"); return m != null ? m.transform.childCount : 0; }
 
     // ---------- clothing part B: the trench coat ----------
 

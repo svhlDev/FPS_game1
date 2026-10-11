@@ -31,6 +31,7 @@ public static class BuildScript
             TwinTowersBuilder.Build();
             SkyAvenueBuilder.Build();
             DistrictBuilder.Build();
+            MaterialLabBuilder.Build();
         }
         catch (System.Exception e)
         {
