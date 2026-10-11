@@ -391,13 +391,14 @@ public partial class ScenarioTest : MonoBehaviour
 
         // 4. Fire pooling on a car ignites it: pour onto the player's (stopped, repaired) car.
         car.Health.Init(car.Health.maxHealth);
-        car.DebugPlace(car.transform.position, car.transform.rotation, Vector3.zero);
-        for (int i = 0; i < 4; i++)
+        // Held still (the AI would drive off with it: the chunks take ~0.6 s to fall onto a 4 m roof).
+        Vector3 holdPos = car.transform.position; Quaternion holdRot = car.transform.rotation;
+        for (float t = 0f, next = 0f; t < 3f; t += Time.deltaTime)
         {
-            FireSystem.Spray(car.transform.position + Vector3.up * 5f, Vector3.zero, 3, 0.3f, 1.2f);
-            yield return new WaitForSeconds(0.25f);
+            car.DebugPlace(holdPos, holdRot, Vector3.zero);
+            if (t >= next && next < 1f) { FireSystem.Spray(holdPos + Vector3.up * (car.BodyHalfExtents.y + 1.5f), Vector3.zero, 3, 0.1f, 0.4f); next += 0.25f; }
+            yield return null;
         }
-        yield return new WaitForSeconds(2f);
         Log($"poured fire on the player's car: burning {car.Health.Burning}, health {car.Health.Fraction:P0}, player still driving {FlyingVehicle.Driven == car}");
         Log(car.Health.Burning ? "PASS fire pooled on a car ignites it" : car.Health.Fraction < 0.99f ? "WARN fire hurt the car but didn't ignite it" : "FAIL fire did nothing");
         yield return ShotAt("burning", car.transform.position, car.transform.position + new Vector3(10f, 5f, 10f));

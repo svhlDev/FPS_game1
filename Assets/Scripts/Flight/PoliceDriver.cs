@@ -87,7 +87,15 @@ public class PoliceDriver : MonoBehaviour
 
     void Awake() => Car = GetComponent<FlyingVehicle>();
     void OnEnable() => PoliceDispatch.Register(this);
-    void OnDisable() => PoliceDispatch.Unregister(this);
+    void OnDisable() { PoliceDispatch.Unregister(this); StopLaser(); }
+
+    // The laser only lives while PoliceDispatch drives it each frame: a unit dropped from the pursuit
+    // (force level down, target changed, sent home) must not leave its beam hanging in the air.
+    void LateUpdate()
+    {
+        if (laser != null && laser.enabled && laserFrame < Time.frameCount) StopLaser();
+    }
+    int laserFrame = -1;
 
     public void Pursue()
     {
@@ -269,6 +277,7 @@ public class PoliceDriver : MonoBehaviour
     // at laserTrackRate, and damages it only while the beam's ray actually hits it.
     public void UpdateLaser(FlyingVehicle target)
     {
+        laserFrame = Time.frameCount;
         float dt = Time.deltaTime;
         Vector3 origin = transform.position + Vector3.up * (Car.BodyHalfExtents.y + 0.3f);
         Vector3 to = target.transform.position - origin;

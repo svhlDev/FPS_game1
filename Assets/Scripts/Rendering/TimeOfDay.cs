@@ -12,8 +12,9 @@ using UnityEngine.Rendering.Universal;
 // the smog's low / high colours (HeightFogSettings), the cloud deck, the facades' lit-window scale
 // (_LitFraction), neon / sign / hologram emission, and the post volume (exposure, split toning).
 // Night: dark, blue-green fog, the neon and windows carry the light. Day: flat overcast grey.
-// Materials are found by shader in the scene's renderers and restored when this is destroyed (in the
-// editor, play mode would otherwise leave the assets changed).
+// Materials are found by shader in the scene's renderers. In the editor they're swapped for copies
+// for the session (writing to the assets would leave them changed and dirty after play mode); in a
+// build the shared materials are driven directly.
 [DefaultExecutionOrder(-50)]
 public class TimeOfDay : MonoBehaviour
 {
@@ -118,6 +119,7 @@ public class TimeOfDay : MonoBehaviour
                 else if (m.name.StartsWith("Neon") && m.HasProperty(BaseColor)) neons.Add((m, m.GetColor(BaseColor)));
             }
         sky = RenderSettings.skybox;
+        if (Application.isEditor) UseCopies(seen);
         if (sky != null && sky.shader != null && sky.shader.name == "FPS/NightSky")
         {
             skyTop = sky.GetColor(TopColor); skyHorizon = sky.GetColor(HorizonColor); skyBottom = sky.GetColor(BottomColor); skyStars = sky.GetFloat(StarBrightness);
@@ -126,9 +128,43 @@ public class TimeOfDay : MonoBehaviour
         Apply();
     }
 
+    // Editor: per-session copies of every driven material, swapped into the renderers (and the skybox).
+    readonly Dictionary<Material, Material> copies = new Dictionary<Material, Material>();
+    Material skyAsset;
+
+    void UseCopies(HashSet<Material> seen)
+    {
+        Material Copy(Material m)
+        {
+            if (m == null) return null;
+            if (!copies.TryGetValue(m, out var c)) { c = new Material(m) { name = m.name + " (time of day)" }; copies[m] = c; }
+            return c;
+        }
+        for (int i = 0; i < facades.Count; i++) facades[i] = (Copy(facades[i].m), facades[i].v);
+        for (int i = 0; i < holograms.Count; i++) holograms[i] = (Copy(holograms[i].m), holograms[i].v);
+        for (int i = 0; i < neons.Count; i++) neons[i] = (Copy(neons[i].m), neons[i].c);
+        for (int i = 0; i < clouds.Count; i++) clouds[i] = (Copy(clouds[i].m), clouds[i].top, clouds[i].under, clouds[i].canyon);
+        foreach (var r in FindObjectsByType<Renderer>(FindObjectsInactive.Include))
+        {
+            var mats = r.sharedMaterials;
+            bool any = false;
+            for (int i = 0; i < mats.Length; i++)
+                if (mats[i] != null && copies.TryGetValue(mats[i], out var c)) { mats[i] = c; any = true; }
+            if (any) r.sharedMaterials = mats;
+        }
+        if (sky != null) { skyAsset = sky; sky = new Material(sky) { name = sky.name + " (time of day)" }; RenderSettings.skybox = sky; }
+    }
+
     void OnDestroy()
     {
         if (Instance == this) Instance = null;
+        if (Application.isEditor)
+        {
+            if (skyAsset != null) RenderSettings.skybox = skyAsset;
+            foreach (var c in copies.Values) if (c != null) Destroy(c);
+            if (sky != null && sky != skyAsset) Destroy(sky);
+            return;   // the assets were never touched
+        }
         foreach (var (m, v) in facades) if (m != null) m.SetFloat(LitFraction, v);
         foreach (var (m, v) in holograms) if (m != null) m.SetFloat(Intensity, v);
         foreach (var (m, c) in neons) if (m != null) m.SetColor(BaseColor, c);
