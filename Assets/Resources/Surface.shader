@@ -430,7 +430,7 @@ Shader "FPS/Surface"
                 float freq = type == T_COTTON ? COTTON_F : type == T_DENIM ? DENIM_F : type == T_WOOL ? WOOL_F : type == T_LEATHER ? LEATHER_F : type == T_BRUSHED ? 140.0 : type == T_PAINTED ? 80.0 : 40.0;
                 float fade = DetailFade(p, freq);
                 float3 n = nGeom;
-                float strength = _DetailStrength * fade;
+                float strength = _DetailStrength * fade * (1.0 - _QualityDetailCut);
                 if (strength > 0.01 && type != T_CHROME && type != T_GLASS && type != T_VINYL)
                 {
                     float e = 0.25 / freq;

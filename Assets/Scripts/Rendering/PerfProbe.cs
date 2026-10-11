@@ -40,6 +40,11 @@ public class PerfProbe : MonoBehaviour
     readonly List<ProfilerRecorder> recorders = new List<ProfilerRecorder>();
     readonly List<string> recorderNames = new List<string>();
     readonly List<double> recorderSums = new List<double>();
+    // Render counters (counts per frame, available in release players).
+    static readonly string[] Counters = { "Draw Calls Count", "Batches Count", "SetPass Calls Count", "Triangles Count", "Shadow Casters Count" };
+    readonly List<ProfilerRecorder> counters = new List<ProfilerRecorder>();
+    readonly List<string> counterNames = new List<string>();
+    readonly List<double> counterSums = new List<double>();
     int recordedFrames;
     float clock;
     int warmupFrames;
@@ -84,11 +89,17 @@ public class PerfProbe : MonoBehaviour
                 r.Dispose();
             }
         }
+        foreach (var name in Counters)
+        {
+            var r = ProfilerRecorder.StartNew(ProfilerCategory.Render, name);
+            if (r.Valid) { counters.Add(r); counterNames.Add(name); counterSums.Add(0); } else r.Dispose();
+        }
     }
 
     void OnDestroy()
     {
         foreach (var r in recorders) r.Dispose();
+        foreach (var r in counters) r.Dispose();
     }
 
     void Update()
@@ -109,6 +120,7 @@ public class PerfProbe : MonoBehaviour
         if (player != null) player.Rotate(0f, 360f / duration * dt, 0f);
         frames.Add(dt * 1000f);
         for (int i = 0; i < recorders.Count; i++) recorderSums[i] += recorders[i].LastValue * 1e-6; // ns -> ms
+        for (int i = 0; i < counters.Count; i++) counterSums[i] += counters[i].LastValue;
         recordedFrames++;
         if (FrameTimingManager.GetLatestTimings(1, timing) > 0)
         {
@@ -164,6 +176,8 @@ public class PerfProbe : MonoBehaviour
         sb.AppendLine($"development build: {Debug.isDebugBuild}");
         for (int i = 0; i < recorders.Count; i++)
             sb.AppendLine($"  {recorderNames[i]}: {recorderSums[i] / Mathf.Max(1, recordedFrames):0.00} ms/frame");
+        for (int i = 0; i < counters.Count; i++)
+            sb.AppendLine($"  {counterNames[i]}: {counterSums[i] / Mathf.Max(1, recordedFrames):0} per frame");
         sb.AppendLine($"screen: {Screen.width}x{Screen.height}");
         sb.AppendLine($"gpu: {SystemInfo.graphicsDeviceName}");
         sb.AppendLine($"cpu: {SystemInfo.processorType}");

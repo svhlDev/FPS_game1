@@ -132,7 +132,7 @@ Shader "FPS/BodySkin"
                 half smoothVar = 1.0h;
                 if (fade > 0.01)
                 {
-                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade;          // metres
+                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade * (1.0 - _QualityDetailCut);   // metres
                     float3 dpdx = ddx(i.positionWS), dpdy = ddy(i.positionWS);
                     float3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
                     float det = dot(dpdx, r1);

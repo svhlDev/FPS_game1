@@ -18,6 +18,8 @@
 #include "HashPCG.hlsl"
 
 float _GlobalWetness;
+// Graphics quality (GraphicsQuality.cs): fractions cut, 0 = full quality (the default when never set).
+float _QualityDetailCut, _QualityInteriorOff, _QualityDecalCut;
 
 // ---------- noise ----------
 

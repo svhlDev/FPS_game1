@@ -246,7 +246,7 @@ Shader "FPS/CityFacade"
                     // Pixel footprint of one window cell: full detail when cells are big on screen; the
                     // interior, reveals and streaks fade first, then the pattern fades to its average.
                     float px = max(fwidth(g).x, fwidth(g).y);
-                    float detail = 1.0 - smoothstep(0.03, 0.12, px);
+                    float detail = (1.0 - smoothstep(0.03, 0.12, px)) * (1.0 - _QualityInteriorOff);   // off at Low quality
                     float nearK = 1.0 - smoothstep(0.25, 0.6, px);
 
                     // ---- near: the window, its reveal, the room behind it ----

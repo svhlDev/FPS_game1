@@ -177,6 +177,10 @@ public class MaterialLab : MonoBehaviour
         GUILayout.Label("Lighting");
         foreach (Preset p in Enum.GetValues(typeof(Preset)))
             if (GUILayout.Toggle(CurrentPreset == p, p.ToString(), GUI.skin.button) && CurrentPreset != p) SetPreset(p);
+        GUILayout.BeginHorizontal();
+        foreach (GraphicsQuality.Level q in Enum.GetValues(typeof(GraphicsQuality.Level)))
+            if (GUILayout.Toggle(GraphicsQuality.Current == q, q.ToString(), GUI.skin.button) && GraphicsQuality.Current != q) GraphicsQuality.Set(q);
+        GUILayout.EndHorizontal();
         bool wet = GUILayout.Toggle(Wet, "Wet");
         if (wet != Wet) SetWet(wet);
         GUILayout.Space(6);

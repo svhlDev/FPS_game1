@@ -132,6 +132,7 @@ Shader "FPS/Decal"
 
             half4 frag(Varyings i) : SV_Target
             {
+                if (i.color.g < _QualityDecalCut) discard;                          // fewer decals at lower quality
                 float4 pc = Pattern((int)_Type, i.uv, i.color.r);
                 if (pc.a < 0.003) discard;
                 float3 n = normalize(i.normalWS);
