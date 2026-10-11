@@ -95,6 +95,8 @@ public class FaceDef
     public float jawStr = 0.05f, jawVariation = 0.04f;
     [Tooltip("Half head heights: the jaw's top above the menton, its edge rounding, the jaw angle's rounding (male / female), its blend onto the cranium.")]
     public float jawTop = 0.55f, jawRound = 0.06f, jawAngle = 0.05f, femaleJawAngle = 0.1f, jawBlend = 0.15f;
+    [Tooltip("The face's fat blend radius cap (m): the fat rounds over the face parts with at most this (Face Fix Part 0).")]
+    public float faceFatBlendMax = 0.02f;
     [Tooltip("The head's blend with the neck (m): small, so the under-jaw plane turns down into the neck.")]
     public float neckBlend = 0.012f;
     public List<FacePart> parts = Defaults();

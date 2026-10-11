@@ -98,6 +98,8 @@ public struct BodySdfKernel : IDisposable
     public float eyeRadius;
     public float muscleBlend, fatBlendPerMetre, fatBlendMin, breastBlend, featureBlend, eyeCarveBlend;
     public float socketClearance;   // eye sockets cut through the face fat in front of the eye, plus this
+    public float faceReach;         // face parts are evaluated within this distance of the skull's centre (covers every part + blend + fat)
+    public float faceFatBlendMax;   // the face's fat blend radius cap (independent of the body's)
     public float fatBlendFalloff;   // fat thickness blends across bones within about this distance
     public float fatBlendMax, muscleReach;
     public float fatWaist, fatBelly, fatHips, fatButtocks;
@@ -154,17 +156,21 @@ public struct BodySdfKernel : IDisposable
 
     // Where face fat collects (multiplies the head's fat): pooled in the cheeks, the jowls and under the
     // chin, thin over the forehead, the nose, round the eyes and on the cranium.
-    float FaceFatMask(Vector3 p)
+    public float FaceFatMask(Vector3 p)
     {
         Vector3 l = skull.ToLocal(p);
         Vector3 u = new Vector3(l.x / skull.r.x, l.y / skull.r.y, l.z / skull.r.z);
         float ax = Mathf.Abs(u.x);
         float G(float x) => Mathf.Exp(-x * x);
         float front = Mathf.Clamp01(u.z * 2f + 0.6f);
+        // Face Fix Part 0: the pools only thicken the front and sides of the face (never behind the jaw: the
+        // back of the neck), and only near the face's surface (a window around the profile egg).
+        float fwd = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.15f, 0.25f, u.z));
+        float shell = G((u.magnitude - 1f) / 0.35f);
         float cheeks = G((ax - 0.36f) / 0.2f) * G((u.y + 0.15f) / 0.2f) * front;   // under the eyes, toward the nose
-        float jowls = G((ax - 0.45f) / 0.3f) * G((u.y + 0.72f) / 0.22f);
-        float chin = G(ax / 0.55f) * G((u.y + 0.92f) / 0.25f);
-        float pool = Mathf.Max(cheeks, Mathf.Max(jowls, chin));
+        float jowls = G((ax - 0.45f) / 0.3f) * G((u.y + 0.72f) / 0.22f) * fwd;
+        float chin = G(ax / 0.55f) * G((u.y + 0.92f) / 0.25f) * fwd;
+        float pool = Mathf.Max(cheeks, Mathf.Max(jowls, chin)) * shell;
         // Lips carry almost no fat (so they stay visible on any face).
         float mouth = G(ax / 0.32f) * G((u.y + 0.48f) / 0.1f) * front;
         return Mathf.Lerp(Mathf.Lerp(0.35f, 1.7f, pool), 0.12f, mouth);
@@ -311,7 +317,10 @@ public struct BodySdfKernel : IDisposable
             float plane = Vector3.Dot(l - new Vector3(0f, h * 0.5f, -footLen * 0.1f), n);
             return SMax(box, plane, 0.01f);
         }
-        if (b.kind == KHead) return HeadCore(p);
+        // The head: nothing more than 3 cm under its joint (the chin line). The egg's distance is a loose lower
+        // bound far away: without this a big chest / breasts read as nearer the head than the chest, and
+        // their skin would be labelled, split and weighted as head (Face Fix Part 0).
+        if (b.kind == KHead) return Mathf.Max(HeadCore(p), Vector3.Dot(b.o - p, b.y) - 0.03f);
 
         float dr = b.depthRatio;
         Vector3 s = new Vector3(q.x, q.y, q.z / dr);
@@ -427,25 +436,35 @@ public struct BodySdfKernel : IDisposable
         }
         // Face (Head spec Part D): the parts are face muscle on the egg (each with its own small blend), so
         // the face fat rounds over them like the body's blobs.
-        bool nearHead = headIndex >= 0 && d[headIndex] < 0.1f;
+        // (Face Fix Part 0) Every part is evaluated wherever it could matter: within faceReach of the head
+        // (its extent + blend + the thickest face fat), no hard cut-off closer in.
+        bool nearHead = headIndex >= 0 && (p - skull.o).sqrMagnitude < faceReach * faceReach;
         if (nearHead)
+        {
+            // Each part blends onto the body's surface with its own small radius, never chained part onto
+            // part (chained smooth mins add their bulges up: a snout where a dozen parts overlap). The fat
+            // layer gets the parts' hard union once, with a capped blend.
+            float muscleBase = muscle, faceHard = float.MaxValue;
             for (int j = 0; j < face.Length; j++)
             {
                 int op = face[j].op;
                 if (op == (int)FacePartOp.Union)
                 {
                     float v = FaceDist(face[j], p);
-                    muscle = SMin(muscle, v, face[j].blend);
-                    soft = SMin(soft, v, Mathf.Max(kFat * 0.5f, face[j].blend));   // half the body's fat blend: features soften, not vanish
+                    muscle = Mathf.Min(muscle, SMin(muscleBase, v, face[j].blend));
+                    faceHard = Mathf.Min(faceHard, v);
                 }
-                else if (op == (int)FacePartOp.Carve)
+            }
+            if (faceHard < float.MaxValue) soft = SMin(soft, faceHard, Mathf.Min(kFat * 0.5f, faceFatBlendMax));
+            for (int j = 0; j < face.Length; j++)
+                if (face[j].op == (int)FacePartOp.Carve)
                 {
                     // Hollows in the bone and muscle (temples): the fat fills them.
                     float v = -FaceDist(face[j], p);
                     muscle = SMax(muscle, v, face[j].blend);
                     soft = SMax(soft, v, face[j].blend);
                 }
-            }
+        }
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
         if (nearHead)

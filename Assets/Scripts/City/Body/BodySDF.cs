@@ -221,7 +221,7 @@ public class BodySDF : IDisposable
             bones = new NativeArray<BodySdfKernel.Bone>(n, alloc),
             blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
             face = new NativeArray<BodySdfKernel.FacePrim>(faceParts.ToArray(), alloc),
-            socketClearance = BodyRules.Default.face.socketClearance,
+            socketClearance = BodyRules.Default.face.socketClearance, faceReach = FaceReach(), faceFatBlendMax = BodyRules.Default.face.faceFatBlendMax,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
@@ -301,6 +301,24 @@ public class BodySDF : IDisposable
         for (int j = 0; j < breasts.Count; j++) br[j] = E(breasts[j].f, breasts[j].r, plan.Index("Chest"), 0);
         return k;
     }
+
+    // How far from the skull's centre a face part can still change the surface: its farthest extent, its
+    // blend, the face fat blend and the thickest fat on the head (Face Fix Part 0).
+    float FaceReach()
+    {
+        float reach = 0f;
+        foreach (var fp in faceParts)
+        {
+            float ext = Mathf.Max(fp.r.x, Mathf.Max(fp.r.y, fp.r.z)) + fp.halfLen;
+            reach = Mathf.Max(reach, (fp.o - skull.f.o).magnitude + ext + fp.blend);
+        }
+        float fat = headIndex >= 0 ? Mathf.Max(plan.bones[headIndex].fat.x, Mathf.Max(plan.bones[headIndex].fat.y, plan.bones[headIndex].fat.z)) * 1.7f : 0f;
+        return reach + BodyRules.Default.face.faceFatBlendMax + fat + 0.01f;
+    }
+
+    // The highest point the cranium reaches (root space y) and its centre: for sanity checks.
+    public Vector3 CraniumCentre => cranium.f.o;
+    public Vector3 CraniumRadii => cranium.r;
 
     static BodySdfKernel.Ellipsoid E(Frame f, Vector3 r, int bone, int group) =>
         new BodySdfKernel.Ellipsoid { o = f.o, x = f.x, y = f.y, z = f.z, r = r, bone = bone, group = group };
@@ -609,7 +627,7 @@ public class BodySDF : IDisposable
         var sb = new System.Text.StringBuilder();
         float skin = Eval(p, out int nearest, out float fat);
         sb.Append($"skin {skin:0.000} fat {fat:0.000} nearest {plan.bones[nearest].name}; ");
-        for (int i = 0; i < plan.bones.Count; i++) { float db = kernel.BoneCore(i, p); if (db < 0.06f) sb.Append($"{plan.bones[i].name} {db:0.000}, "); }
+        for (int i = 0; i < kernelBones; i++) { float db = kernel.BoneCore(i, p); if (db < 0.06f) sb.Append($"{plan.bones[i].name} {db:0.000}, "); }
         foreach (var bl in blobs) { float d = Ellipsoid(bl.f.ToLocal(p), bl.r); if (d < 0.03f) sb.Append($"{bl.group}@{plan.bones[bl.bone].name} {d:0.000}, "); }
         if (headIndex >= 0) for (int j = 0; j < faceParts.Count; j++) { float d = BodySdfKernel.FaceDist(faceParts[j], p); if (d < 0.03f) sb.Append($"{FacePartNames[j]} {d:0.000}, "); }
         return sb.ToString();

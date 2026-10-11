@@ -77,6 +77,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "coat": yield return CoatTest(); break;
             case "lab": yield return LabTest(); break;
             case "heads": yield return HeadsTest(); break;
+            case "facesanity": { bool ok = FaceSanity.Run(out string rep); foreach (var l in rep.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd()); yield return null; break; }
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
@@ -843,6 +844,10 @@ public partial class ScenarioTest : MonoBehaviour
                 Vector3 c = hc != null ? hc.position : f.transform.position + Vector3.up * 1.6f;
                 Vector3 fwd = f.transform.forward, right = f.transform.right;
                 var ov = f.HeadJoint != null ? f.HeadJoint.GetComponent<HeadCanonOverlay>() : null;
+                // Only this figure shows (neighbours would overlap the side and back views).
+                var hidden = new List<Renderer>();
+                foreach (var other in Object.FindObjectsByType<CharacterFigure>())
+                    if (other != f) foreach (var rr in other.GetComponentsInChildren<Renderer>()) if (rr.enabled) { rr.enabled = false; hidden.Add(rr); }
                 // front / side with the canon (orthographic, so the lines and the head share one scale), the
                 // three-quarter, back and body views without.
                 foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("canon", c + fwd * 0.45f), ("side", c + right * 0.45f),
@@ -861,6 +866,7 @@ public partial class ScenarioTest : MonoBehaviour
                 }
                 cam.orthographic = false;
                 if (ov != null) ov.Show(HeadCanonOverlay.View.Off);
+                foreach (var rr in hidden) if (rr != null) rr.enabled = true;
             }
         }
         // The face rig: wigs, eyelids, the jaw. Close the eyes and open every mouth, shoot the first row again.
