@@ -74,11 +74,23 @@ public static class BodyMaterials
         mats[0] = skin;
         for (int i = 1; i < n; i++)
         {
-            var slot = i - 1 < garments.Count ? garments[i - 1].slot : GarmentSlot.Top;
-            mats[i] = CharacterFigure.Mat(slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet : outer);
+            var def = i - 1 < garments.Count ? garments[i - 1] : null;
+            var slot = def != null ? def.slot : GarmentSlot.Top;
+            var colour = slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet : outer;
+            mats[i] = Garment(def != null ? def.fabric : Fabric.Cotton, colour);
         }
         return mats;
     }
+
+    // Graphics Phase 3: garments use the surface library's fabric types in rest-pose space, with the
+    // per-vertex edge / fold / hem data BodySurfaceBake writes (stitching, seams, contact shadow).
+    public static SurfaceType SurfaceOf(Fabric f) => f switch
+    {
+        Fabric.Denim => SurfaceType.Denim, Fabric.Wool => SurfaceType.Wool, Fabric.Leather => SurfaceType.Leather,
+        Fabric.Vinyl => SurfaceType.Vinyl, _ => SurfaceType.Cotton,
+    };
+
+    public static Material Garment(Fabric fabric, Color colour) => MaterialLibrary.Get(SurfaceOf(fabric), colour, MaterialLibrary.Variant.Skinned);
 
     public static Material Sclera()
     {
@@ -95,9 +107,8 @@ public static class BodyMaterials
         var rules = BodyRules.Default;
         if (step == 0)
         {
-            m = CharacterFigure.Mat(iris);
-            m = new Material(m) { name = $"Iris {ColorUtility.ToHtmlStringRGB(iris)}" };
-            m.SetFloat("_Smoothness", 0.85f);
+            // Glossy (vinyl-like: wet eye) in the surface library.
+            m = MaterialLibrary.Get(SurfaceType.Vinyl, iris, MaterialLibrary.Variant.Object);
         }
         else
         {

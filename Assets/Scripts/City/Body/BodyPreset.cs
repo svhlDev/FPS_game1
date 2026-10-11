@@ -28,6 +28,7 @@ public static class BodyPreset
         public string name;
         public Vector3[] v, n; public Vector2[] uv1, uv2; public BoneWeight[] w; public Matrix4x4[] bind;
         public int[][] subs;
+        public BodySurfaceBake.Result bake;   // computed after decoding (not stored in the file)
         public Mesh ToMesh()
         {
             var m = new Mesh { name = name, indexFormat = v.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
@@ -35,6 +36,7 @@ public static class BodyPreset
             m.subMeshCount = subs.Length;
             for (int i = 0; i < subs.Length; i++) m.SetTriangles(subs[i], i, false);
             m.boneWeights = w; m.bindposes = bind;
+            BodySurfaceBake.Apply(m, bake);
             m.RecalculateBounds();
             return m;
         }
@@ -153,6 +155,9 @@ public static class BodyPreset
             e.garmentTriangles = new int[r.ReadInt32()];
             for (int i = 0; i < e.garmentTriangles.Length; i++) e.garmentTriangles[i] = r.ReadInt32();
             e.body = ReadMesh(r); e.head = ReadMesh(r);
+            var kinds = BodySurfaceBake.Kinds(e.plan);
+            e.body.bake = BodySurfaceBake.Bake(e.body.v, e.body.n, e.body.w, e.body.subs, kinds);
+            e.head.bake = BodySurfaceBake.Bake(e.head.v, e.head.n, e.head.w, e.head.subs, kinds, e.body.bake.hems);
             list.Add(e);
         }
         return list;

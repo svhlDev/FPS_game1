@@ -98,7 +98,7 @@ public class BodyBuild
     Matrix4x4[] bindposes;
     int skinBefore;
 
-    class Parts { public Vector3[] v, n; public Vector2[] r, l; public BoneWeight[] w; public List<int>[] subs; }
+    class Parts { public Vector3[] v, n; public Vector2[] r, l; public BoneWeight[] w; public List<int>[] subs; public BodySurfaceBake.Result bake; }
 
     public BodyBuild(CharacterSheet sheet, ISpeciesTemplate template = null, Outfit outfit = null)
     {
@@ -514,6 +514,11 @@ public class BodyBuild
             }
         }
         Fill(body, bv); Fill(head, hv);
+        // Graphics Phase 3: rest pose, curvature, contact shadow, stitching and seam data per vertex.
+        var kinds = BodySurfaceBake.Kinds(plan);
+        int[][] Arr(List<int>[] l) { var a = new int[l.Length][]; for (int i = 0; i < l.Length; i++) a[i] = l[i].ToArray(); return a; }
+        body.bake = BodySurfaceBake.Bake(body.v, body.n, body.w, Arr(body.subs), kinds);
+        head.bake = BodySurfaceBake.Bake(head.v, head.n, head.w, Arr(head.subs), kinds, body.bake.hems);
         bodyParts = body; headParts = head;
     }
 
@@ -569,6 +574,7 @@ public class BodyBuild
             for (int i = 0; i < p.subs.Length; i++) m.SetTriangles(p.subs[i], i, false);
             m.boneWeights = p.w;
             m.bindposes = bindposes;
+            BodySurfaceBake.Apply(m, p.bake);
             m.RecalculateBounds();
             // (Kept CPU-readable: tests bake skinned meshes; UploadMeshData(true) would free ~0.3 MB per body.)
             return m;

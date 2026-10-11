@@ -136,8 +136,8 @@ Shader "FPS/Surface"
             #define T_VINYL 12
 
             // Pattern frequencies (cycles per metre at detail scale 1): fabric threads and leather grain.
-            #define COTTON_F 160.0
-            #define DENIM_F 130.0
+            #define COTTON_F 420.0
+            #define DENIM_F 260.0
             #define WOOL_F 60.0
             #define LEATHER_F 90.0
 
@@ -154,7 +154,7 @@ Shader "FPS/Surface"
                     case T_RUBBER:   return VNoise(p * 12.0) * 0.08;
                     case T_COTTON:   return WeaveTri(p * COTTON_F, w) * 0.3;
                     case T_DENIM:    return TwillTri(p * DENIM_F, w) * 0.35;
-                    case T_WOOL:     return Fbm(p * WOOL_F, 2) * 0.12;
+                    case T_WOOL:     return Fbm(p * WOOL_F, 2) * 0.06;
                     case T_LEATHER:  return smoothstep(0.0, 0.25, Voronoi(p * LEATHER_F).y) * 0.07;
                     default:         return 0.0;
                 }
@@ -278,7 +278,7 @@ Shader "FPS/Surface"
                     case T_COTTON:
                     {
                         float weave = lerp(0.5, WeaveTri(p * COTTON_F, w), DetailFade(p, COTTON_F));
-                        s.albedo = base * lerp(0.85, 1.05, weave);
+                        s.albedo = base * lerp(0.92, 1.03, weave);
                         s.albedo = lerp(s.albedo, base * 1.2 + 0.03, wear * 0.6);         // worn edges lighten
                         s.smoothness = _SmoothMin;
                         s.sheen = lerp(base, 1.0, 0.4) * _Sheen;
@@ -355,7 +355,8 @@ Shader "FPS/Surface"
                 // Edges and cavities.
                 BoxEdges box = (BoxEdges)0;
                 bool hasBox = false;
-                float edge = 0.0, cavity = 0.0;
+                float edge = 0.0, cavity = 0.0, contact = 0.0;
+                bool skinned = false;
                 if (_EdgeSource > 0.5 && _EdgeSource < 1.5)
                 {
                     box = EdgeFromUV(i.uv, i.positionWS);
@@ -365,7 +366,9 @@ Shader "FPS/Surface"
                 }
                 else if (_EdgeSource < 2.5 && _EdgeSource > 0.5)
                 {
-                    edge = i.color.r; cavity = i.color.g;
+                    // Baked per vertex (BodySurfaceBake). A mesh without colours reads white: ignore it.
+                    half4 vc = dot(i.color, 1.0) > 3.99 ? half4(0, 0, 0, 0) : i.color;
+                    edge = vc.r; cavity = vc.g; contact = vc.b; skinned = true;
                 }
                 else if (_EdgeSource > 2.5)
                 {
@@ -376,6 +379,28 @@ Shader "FPS/Surface"
                 edge *= smoothstep(0.2, 0.7, VNoise(p * 5.0) * 0.6 + edge * 0.6);
 
                 Surf s = Evaluate(type, p, w, edge, cavity, box, hasBox, nGeom);
+
+                // Garments (Phase 3): darker fold valleys, hem stitching ~1 cm in from every opening,
+                // side seams (a darker groove with a stitch line each side), all fading with distance.
+                if (skinned)
+                {
+                    s.albedo *= 1.0 - cavity * 0.35;
+                    if (type >= T_COTTON && type <= T_LEATHER)
+                    {
+                        half3 thread = type == T_DENIM ? half3(0.75, 0.55, 0.22) : saturate(_BaseColor.rgb * 1.4 + 0.04);
+                        float fade = DetailFade(p, 150.0);
+                        float dash = step(0.4, frac(dot(p, float3(1.0, 1.3, 0.7)) * 90.0));
+                        float hemD = i.uv.x;
+                        float hw = 0.0008 + fwidth(hemD);
+                        float hem = 1.0 - smoothstep(hw, hw * 2.0, abs(hemD - 0.012));
+                        float seamC = i.uv.y;
+                        float sw = 0.012 + fwidth(seamC);
+                        float groove = (1.0 - smoothstep(sw, sw * 2.0, abs(seamC))) * step(abs(seamC), 0.99);
+                        float seamStitch = (1.0 - smoothstep(sw * 0.5, sw, abs(abs(seamC) - 0.06))) * step(abs(seamC), 0.99);
+                        s.albedo *= 1.0 - groove * 0.3 * fade;
+                        s.albedo = lerp(s.albedo, thread, saturate(hem + seamStitch) * dash * fade * 0.8);
+                    }
+                }
 
                 // Detail normal: finite differences of the type's height, fading with distance.
                 float freq = type == T_COTTON ? COTTON_F : type == T_DENIM ? DENIM_F : type == T_WOOL ? WOOL_F : type == T_LEATHER ? LEATHER_F : type == T_BRUSHED ? 140.0 : type == T_PAINTED ? 80.0 : 40.0;
@@ -413,11 +438,13 @@ Shader "FPS/Surface"
                 inputData.normalizedScreenSpaceUV = suv;
 
                 half3 sh = SampleSH(n);
-                half3 color = GlobalIllumination(brdf, coat, s.coat, sh, ao.indirectAmbientOcclusion, i.positionWS, n, v, suv);
-                half3 sheenLight = sh * ao.indirectAmbientOcclusion;
+                // Contact shadow (garment hems, baked): most of the ambient, a little of the direct light.
+                half occlusion = ao.indirectAmbientOcclusion * (1.0 - contact * 0.7);
+                half3 color = GlobalIllumination(brdf, coat, s.coat, sh, occlusion, i.positionWS, n, v, suv);
+                half3 sheenLight = sh * occlusion;
 
                 Light mainLight = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
-                mainLight.color *= ao.directAmbientOcclusion;
+                mainLight.color *= ao.directAmbientOcclusion * (1.0 - contact * 0.3);
                 color += LightingPhysicallyBased(brdf, coat, mainLight, n, v, s.coat, false);
                 sheenLight += mainLight.color * mainLight.shadowAttenuation * saturate((dot(n, mainLight.direction) + 0.5) / 1.5);
 

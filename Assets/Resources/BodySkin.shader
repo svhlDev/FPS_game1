@@ -4,6 +4,10 @@
 //   skin), and the bled part is tinted _ScatterColor (warm red), so terminators glow a little.
 //   Lights: the main light (with shadows), every additional light (Forward+ cluster loop or the classic
 //   per-object loop), SH ambient and reflection probes - so neon lights skin like the facades.
+// Graphics Phase 3: pores and fine micro relief in rest-pose space (TEXCOORD3, so they stick to the
+// skin), bumped through screen derivatives and fading with distance; per-vertex data from
+// BodySurfaceBake: redness (knuckles, nose, ears, creases), crease darkening, contact shadow just outside
+// cuffs and collars; SSAO.
 // Lives in Resources so player builds include it (BodyMaterials loads it by name).
 Shader "FPS/BodySkin"
 {
@@ -14,6 +18,8 @@ Shader "FPS/BodySkin"
         _Wrap ("Wrap (light past the shadow line)", Range(0, 1)) = 0.45
         _ScatterColor ("Scatter tint", Color) = (0.9, 0.28, 0.16, 1)
         _ScatterStrength ("Scatter strength", Range(0, 2)) = 0.9
+        _PoreStrength ("Pore / micro relief strength", Range(0, 3)) = 1
+        _Redness ("Redness (knuckles, nose, ears, creases)", Range(0, 1)) = 0.6
     }
 
     SubShader
@@ -26,6 +32,7 @@ Shader "FPS/BodySkin"
             half4 _BaseColor;
             half _Smoothness, _Wrap, _ScatterStrength;
             half4 _ScatterColor;
+            half _PoreStrength, _Redness;
         CBUFFER_END
         ENDHLSL
 
@@ -49,14 +56,22 @@ Shader "FPS/BodySkin"
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Assets/Shaders/SurfaceLib.hlsl"
 
-            struct Attributes { float4 positionOS : POSITION; float3 normalOS : NORMAL; UNITY_VERTEX_INPUT_INSTANCE_ID };
+            struct Attributes
+            {
+                float4 positionOS : POSITION; float3 normalOS : NORMAL;
+                float3 restPos : TEXCOORD3; half4 color : COLOR;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
             struct Varyings
             {
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
                 float fogFactor : TEXCOORD2;
+                float3 restPos : TEXCOORD3;
+                half4 color : TEXCOORD4;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -70,7 +85,16 @@ Shader "FPS/BodySkin"
                 o.positionWS = p.positionWS;
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
                 o.fogFactor = ComputeFogFactor(p.positionCS.z);
+                o.restPos = v.restPos;
+                o.color = v.color;
                 return o;
+            }
+
+            // Pores (~1.5 mm) over a finer-than-cm micro relief, in rest-pose metres; 0..1.
+            float SkinHeight(float3 r)
+            {
+                float pores = 1.0 - smoothstep(0.0, 0.3, VNoise(r * 650.0));
+                return VNoise(r * 170.0) * 0.5 - pores * 0.5 * DetailFade(r, 650.0);
             }
 
             // One light: wrapped diffuse with the wrap tinted, plus GGX specular.
@@ -97,7 +121,26 @@ Shader "FPS/BodySkin"
                 half3 n = normalize(i.normalWS);
                 half3 v = GetWorldSpaceNormalizeViewDir(i.positionWS);
                 half3 albedo = _BaseColor.rgb;
-                half perceptual = 1.0h - _Smoothness;
+                // Baked per-vertex data (a mesh without colours reads white: ignore it).
+                half4 vc = dot(i.color, 1.0) > 3.99 ? half4(0, 0, 0, 0) : i.color;
+                albedo = lerp(albedo, albedo * half3(1.18, 0.78, 0.76), vc.a * _Redness);
+                albedo *= 1.0h - vc.g * 0.25h;
+
+                // Micro relief: height in rest-pose space, bumped with screen derivatives (surface
+                // gradient), so it follows the skin whatever the pose. Fades out with distance.
+                float fade = DetailFade(i.restPos, 170.0);
+                half smoothVar = 1.0h;
+                if (fade > 0.01)
+                {
+                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade;          // metres
+                    float3 dpdx = ddx(i.positionWS), dpdy = ddy(i.positionWS);
+                    float3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
+                    float det = dot(dpdx, r1);
+                    float3 grad = sign(det) * (ddx(h) * r1 + ddy(h) * r2);
+                    n = normalize(abs(det) * n - grad);
+                    smoothVar = lerp(1.0h, 0.85h, (half)saturate(-h / 0.0002));
+                }
+                half perceptual = 1.0h - _Smoothness * smoothVar;
                 half roughness = max(perceptual * perceptual, 0.02h);
                 half3 spec = half3(0.028h, 0.028h, 0.028h);
 
@@ -106,8 +149,11 @@ Shader "FPS/BodySkin"
                 inputData.normalWS = n;
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(i.positionCS);
 
-                // Ambient (SH) and reflections, Fresnel-weighted; SSAO darkens both (and a little of the direct light).
+                // Ambient (SH) and reflections, Fresnel-weighted; SSAO and the baked contact shadow darken
+                // both (and a little of the direct light).
                 AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(inputData.normalizedScreenSpaceUV);
+                ao.indirectAmbientOcclusion *= 1.0h - vc.b * 0.75h;
+                ao.directAmbientOcclusion *= 1.0h - vc.b * 0.35h;
                 half nv = saturate(dot(n, v));
                 half fresnel = 0.028h + (1.0h - 0.028h) * pow(1.0h - nv, 5.0h) * _Smoothness;
                 half3 color = (SampleSH(n) * albedo

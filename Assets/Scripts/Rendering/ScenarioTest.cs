@@ -755,6 +755,19 @@ public partial class ScenarioTest : MonoBehaviour
             View(c, c + new Vector3(-1.2f, 0.8f, -1.6f)); yield return Shot("close_" + carName);
         }
         { Vector3 r = new Vector3(0f, 0f, 24f); View(r + new Vector3(0f, 0f, 10f), r + new Vector3(-6f, 1.7f, -5f)); yield return Shot("close_road"); }
+        // Characters up close (Phase 3): face, torso with hems and seams, hand, and the coat.
+        for (int ci = 0; ci < lab.characterRow.childCount && ci < 3; ci++)
+        {
+            var ch = lab.characterRow.GetChild(ci);
+            Vector3 fwd = ch.forward, right = ch.right, o = ch.position;
+            Transform headC = null;
+            foreach (var t in ch.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { headC = t; break; }
+            Vector3 head = headC != null ? headC.position : o + Vector3.up * 1.6f;
+            float hgt = (head.y - o.y) / 0.9f;
+            View(head, head + fwd * 0.5f + right * 0.12f + Vector3.up * 0.03f); yield return Shot($"char{ci}_face");
+            View(o + Vector3.up * hgt * 0.55f, o + Vector3.up * hgt * 0.6f + fwd * 1.1f + right * 0.3f); yield return Shot($"char{ci}_torso");
+            View(o + Vector3.up * hgt * 0.45f + right * 0.22f, o + Vector3.up * hgt * 0.5f + fwd * 0.5f + right * 0.45f); yield return Shot($"char{ci}_hand");
+        }
         lab.SetPreset(MaterialLab.Preset.NightNeon);
         lab.SetWet(true); View(rows, rows + new Vector3(0f, 6f, -12f)); yield return Shot("wet"); lab.SetWet(false);
         // Phase 1 before / after: SSAO and film grain off, Neutral tonemapping.
