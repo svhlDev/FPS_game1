@@ -64,6 +64,7 @@ public struct BodySdfKernel : IDisposable
     public int cutMode;                 // 0 whole body, 1 body without hands, 2 + h hand h
     public float cutBody, cutHand, cutShrink;  // cut positions along the hand (m from the wrist), shrink (m)
     public Ellipsoid skull;
+    public float eggTop, eggBottom;     // the egg head: horizontal radii x eggBottom at the jaw .. x eggTop at the crown
     public int headIndex;
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
@@ -102,6 +103,24 @@ public struct BodySdfKernel : IDisposable
         float k0 = new Vector3(p.x / r.x, p.y / r.y, p.z / r.z).magnitude;
         float k1 = new Vector3(p.x / (r.x * r.x), p.y / (r.y * r.y), p.z / (r.z * r.z)).magnitude;
         return k1 > 1e-8f ? k0 * (k0 - 1f) / k1 : -Mathf.Min(r.x, Mathf.Min(r.y, r.z));
+    }
+
+    // Egg (Head spec Part C): an ellipsoid whose horizontal radii scale with height, from `bottom` at -r.y
+    // to `top` at +r.y (smoothstep): big end up (cranium), small end down (jaw). Evaluated in the unscaled
+    // space and shrunk by the smaller scale (and a margin for the height-varying warp), so it stays a
+    // lower bound of the true distance for sampling.
+    public static float EggScale(float y, float ry, float bottom, float top)
+    {
+        float t = Mathf.Clamp01((y + ry) / Mathf.Max(1e-5f, 2f * ry));
+        return Mathf.Lerp(bottom, top, t * t * (3f - 2f * t));
+    }
+
+    public static float EggDist(Vector3 p, Vector3 r, float bottom, float top)
+    {
+        if (bottom <= 0f || top <= 0f) return EllipsoidDist(p, r);
+        float s = EggScale(p.y, r.y, bottom, top);
+        float d = EllipsoidDist(new Vector3(p.x / s, p.y, p.z / s), r);
+        return d * Mathf.Min(1f, Mathf.Min(bottom, top)) * 0.9f;
     }
 
     // Round cone from the origin along +y to (0, h, 0), radii r1 -> r2 (Inigo Quilez).
@@ -190,7 +209,7 @@ public struct BodySdfKernel : IDisposable
             float plane = Vector3.Dot(l - new Vector3(0f, h * 0.5f, -footLen * 0.1f), n);
             return SMax(box, plane, 0.01f);
         }
-        if (b.kind == KHead) return EllipsoidDist(skull.ToLocal(p), skull.r);
+        if (b.kind == KHead) return EggDist(skull.ToLocal(p), skull.r, eggBottom, eggTop);
 
         float dr = b.depthRatio;
         Vector3 s = new Vector3(q.x, q.y, q.z / dr);

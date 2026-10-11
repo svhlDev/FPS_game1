@@ -76,6 +76,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "dressed": yield return DressedTest(); break;
             case "coat": yield return CoatTest(); break;
             case "lab": yield return LabTest(); break;
+            case "heads": yield return HeadsTest(); break;
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
@@ -730,6 +731,76 @@ public partial class ScenarioTest : MonoBehaviour
         if (fpc != null) fpc.enabled = true;
         FlyingVehicle.CameraOverride = false;
         if (tod != null) tod.freeze = false;
+    }
+
+    // ---------- head / face lineup (Head spec Parts C-E) ----------
+
+    // Rows of heads, each row shot from the front and three-quarter: both sexes at DEX 1 / 10 / 20 (fat
+    // softens the face), INT 1 / 20 (egg elongation), and (Part D) one part exaggerated per head through
+    // the per-character face overrides. Neutral key + fill light, no outfit, so the face reads.
+    public static List<(string label, CharacterSheet sheet)>[] HeadRows()
+    {
+        var rows = new List<List<(string, CharacterSheet)>>
+        {
+            new List<(string, CharacterSheet)> { ("M DEX1", new CharacterSheet(Sex.Male, 10, 10, 1, 3101)), ("M DEX10", new CharacterSheet(Sex.Male, 10, 10, 10, 3102)), ("M DEX20", new CharacterSheet(Sex.Male, 10, 10, 20, 3103)) },
+            new List<(string, CharacterSheet)> { ("F DEX1", new CharacterSheet(Sex.Female, 10, 10, 1, 3201)), ("F DEX10", new CharacterSheet(Sex.Female, 10, 10, 10, 3202)), ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) },
+            new List<(string, CharacterSheet)> { ("M INT1", new CharacterSheet(Sex.Male, 10, 1, 10, 3301)), ("M INT20", new CharacterSheet(Sex.Male, 10, 20, 10, 3302)), ("F INT1", new CharacterSheet(Sex.Female, 10, 1, 10, 3303)), ("F INT20", new CharacterSheet(Sex.Female, 10, 20, 10, 3304)) },
+        };
+        return rows.ConvertAll(r => r).ToArray();
+    }
+
+    IEnumerator HeadsTest()
+    {
+        string dir = Path.GetDirectoryName(Application.dataPath);
+        var origin = new Vector3(0f, 1500f, 0f);
+        var cam = Camera.main;
+        cam.transform.SetParent(null); FlyingVehicle.CameraOverride = true;
+        var fpc = FirstPersonController.Instance; if (fpc != null) fpc.enabled = false;
+        var key = new GameObject("HeadKey").AddComponent<Light>(); key.type = LightType.Directional; key.intensity = 1.1f;
+        key.transform.rotation = Quaternion.LookRotation(new Vector3(0.4f, -0.35f, 1f));
+        var fill = new GameObject("HeadFill").AddComponent<Light>(); fill.type = LightType.Directional; fill.intensity = 0.35f;
+        fill.transform.rotation = Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, 1f));
+        var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(12f); }
+        var rows = HeadRows();
+        float totalMs = 0f; int built = 0, headTris = 0;
+        for (int r = 0; r < rows.Length; r++)
+        {
+            var row = rows[r];
+            var figs = new List<CharacterFigure>();
+            for (int i = 0; i < row.Count; i++)
+            {
+                var go = new GameObject(row[i].label);
+                go.transform.position = origin + new Vector3(i * 1.2f, 0f, r * 4f);
+                go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var f = CharacterFigure.BuildGenerated(go.transform, row[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, Outfit.None());
+                totalMs += (float)sw.Elapsed.TotalMilliseconds; built++;
+                var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
+                foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
+                figs.Add(f);
+                yield return null;
+            }
+            yield return new WaitForSeconds(0.4f);
+            // One close-up per head, front and three-quarter.
+            foreach (var f in figs)
+            {
+                Transform hc = null;
+                foreach (var t in f.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
+                Vector3 c = hc != null ? hc.position : f.transform.position + Vector3.up * 1.6f;
+                Vector3 fwd = f.transform.forward, right = f.transform.right;
+                foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("34", c + fwd * 0.48f + right * 0.42f + Vector3.up * 0.04f) })
+                {
+                    cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(c - from));
+                    yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+                    ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_r{r}_{f.name.Replace(' ', '_')}_{view}.png"));
+                    yield return null; yield return null;
+                }
+            }
+        }
+        Log($"heads: {built} built, {totalMs / Mathf.Max(1, built):0} ms each (whole body, sync), head mesh {headTris / Mathf.Max(1, built)} triangles avg");
+        Log(built > 0 ? "PASS heads built" : "FAIL no heads");
+        if (fpc != null) fpc.enabled = true;
+        FlyingVehicle.CameraOverride = false;
     }
 
     // ---------- graphics: the Material Lab ----------

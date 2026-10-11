@@ -15,8 +15,10 @@ using UnityEngine;
 //            over and softens the muscle shapes), then offset outward by that thickness. Thin fat =
 //            muscle definition shows (ripped); thick fat = smooth and round.
 //   Breasts: two ellipsoids on the chest (DNA size and droop), medium blend.
-//   Head   : an ellipsoid scaled and elongated (up and back) by INT, brow ridge, cheekbones, jaw, nose
-//            and chin blended in (seed sizes), eye sockets carved (smooth subtraction) at EyeL / EyeR.
+//   Head   : an egg (big end up, the jaw end narrower: Head spec Part C) scaled and elongated (up and
+//            back) by INT, brow ridge, cheekbones, jaw, nose and chin blended in (seed sizes), eye sockets
+//            carved (smooth subtraction) at EyeL / EyeR. Face positions are fractions of the egg's radii,
+//            their x / z scaled by the egg's width at their height, so they follow any head.
 //   Hands  : sausage hands: a rounded palm block, finger and thumb capsules (the digit bones) blended on
 //            with a small radius, never with each other. Feet: rounded wedges.
 // Built in the bind pose (an A-pose: arms out, legs slightly apart, so limbs stay clear of the body).
@@ -43,6 +45,7 @@ public class BodySDF : IDisposable
     readonly List<Feature> headFeatures = new List<Feature>();
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;
+    public float EggTop, EggBottom;
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
     public Bounds bounds;
@@ -195,7 +198,7 @@ public class BodySDF : IDisposable
             blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
             features = new NativeArray<BodySdfKernel.Ellipsoid>(headFeatures.Count, alloc),
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
-            skull = E(skull.f, skull.r, headIndex, 0),
+            skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
@@ -378,10 +381,21 @@ public class BodySDF : IDisposable
         float el = dna != null ? dna.headElongation : 0f;
         Vector3 c = f.o + f.y * ry * (1f + el * 0.3f) - f.z * rz * el * 0.5f;
         skull = new Feature { f = new Frame { o = c, x = f.x, y = f.y, z = f.z }, r = new Vector3(rx, ry * (1f + el * 0.3f), rz * (1f + el * 0.6f)) };
+        // Egg: seed variation on both ends.
+        var eggRng = new PcgRandom(plan.sheet.seed, "egg");
+        EggTop = SR.eggTop + SR.eggVariation * eggRng.Signed();
+        EggBottom = SR.eggBottom + SR.eggVariation * eggRng.Signed();
+        float skullRy = skull.r.y;
+        // Face space -> root space: fractions of the radii, x / z narrowed by the egg at that height.
+        Vector3 FacePoint(Vector3 at)
+        {
+            float s = BodySdfKernel.EggScale(at.y * ry, skullRy, EggBottom, EggTop);
+            return c + f.x * at.x * rx * s + f.y * at.y * ry + f.z * at.z * rz * s + f.z * rz * el * 0.5f;
+        }
         Vector3 R = new Vector3(rx, ry, rz);
         void F(Vector3 at, Vector3 size, float scale)
         {
-            Vector3 p = c + f.x * at.x * rx + f.y * at.y * ry + f.z * at.z * rz + f.z * rz * el * 0.5f;
+            Vector3 p = FacePoint(at);
             headFeatures.Add(new Feature { f = new Frame { o = p, x = f.x, y = f.y, z = f.z }, r = Vector3.Scale(size, R) * scale });
         }
         float Scale(FaceScale k) => dna == null ? 1f : k == FaceScale.Brow ? dna.brow : k == FaceScale.Cheekbones ? dna.cheekbones
@@ -392,9 +406,8 @@ public class BodySDF : IDisposable
             foreach (float s in new[] { -1f, 1f }) F(new Vector3(s * ft.at.x, ft.at.y, ft.at.z), ft.size, Scale(ft.scale));
         }
         EyeRadius = rx * SR.eyeRadius;
-        Vector3 e = c + f.y * SR.eyePosition.y * ry + f.z * rz * (SR.eyePosition.z + el * 0.5f);
-        EyeL = e - f.x * rx * SR.eyePosition.x;
-        EyeR = e + f.x * rx * SR.eyePosition.x;
+        EyeL = FacePoint(new Vector3(-SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
+        EyeR = FacePoint(new Vector3(SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
     }
 
     void BuildBreasts()

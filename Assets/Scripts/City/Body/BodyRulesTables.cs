@@ -44,6 +44,12 @@ public class SdfRules
     [Header("Eyes (fractions of the skull radii)")]
     public float eyeRadius = 0.17f;
     public Vector3 eyePosition = new Vector3(0.38f, 0.06f, 0.86f);
+
+    [Header("Egg head (Head spec Part C): horizontal radii scale from eggBottom (jaw) to eggTop (cranium)")]
+    public float eggTop = 1.08f;
+    public float eggBottom = 0.78f;
+    [Tooltip("Seed variation (+-) on both ends.")]
+    public float eggVariation = 0.03f;
 }
 
 // Sausage hands: a rounded palm block, 4 finger capsules along its front (lower) edge and a thumb on
