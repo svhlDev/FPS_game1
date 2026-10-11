@@ -23,6 +23,19 @@ public static class Pcg
     // Top 24 bits to [0, 1), exact in float (same as the shader's U01).
     public static float U01(uint x) => (x >> 8) * (1f / 16777216f);
 
+    // Value noise in [0, 1] on the integer lattice (like the shader's VNoise), with a seed.
+    public static float Noise3(Vector3 p, int seed)
+    {
+        int ix = Mathf.FloorToInt(p.x), iy = Mathf.FloorToInt(p.y), iz = Mathf.FloorToInt(p.z);
+        float fx = p.x - ix, fy = p.y - iy, fz = p.z - iz;
+        fx = fx * fx * (3f - 2f * fx); fy = fy * fy * (3f - 2f * fy); fz = fz * fz * (3f - 2f * fz);
+        uint s = unchecked((uint)seed * 2654435761u);
+        float H(int x, int y, int z) => U01(Hash(unchecked((uint)(x + 32768)), unchecked((uint)(y + 32768)), unchecked((uint)(z + 32768) ^ s)));
+        float a = Mathf.Lerp(H(ix, iy, iz), H(ix + 1, iy, iz), fx), b = Mathf.Lerp(H(ix, iy + 1, iz), H(ix + 1, iy + 1, iz), fx);
+        float c = Mathf.Lerp(H(ix, iy, iz + 1), H(ix + 1, iy, iz + 1), fx), d = Mathf.Lerp(H(ix, iy + 1, iz + 1), H(ix + 1, iy + 1, iz + 1), fx);
+        return Mathf.Lerp(Mathf.Lerp(a, b, fy), Mathf.Lerp(c, d, fy), fz);
+    }
+
     // Stable id for a name (FNV-1a), so each feature draws from its own stream: adding a new random
     // feature later never shifts the values of existing ones.
     public static uint StreamId(string name)

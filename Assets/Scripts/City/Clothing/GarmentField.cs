@@ -181,13 +181,7 @@ public class GarmentField : IDisposable
             body = body, drape = drape, nearest = nearest, min = min, cell = cell, nx = nx, ny = ny, nz = nz, cuts = cuts, coverMask = cover, hipY = hipY,
             thickness = g.thickness, gap = g.gap, hemBlend = g.hemBlend,
         };
-        if (g.IsHair)
-        {
-            Kernel.hairStyle = g.hair.style == HairStyle.Long ? 2 : 1;
-            Kernel.hairTop = g.hair.topVolume;
-            var pr = new PcgRandom(sdf.Plan.sheet.seed, "hairPart");
-            Kernel.hairPart = g.hair.partOffset * (pr.Value() < 0.5f ? -1f : 1f);
-        }
+
         if (g.HasSkirt) SetSkirt(sdf, g.skirt, hipY);
     }
 
@@ -467,46 +461,6 @@ public struct GarmentKernel
     public float skirtTop, flareK, hemY, chestY, openHem, openChest, lapel, lapelWidth, slitTopY, slitHalf;
     public Vector2 axis;          // the skirt's axis (x, z)
     public Vector4 slitAngles;    // degrees, 0 = front, + = right
-    // Hair (Head spec Part E): 0 none, 1 short, 2 long; extra thickness on top and on the parted side.
-    public int hairStyle;
-    public float hairTop, hairPart;
-
-    // Hair: where the hairline cuts (positive = removed), in skull space (fractions of the egg's radii):
-    // the face window (in front, below the brow line, between the cheeks: never covered), short hair's
-    // ears / temples and nape, long hair's front below the jaw (it hangs at the back and the sides only).
-    public float HairRegion(Vector3 p)
-    {
-        var sk = body.skull;
-        Vector3 l = sk.ToLocal(p);
-        Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
-        float ax = Mathf.Abs(u.x);
-        // The face window: an ellipse in front (the hairline arcs over the forehead, down past the temples).
-        float window = 1f - new Vector2(ax / 0.86f, (u.y + 0.2f) / 0.78f).magnitude;
-        float cut = Mathf.Min(u.z - 0.05f, window);
-        if (hairStyle == 1)
-        {
-            cut = Mathf.Max(cut, Mathf.Min(Mathf.Min(ax - 0.6f, 0.02f - u.y), u.z + 0.45f));     // ears and temples
-            cut = Mathf.Max(cut, -0.35f - u.y);                                                  // the nape
-        }
-        else
-        {
-            cut = Mathf.Max(cut, Mathf.Min(u.z + 0.2f, -0.85f - u.y));                          // nothing in front below the jaw
-            cut = Mathf.Max(cut, Mathf.Min(ax - 1.0f, -0.6f - u.y));                            // nor out over the shoulders or a collar
-        }
-        return cut * sk.r.x;
-    }
-
-    // Shell thickness here: fuller on top, the parted side a little fuller.
-    public float Thick(Vector3 p)
-    {
-        if (hairStyle == 0) return thickness;
-        var sk = body.skull;
-        Vector3 l = sk.ToLocal(p);
-        float top = Mathf.Clamp01(l.y / sk.r.y);
-        float side = Mathf.Clamp01(0.5f + 0.5f * l.x / sk.r.x);
-        return thickness + hairTop * top + hairPart * side * top;
-    }
-
     // The draped, eased body distance (trilinear on the grid).
     public float Draped(Vector3 p)
     {
@@ -579,7 +533,6 @@ public struct GarmentKernel
         if ((coverMask & (1 << b.kind)) == 0) return 0.05f;
         float d = -0.05f;
         if (hasSkirt != 0) d = Mathf.Max(d, SkirtRegion(p));
-        if (hairStyle != 0) d = Mathf.Max(d, HairRegion(p));
         for (int i = 0; i < cuts.Length; i++)
         {
             var c = cuts[i];
@@ -602,7 +555,7 @@ public struct GarmentKernel
     public float Eval(Vector3 p)
     {
         var s = body.Eval(p);
-        float outer = Shape(p) - Thick(p) - gap, inner = s.skin - gap;
+        float outer = Shape(p) - thickness - gap, inner = s.skin - gap;
         return BodySdfKernel.SMax(Mathf.Max(outer, -inner), Region(p, s.nearest), hemBlend);
     }
 
@@ -614,7 +567,7 @@ public struct GarmentKernel
         byte nb = NearestAt(p);
         // Far from the body (outside the sampled band): only a skirt reaches out there.
         float region = nb != 255 ? Region(p, nb) : hasSkirt != 0 && p.y < skirtTop ? SkirtRegion(p) : 0.05f;
-        return BodySdfKernel.SMax(Shape(p) - Thick(p) - gap, region, hemBlend);
+        return BodySdfKernel.SMax(Shape(p) - thickness - gap, region, hemBlend);
     }
     public float OuterSolidGiven(Vector3 p, BodySdfKernel.Sample s) => OuterSolid(p);
 

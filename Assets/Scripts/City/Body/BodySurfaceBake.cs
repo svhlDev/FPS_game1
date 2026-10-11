@@ -10,6 +10,8 @@ using UnityEngine;
 //           g  cavities and fold valleys (concave curvature): grime, darker folds, skin creases
 //           b  contact shadow: garment near its hems, skin just outside each cuff / hem / collar
 //           a  skin redness: knuckles, nose, ears, lips (convex head / hand parts) and creases
+//   uv4     (head skin) brow, lip, mouth-interior masks from the face parts: brows darkened like hair,
+//           lips tinted, the mouth line dark inside (it shows when the jaw opens)
 //   uv0     x  distance (m) to the garment's nearest hem / cuff / opening (stitching runs ~1 cm in)
 //           y  side-seam coordinate: the rest normal's z where the normal points sideways (seam where
 //              it crosses 0), else 1
@@ -17,12 +19,31 @@ public static class BodySurfaceBake
 {
     const float HemReach = 0.06f;   // hem queries look this far (one grid cell: 27 cells per query)
 
-    public struct Result { public Color[] colors; public Vector2[] uv0; public Vector3[] uv3; public List<Vector3> hems; }
+    public struct Result { public Color[] colors; public Vector2[] uv0; public Vector3[] uv3, uv4; public List<Vector3> hems; }
+
+    // The face parts that mark the skin: kind 1 brow, 2 lip, 3 mouth line.
+    public class FaceMarks
+    {
+        public readonly List<BodySdfKernel.FacePrim> prims = new List<BodySdfKernel.FacePrim>();
+        public readonly List<byte> kinds = new List<byte>();
+        public static FaceMarks From(BodySDF sdf)
+        {
+            var m = new FaceMarks();
+            for (int i = 0; i < sdf.FacePrims.Count; i++)
+            {
+                string n = sdf.FacePartNames[i];
+                byte k = n.StartsWith("Brow") ? (byte)1 : n.StartsWith("Lip") ? (byte)2 : n == "MouthLine" ? (byte)3 : (byte)0;
+                if (k == 0) continue;
+                m.prims.Add(sdf.FacePrims[i]); m.kinds.Add(k);
+            }
+            return m;
+        }
+    }
 
     // subs: submesh triangle lists (submesh 0 = skin, then garments; the head mesh has only skin).
     // kinds: bone kind per bone index (bones past it count as cloth chains). hems: garment openings from
     // the body mesh (the head mesh is baked after the body, with the body's hems, for the collar shadow).
-    public static Result Bake(Vector3[] v, Vector3[] n, BoneWeight[] w, IList<int[]> subs, BoneKind[] kinds, List<Vector3> hems = null)
+    public static Result Bake(Vector3[] v, Vector3[] n, BoneWeight[] w, IList<int[]> subs, BoneKind[] kinds, List<Vector3> hems = null, FaceMarks face = null)
     {
         int nv = v.Length;
         var res = new Result { colors = new Color[nv], uv0 = new Vector2[nv], uv3 = (Vector3[])v.Clone(), hems = new List<Vector3>() };
@@ -92,7 +113,7 @@ public static class BodySurfaceBake
             if (!garment)
             {
                 var kind = Kind(w[i], kinds);
-                if (kind == BoneKind.Head) red = Mathf.Clamp01((k - 25f) / 60f);         // nose, ears, lips
+                if (kind == BoneKind.Head) red = Mathf.Clamp01((k - 25f) / 60f) * Mathf.Clamp01(n[i].z * 3f);   // nose, lips (the face, not the nape)
                 else if (kind == BoneKind.Finger || kind == BoneKind.Hand) red = Mathf.Clamp01((k - 40f) / 80f); // knuckles
                 red = Mathf.Max(red, cavity * 0.5f);
             }
@@ -100,6 +121,23 @@ public static class BodySurfaceBake
             float seam = 1f;
             if (garment && Mathf.Abs(n[i].x) > 0.5f) seam = n[i].z;
             res.uv0[i] = new Vector2(garment ? Mathf.Min(hemDist, 1f) : 1f, seam);
+        }
+        if (face != null && face.prims.Count > 0)
+        {
+            res.uv4 = new Vector3[nv];
+            for (int i = 0; i < nv; i++)
+            {
+                if (sub[i] != 0) continue;
+                float brow = 9f, lip = 9f, mouth = 9f;
+                for (int j = 0; j < face.prims.Count; j++)
+                {
+                    float d = Mathf.Max(0f, BodySdfKernel.FaceDist(face.prims[j], v[i]));
+                    if (face.kinds[j] == 1) brow = Mathf.Min(brow, d); else if (face.kinds[j] == 2) lip = Mathf.Min(lip, d); else mouth = Mathf.Min(mouth, d);
+                }
+                // The parts lie under the face fat: the skin over them is a few mm out.
+                res.uv4[i] = new Vector3(1f - Mathf.SmoothStep(0f, 1f, (brow - 0.003f) / 0.005f), 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f),
+                                         1f - Mathf.SmoothStep(0f, 1f, (mouth - 0.003f) / 0.005f));
+            }
         }
         return res;
     }
@@ -124,6 +162,7 @@ public static class BodySurfaceBake
         m.colors = r.colors;
         m.SetUVs(0, r.uv0);
         m.SetUVs(3, r.uv3);
+        if (r.uv4 != null) m.SetUVs(4, r.uv4);
     }
 
     // Uniform hash grid of hem points for nearest-distance queries.

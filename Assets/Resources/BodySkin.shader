@@ -62,6 +62,7 @@ Shader "FPS/BodySkin"
             {
                 float4 positionOS : POSITION; float3 normalOS : NORMAL;
                 float3 restPos : TEXCOORD3; half4 color : COLOR;
+                float3 marks : TEXCOORD4;   // brow, lip, mouth-interior masks (BodySurfaceBake)
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             struct Varyings
@@ -72,6 +73,7 @@ Shader "FPS/BodySkin"
                 float fogFactor : TEXCOORD2;
                 float3 restPos : TEXCOORD3;
                 half4 color : TEXCOORD4;
+                half3 marks : TEXCOORD5;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -87,6 +89,7 @@ Shader "FPS/BodySkin"
                 o.fogFactor = ComputeFogFactor(p.positionCS.z);
                 o.restPos = v.restPos;
                 o.color = v.color;
+                o.marks = v.marks;
                 return o;
             }
 
@@ -125,6 +128,11 @@ Shader "FPS/BodySkin"
                 half4 vc = dot(i.color, 1.0) > 3.99 ? half4(0, 0, 0, 0) : i.color;
                 albedo = lerp(albedo, albedo * half3(1.18, 0.78, 0.76), vc.a * _Redness);
                 albedo *= 1.0h - vc.g * 0.25h;
+                // Brows (dark, hair-like), lips (rosier, a little glossier), the mouth's inside (dark red).
+                half3 mk = saturate(i.marks);
+                albedo = lerp(albedo, albedo * 0.22h + half3(0.02h, 0.015h, 0.01h), mk.x * 0.9h);
+                albedo = lerp(albedo, albedo * half3(1.08h, 0.66h, 0.66h), mk.y * 0.75h);
+                albedo = lerp(albedo, half3(0.09h, 0.02h, 0.02h), mk.z);
 
                 // Micro relief: height in rest-pose space, bumped with screen derivatives (surface
                 // gradient), so it follows the skin whatever the pose. Fades out with distance.

@@ -758,7 +758,14 @@ public partial class ScenarioTest : MonoBehaviour
             ("cheeks", Ov(O("Cheek", new Vector3(0.05f, 0.05f, 0.05f), scale: new Vector3(1.5f, 1.4f, 1.6f)))),
             ("chin out", Ov(O("Chin", new Vector3(0f, -0.05f, 0.15f), scale: new Vector3(1.4f, 1f, 1f)), O("Jaw", scale: new Vector3(1.2f, 1.1f, 1.1f)))),
         });
-        // Dressed (layering: long hair over the coat collar), last row.
+        // Every wig style (forced through WigBuilder.Force), then the dressed row last.
+        rows.Add(new List<(string, CharacterSheet)>
+        {
+            ("wig Buzz", new CharacterSheet(Sex.Male, 10, 10, 12, 3601)), ("wig Crop", new CharacterSheet(Sex.Male, 10, 10, 12, 3602)),
+            ("wig Bob", new CharacterSheet(Sex.Female, 10, 10, 12, 3603)), ("wig Long", new CharacterSheet(Sex.Female, 10, 10, 12, 3604)),
+            ("wig Ponytail", new CharacterSheet(Sex.Female, 10, 10, 12, 3605)), ("wig Bun", new CharacterSheet(Sex.Female, 10, 10, 12, 3606)),
+        });
+        // Dressed (a coat over a casual outfit), last row.
         rows.Add(new List<(string, CharacterSheet)> { ("dressed F coat", new CharacterSheet(Sex.Female, 10, 10, 12, 3501)), ("dressed M", new CharacterSheet(Sex.Male, 12, 10, 12, 3502)) });
         return rows.ConvertAll(r => r).ToArray();
     }
@@ -787,15 +794,17 @@ public partial class ScenarioTest : MonoBehaviour
                 go.transform.position = origin + new Vector3(i * 1.2f, 0f, r * 4f);
                 go.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                // Hair only (Part E), so the face and the hair read; the last row is fully dressed (layering).
-                var outfit = new Outfit { garments = { Wardrobe.Hair(row[i].sheet.sex) } };
+                // No outfit (the face and the wig read); the last row is dressed (a coat over a casual outfit).
+                var outfit = Outfit.None();
                 if (r == rows.Length - 1)
                 {
                     outfit = Outfit.Casual(row[i].sheet.sex == Sex.Female);
                     if (row[i].sheet.sex == Sex.Female) outfit.garments.Add(GarmentDef.Coat());
-                    outfit.garments.Add(Wardrobe.Hair(row[i].sheet.sex));
                 }
+                string lbl = row[i].label;
+                WigBuilder.Force = lbl.StartsWith("wig ") ? (WigStyle?)System.Enum.Parse(typeof(WigStyle), lbl.Substring(4)) : null;
                 var f = CharacterFigure.BuildGenerated(go.transform, row[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, outfit);
+                WigBuilder.Force = null;
                 totalMs += (float)sw.Elapsed.TotalMilliseconds; built++;
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
@@ -811,36 +820,51 @@ public partial class ScenarioTest : MonoBehaviour
                 Vector3 c = hc != null ? hc.position : f.transform.position + Vector3.up * 1.6f;
                 Vector3 fwd = f.transform.forward, right = f.transform.right;
                 foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("34", c + fwd * 0.48f + right * 0.42f + Vector3.up * 0.04f),
-                                                     ("back", c - fwd * 0.75f + right * 0.25f - Vector3.up * 0.12f) })
+                                                     ("back", c - fwd * 0.75f + right * 0.25f - Vector3.up * 0.12f),
+                                                     ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
-                    cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(c - from));
+                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : c;
+                    cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(at - from));
                     yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
                     ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_r{r}_{f.name.Replace(' ', '_')}_{view}.png"));
                     yield return null; yield return null;
                 }
             }
         }
-        // Long hair swings: turn the dressed woman sharply and see the hair chains leave their rest.
-        var woman = GameObject.Find("dressed F coat");
-        var dangle = woman != null ? woman.GetComponent<ClothDangle>() : null;
-        if (dangle != null)
+        // The face rig: wigs, eyelids, the jaw. Close the eyes and open every mouth, shoot the first row again.
+        int wigs = 0, rigs = 0;
+        var anims = new List<FaceAnimator>(Object.FindObjectsByType<FaceAnimator>());
+        foreach (var fa in anims) { if (fa.Jaw != null && fa.UpperLids.Count == 2) rigs++; fa.MouthOverride = 1f; fa.BlinkOverride = 1f; }
+        foreach (var fg in Object.FindObjectsByType<CharacterFigure>()) if (fg.Wig != null) wigs++;
+        yield return new WaitForSeconds(0.3f);
+        foreach (var name in new[] { "M DEX10", "F DEX10", "base" })
         {
-            cam.transform.position = woman.transform.position + new Vector3(0f, 1.5f, -2.5f);
-            float maxOff = 0f;
-            int hairSet = -1;
-            for (int k = 0; k < 4; k++) { try { if (dangle.BonesOf(k).Count > 0 && dangle.BonesOf(k)[0].name.StartsWith("Hair")) { hairSet = k; break; } } catch { break; } }
-            for (int fr = 0; fr < 40 && hairSet >= 0; fr++)
-            {
-                woman.transform.Rotate(0f, fr < 10 ? 18f : 0f, 0f);
-                yield return null;
-                for (int pnl = 0; pnl < 5; pnl++) maxOff = Mathf.Max(maxOff, (dangle.DebugJoint(hairSet, pnl, 3) - dangle.DebugRest(hairSet, pnl, 3)).magnitude);
-            }
-            string where = "";
-            int inside = hairSet >= 0 ? dangle.DebugInsideLegs(hairSet, out where) : -1;
-            Log($"long hair: chain set {hairSet}, ends swing up to {maxOff * 100f:0.0} cm off rest on a fast head turn, {inside} joints inside the head / neck / shoulders {where}");
-            Log(hairSet >= 0 && maxOff > 0.02f && inside == 0 ? "PASS long hair swings and stays out of the body" : "FAIL long hair dangle");
+            var go = GameObject.Find(name);
+            if (go == null) continue;
+            Transform hc = null;
+            foreach (var t in go.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
+            if (hc == null) continue;
+            Vector3 from = hc.position + go.transform.forward * 0.55f + go.transform.right * 0.15f;
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(hc.position - Vector3.up * 0.03f - from));
+            yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_open_{name.Replace(' ', '_')}.png"));
+            yield return null; yield return null;
         }
-        else Log("FAIL no dangle on the long-haired woman");
+        foreach (var fa in anims) { fa.MouthOverride = -1f; fa.BlinkOverride = -1f; }
+        Log($"face rigs: {rigs} of {anims.Count} with a jaw and both lids, {wigs} wigs");
+        {
+            var fg0 = GameObject.Find("M DEX10")?.GetComponent<CharacterFigure>();
+            var hm = fg0 != null && fg0.HeadRenderer is SkinnedMeshRenderer smr ? smr.sharedMesh : null;
+            if (hm != null)
+            {
+                var mk = new List<Vector3>(); hm.GetUVs(4, mk);
+                int brow = 0, lip = 0, inside = 0, jaw = 0;
+                foreach (var m in mk) { if (m.x > 0.5f) brow++; if (m.y > 0.5f) lip++; if (m.z > 0.5f) inside++; }
+                foreach (var bw in hm.boneWeights) if (bw.boneIndex0 == fg0.Asset.jawBone || bw.boneIndex1 == fg0.Asset.jawBone) jaw++;
+                Log($"face masks on M DEX10: {mk.Count} verts, brow {brow}, lip {lip}, mouth inside {inside}; {jaw} verts on the jaw (bone {fg0.Asset.jawBone})");
+            }
+        }
+        Log(rigs == anims.Count && rigs > 0 ? "PASS every face has a jaw and eyelids" : "FAIL face rig");
         Log($"heads: {built} built, {totalMs / Mathf.Max(1, built):0} ms each (whole body, sync), head mesh {headTris / Mathf.Max(1, built)} triangles avg");
         Log(built > 0 ? "PASS heads built" : "FAIL no heads");
         if (fpc != null) fpc.enabled = true;

@@ -23,6 +23,11 @@ public class BodyAsset
     public float wallMs, mainThreadMs;   // generation: start to finish, and main-thread time spent on it
     public readonly List<ClothChainSet> chains = new List<ClothChainSet>();   // skirts' spring chains (bones after the plan's)
     public const int Skin = 0;           // submesh; garment g is submesh 1 + g
+    public Mesh wig;                     // rigid hair on the head joint (head joint space), or null
+    public WigStyle wigStyle;
+    public Vector3 jawPivot;             // root space, rest
+    public Vector3 mouthCentre;          // root space, rest (the mouth cavity sits behind it)
+    public int jawBone = -1;             // renderer bone index of the jaw (after the chain bones)
 }
 
 // Phase 8: generating a body without stalling the frame. A staged state machine, advanced by Step()
@@ -94,6 +99,13 @@ public class BodyBuild
     NativeArray<Vector3> cpos, cnrm, conBody; NativeArray<Vector2> creg, clay; NativeArray<BoneWeight> cwts; NativeArray<byte> cgarm, cflags;
     NativeArray<float> gCells, gGaps;
     Parts bodyParts, headParts;
+    // The face: marks for the bake, the jaw (bone, hinge, weights), the wig.
+    BodySurfaceBake.FaceMarks faceMarks;
+    BodySdfKernel.Ellipsoid skullCopy;
+    Vector3 jawPivot, mouthCentre;
+    int jawBone = -1;
+    WigStyle wigStyle;
+    bool hasWig; Vector3[] wigV, wigN; int[] wigT;
     readonly List<ClothChainSet> chainSets = new List<ClothChainSet>();
     Matrix4x4[] bindposes;
     int skinBefore;
@@ -259,17 +271,8 @@ public class BodyBuild
         for (int g = 0; g < fields.Count; g++)
         {
             var def = outfit.garments[g];
-            ClothChainSet cs;
-            if (def.HasSkirt) cs = ClothChainSet.Build(fields[g].Kernel, def, g, fields[g].SkirtHemY, nextBone);
-            else if (def.IsHair && def.hair.style == HairStyle.Long && def.hair.dangle != null)
-            {
-                // Long hair: from the nape (the head joint) down to the cut on the chest (the shoulder blades).
-                int head = plan.Index("Head"), chest = plan.Index("Chest");
-                Vector3 hj = plan.JointPos(head);
-                float endY = plan.JointPos(chest).y + plan.bones[chest].length * 0.5f;
-                cs = ClothChainSet.BuildHair(fields[g].Kernel, def, g, new Vector2(hj.x, hj.z), hj.y - 0.01f, endY, nextBone);
-            }
-            else continue;
+            if (!def.HasSkirt) continue;
+            var cs = ClothChainSet.Build(fields[g].Kernel, def, g, fields[g].SkirtHemY, nextBone);
             chainSets.Add(cs);
             nextBone += cs.BoneCount;
         }
@@ -376,6 +379,12 @@ public class BodyBuild
         {
             verts[i] = pos[i];
             importance[i] = vertPiece[i] >= 2 ? 1f : BodyMesher.Importance(ms, (BoneKind)(int)reg[i].x);
+            if (sdf.HasHeadPiece && vertPiece[i] == sdf.HeadMode)
+            {
+                // The head's own grid: keep the mouth (it opens) and the eyes detailed.
+                float dm = (verts[i] - sdf.MouthCentre).magnitude, de = Mathf.Min((verts[i] - sdf.EyeL).magnitude, (verts[i] - sdf.EyeR).magnitude);
+                importance[i] = 1f + 10f * Mathf.Exp(-dm * dm / (0.025f * 0.025f)) + 4f * Mathf.Exp(-de * de / (0.02f * 0.02f));
+            }
             if (covered[i] != 0) importance[i] *= CoveredImportance;   // hidden under clothes: dropped later, spend little on it
         }
         for (int i = 0; i < cpos.Length; i++) cverts[i] = cpos[i];
@@ -452,19 +461,27 @@ public class BodyBuild
         var CG = vertGarment;
         DisposeVertexArrays();
         bindposes = BodySkinner.BindPoses(sdf);
-        if (chainSets.Count > 0)
-        {
-            // Chain bones after the plan's: bind = each joint, unrotated, in root space.
-            var bp = new List<Matrix4x4>(bindposes);
-            foreach (var cs in chainSets)
-                for (int p = 0; p < cs.panels; p++)
-                    for (int b = 0; b < cs.bones; b++) bp.Add(Matrix4x4.Translate(cs.Joint(p, b)).inverse);
-            bindposes = bp.ToArray();
-        }
+        // Chain bones after the plan's (bind = each joint, unrotated, in root space), then the jaw.
+        var bp = new List<Matrix4x4>(bindposes);
+        foreach (var cs in chainSets)
+            for (int p = 0; p < cs.panels; p++)
+                for (int b = 0; b < cs.bones; b++) bp.Add(Matrix4x4.Translate(cs.Joint(p, b)).inverse);
+        jawBone = bp.Count;
+        bp.Add(Matrix4x4.Translate(sdf.JawPivot).inverse);
+        bindposes = bp.ToArray();
         int pelvisBone = plan.Index("Hips");
         var T = tris.ToArray(); var CT = ctris.ToArray();
         int ng = fields.Count;
-        task = Task.Run(() => SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone));
+        faceMarks = BodySurfaceBake.FaceMarks.From(sdf);
+        skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre;
+        var kernelCopy = sdf.Kernel;
+        wigStyle = WigBuilder.Pick(sheet);
+        Vector3 headJoint = plan.JointPos(plan.Index("Head"));
+        task = Task.Run(() =>
+        {
+            SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
+            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, out wigV, out wigN, out wigT);
+        });
         CurrentStage = Stage.Split;
     }
 
@@ -531,8 +548,77 @@ public class BodyBuild
         var kinds = BodySurfaceBake.Kinds(plan);
         int[][] Arr(List<int>[] l) { var a = new int[l.Length][]; for (int i = 0; i < l.Length; i++) a[i] = l[i].ToArray(); return a; }
         body.bake = BodySurfaceBake.Bake(body.v, body.n, body.w, Arr(body.subs), kinds);
-        head.bake = BodySurfaceBake.Bake(head.v, head.n, head.w, Arr(head.subs), kinds, body.bake.hems);
+        head.bake = BodySurfaceBake.Bake(head.v, head.n, head.w, Arr(head.subs), kinds, body.bake.hems, faceMarks);
+        // The lower face (below the mouth line, in front of the hinge, above the neck) follows the jaw.
+        // The mouth: the band where the jaw weight changes is the mouth line (dark inside: a thin line
+        // closed, the opening when the jaw drops); the strips just above and below it are the lips.
+        // Inside the mouth's width the split is sharp (the upper lip stays on the head, the lower one goes
+        // with the jaw); the triangles bridging the two are the inside of the mouth: dark (a line when
+        // closed, they stretch into the open mouth when the jaw drops).
+        if (head.bake.uv4 == null) head.bake.uv4 = new Vector3[head.v.Length];
+        var wjs = new float[head.v.Length]; var inM = new float[head.v.Length];
+        for (int i = 0; i < head.v.Length; i++)
+        {
+            Vector3 d = head.v[i] - mouthCentre;
+            float dx = Mathf.Abs(Vector3.Dot(d, skullCopy.x)), dy = Vector3.Dot(d, skullCopy.y), dz = Vector3.Dot(d, skullCopy.z);
+            float inMouth = (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.02f, 0.028f, dx))) * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.035f, -0.015f, dz));
+            float wj = JawWeight(head.v[i], skullCopy, mouthCentre, jawPivot);
+            if (inMouth > 0.5f) wj = dy < -0.0015f ? Mathf.Max(wj, 1f) : 0f;
+            wjs[i] = wj; inM[i] = inMouth;
+            if (wj > 0.001f) head.w[i] = BlendIn(head.w[i], jawBone, wj);
+            float G(float x) => Mathf.Exp(-x * x);
+            float lip = (G((dy - 0.005f) / 0.004f) + G((dy + 0.008f) / 0.005f)) * inMouth;
+            var mk = head.bake.uv4[i];
+            head.bake.uv4[i] = new Vector3(mk.x, Mathf.Max(mk.y, Mathf.Clamp01(lip)), mk.z);
+        }
+        var ht = head.subs[0];
+        for (int k2 = 0; k2 + 2 < ht.Count; k2 += 3)
+        {
+            int a = ht[k2], b = ht[k2 + 1], c = ht[k2 + 2];
+            bool mouthTri = inM[a] > 0.5f && inM[b] > 0.5f && inM[c] > 0.5f;
+            float lo = Mathf.Min(wjs[a], Mathf.Min(wjs[b], wjs[c])), hi = Mathf.Max(wjs[a], Mathf.Max(wjs[b], wjs[c]));
+            if (!mouthTri || hi - lo < 0.5f) continue;
+            foreach (int v in new[] { a, b, c }) { var mk = head.bake.uv4[v]; head.bake.uv4[v] = new Vector3(mk.x, mk.y, 0.9f); inM[v] = 2f; }
+        }
+        // Closed, the lips meet: the bridging vertices are pulled most of the way to the mouth line, so the
+        // dark inside is a thin line until the jaw drops.
+        for (int i = 0; i < head.v.Length; i++)
+        {
+            if (inM[i] < 1.5f) continue;
+            float dy = Vector3.Dot(head.v[i] - mouthCentre, skullCopy.y);
+            head.v[i] -= skullCopy.y * (dy * 0.75f);
+            head.bake.uv3[i] = head.v[i];
+        }
         bodyParts = body; headParts = head;
+    }
+
+    // How much a head vertex follows the jaw (0..1).
+    public static float JawWeight(Vector3 v, BodySdfKernel.Ellipsoid sk, Vector3 mouth, Vector3 pivot)
+    {
+        float dy = Vector3.Dot(v - mouth, sk.y), dx = Mathf.Abs(Vector3.Dot(v - mouth, sk.x)), dz = Vector3.Dot(v - pivot, sk.z);
+        float below = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.006f, 0.002f, dy));     // under the mouth line
+        float front = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.01f, 0.025f, dz));          // in front of the hinge
+        float notNeck = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.05f, -0.075f, dy));  // not the neck under the chin
+        float inner = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.05f, 0.075f, dx));      // not the far sides
+        return below * front * notNeck * inner;
+    }
+
+    // Moves weight w of a vertex onto bone b (the rest scaled down; top 4 kept).
+    static BoneWeight BlendIn(BoneWeight o, int b, float w)
+    {
+        var list = new List<KeyValuePair<int, float>>
+        {
+            new KeyValuePair<int, float>(o.boneIndex0, o.weight0 * (1f - w)), new KeyValuePair<int, float>(o.boneIndex1, o.weight1 * (1f - w)),
+            new KeyValuePair<int, float>(o.boneIndex2, o.weight2 * (1f - w)), new KeyValuePair<int, float>(b, w),
+        };
+        list.Sort((x, y) => y.Value.CompareTo(x.Value));
+        float sum = 0f; foreach (var kv in list) sum += kv.Value;
+        sum = Mathf.Max(sum, 1e-6f);
+        return new BoneWeight
+        {
+            boneIndex0 = list[0].Key, weight0 = list[0].Value / sum, boneIndex1 = list[1].Key, weight1 = list[1].Value / sum,
+            boneIndex2 = list[2].Key, weight2 = list[2].Value / sum, boneIndex3 = list[3].Key, weight3 = list[3].Value / sum,
+        };
     }
 
     // A few passes of averaging each vertex's weights with its mesh neighbours' (top 4 kept).
@@ -609,6 +695,13 @@ public class BodyBuild
             skinTriangles = bodyParts.subs[0].Count / 3, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = gt,
         };
         Asset.chains.AddRange(chainSets);
+        Asset.jawBone = jawBone; Asset.jawPivot = jawPivot; Asset.mouthCentre = mouthCentre; Asset.wigStyle = wigStyle;
+        if (hasWig)
+        {
+            var wm = new Mesh { name = "Wig " + sheet, indexFormat = wigV.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
+            wm.vertices = wigV; wm.normals = wigN; wm.triangles = wigT; wm.RecalculateBounds();
+            Asset.wig = wm;
+        }
         DisposeFields();
         sdf.Dispose(); sdf = null;
         wall.Stop();

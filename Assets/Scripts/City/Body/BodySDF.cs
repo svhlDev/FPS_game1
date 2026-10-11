@@ -44,6 +44,8 @@ public class BodySDF : IDisposable
     readonly List<Blob> blobs = new List<Blob>();
     readonly List<BodySdfKernel.FacePrim> faceParts = new List<BodySdfKernel.FacePrim>();
     public readonly List<string> FacePartNames = new List<string>();
+    public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
+    public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;
     public float EggTop, EggBottom;
@@ -176,7 +178,7 @@ public class BodySDF : IDisposable
             headCutO = start[headIndex] - headCutAxis * mr.headCutBelow;
             headCutC = skull.f.o;
             float big = Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.4f;
-            headCutR = Mathf.Max((headCutO - headCutC).magnitude + hr.cutOverlap + 0.01f, big);
+            headCutR = Mathf.Max((headCutO - headCutC).magnitude + 0.045f, big);
             HeadBounds = new Bounds(headCutC, Vector3.one * headCutR * 2f);
         }
         kernel = BuildKernel(Allocator.Persistent);
@@ -248,7 +250,9 @@ public class BodySDF : IDisposable
                 cutList.Add(new BodySdfKernel.HandCut { o = start[i], axis = frames[i].y, centre = c, radius = r, hand = i });
             }
         // The head's cut goes last (cut mode 2 + HandCount).
-        if (HasHeadPiece) cutList.Add(new BodySdfKernel.HandCut { o = headCutO, axis = headCutAxis, centre = headCutC, radius = headCutR, hand = headIndex });
+        // Its overlap is longer (4.5 cm) and its tuck deeper: the body's 1.5 cm grid edge is ragged.
+        if (HasHeadPiece) cutList.Add(new BodySdfKernel.HandCut { o = headCutO, axis = headCutAxis, centre = headCutC, radius = headCutR, hand = headIndex,
+                                                                  cutBody = 0.01f, cutHand = -0.035f, shrink = 0.012f });
         k.cuts = new NativeArray<BodySdfKernel.HandCut>(cutList.ToArray(), alloc);
         if (plan.dna != null)
         {
@@ -451,6 +455,10 @@ public class BodySDF : IDisposable
             }
         }
         EyeRadius = rx * SR.eyeRadius;
+        // The jaw hinges under the ears (face space), the mouth line from its part.
+        JawPivot = FacePoint(new Vector3(0f, -0.22f, -0.15f));
+        MouthCentre = FacePoint(new Vector3(0f, -0.483f, 1.0f));
+        for (int j = 0; j < FacePartNames.Count; j++) if (FacePartNames[j] == "MouthLine") MouthCentre = faceParts[j].o;
         EyeL = FacePoint(new Vector3(-SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
         EyeR = FacePoint(new Vector3(SR.eyePosition.x, SR.eyePosition.y, SR.eyePosition.z));
     }

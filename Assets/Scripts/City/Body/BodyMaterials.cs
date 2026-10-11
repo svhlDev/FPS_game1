@@ -76,8 +76,7 @@ public static class BodyMaterials
         {
             var def = i - 1 < garments.Count ? garments[i - 1] : null;
             var slot = def != null ? def.slot : GarmentSlot.Top;
-            var colour = slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet
-                       : slot == GarmentSlot.Head ? HairColour(asset != null ? asset.sheet.seed : seed) : outer;
+            var colour = slot == GarmentSlot.Top ? top : slot == GarmentSlot.Bottom ? bottom : slot == GarmentSlot.Feet ? feet : outer;
             mats[i] = Garment(def != null ? def.fabric : Fabric.Cotton, colour);
         }
         return mats;
@@ -88,7 +87,7 @@ public static class BodyMaterials
     public static SurfaceType SurfaceOf(Fabric f) => f switch
     {
         Fabric.Denim => SurfaceType.Denim, Fabric.Wool => SurfaceType.Wool, Fabric.Leather => SurfaceType.Leather,
-        Fabric.Vinyl => SurfaceType.Vinyl, Fabric.Hair => SurfaceType.Hair, _ => SurfaceType.Cotton,
+        Fabric.Vinyl => SurfaceType.Vinyl, _ => SurfaceType.Cotton,
     };
 
     public static Material Garment(Fabric fabric, Color colour) => MaterialLibrary.Get(SurfaceOf(fabric), colour, MaterialLibrary.Variant.Skinned);
@@ -100,6 +99,8 @@ public static class BodyMaterials
         new Color(0.3f, 0.1f, 0.04f), new Color(0.62f, 0.48f, 0.26f), new Color(0.45f, 0.44f, 0.43f),
     };
     static readonly Color[] NeonHair = { new Color(0.9f, 0.1f, 0.6f), new Color(0.1f, 0.75f, 0.9f), new Color(0.5f, 0.2f, 0.95f) };
+
+    public static Material Wig(int seed) => MaterialLibrary.Get(SurfaceType.Hair, HairColour(seed), MaterialLibrary.Variant.Object);
 
     public static Color HairColour(int seed)
     {

@@ -17,7 +17,7 @@ using UnityEngine.Rendering;
 // warning to re-bake (the bodies are valid, just not what the current rules would make).
 public static class BodyPreset
 {
-    public const int Version = 2;   // 2: quantized vertices
+    public const int Version = 3;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig
     public const string ResourceName = "BodyPoolPreset";
 
     [Serializable] class ChainList { public List<ClothChainSet> chains = new List<ClothChainSet>(); }
@@ -26,7 +26,7 @@ public static class BodyPreset
     public class MeshData
     {
         public string name;
-        public Vector3[] v, n; public Vector2[] uv1, uv2; public BoneWeight[] w; public Matrix4x4[] bind;
+        public Vector3[] v, n; public Vector2[] uv1, uv2; public Vector3[] uv4; public BoneWeight[] w; public Matrix4x4[] bind;
         public int[][] subs;
         public BodySurfaceBake.Result bake;   // computed after decoding (not stored in the file)
         public Mesh ToMesh()
@@ -37,6 +37,7 @@ public static class BodyPreset
             for (int i = 0; i < subs.Length; i++) m.SetTriangles(subs[i], i, false);
             m.boneWeights = w; m.bindposes = bind;
             BodySurfaceBake.Apply(m, bake);
+            if (uv4 != null) m.SetUVs(4, uv4);
             m.RecalculateBounds();
             return m;
         }
@@ -49,6 +50,8 @@ public static class BodyPreset
         public Vector3 eyeL, eyeR; public float eyeRadius, height, width;
         public int triangles, skinTriangles, skinBefore; public int[] garmentTriangles;
         public MeshData body, head;
+        public WigStyle wigStyle; public Vector3 jawPivot, mouthCentre; public int jawBone;
+        public Vector3[] wigV, wigN; public int[] wigT;
 
         public BodyAsset ToAsset()
         {
@@ -59,6 +62,13 @@ public static class BodyPreset
                 triangles = triangles, skinTriangles = skinTriangles, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = garmentTriangles,
             };
             if (chains != null) a.chains.AddRange(chains);
+            a.wigStyle = wigStyle; a.jawPivot = jawPivot; a.mouthCentre = mouthCentre; a.jawBone = jawBone;
+            if (wigV != null && wigV.Length > 0)
+            {
+                var wm = new Mesh { name = "Wig", indexFormat = wigV.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
+                wm.vertices = wigV; wm.normals = wigN; wm.triangles = wigT; wm.RecalculateBounds();
+                a.wig = wm;
+            }
             return a;
         }
     }
@@ -88,7 +98,13 @@ public static class BodyPreset
                 w.Write(a.triangles); w.Write(a.skinTriangles); w.Write(a.skinTrianglesBeforeRemoval);
                 var gt = a.garmentTriangles ?? new int[0];
                 w.Write(gt.Length); foreach (int t in gt) w.Write(t);
+                w.Write((int)a.wigStyle); W(w, a.jawPivot); W(w, a.mouthCentre); w.Write(a.jawBone);
                 WriteMesh(w, a.body); WriteMesh(w, a.head);
+                var wv = a.wig != null ? a.wig.vertices : new Vector3[0];
+                var wn = a.wig != null ? a.wig.normals : new Vector3[0];
+                var wt = a.wig != null ? a.wig.triangles : new int[0];
+                w.Write(wv.Length); for (int i = 0; i < wv.Length; i++) { W(w, wv[i]); W(w, wn[i]); }
+                w.Write(wt.Length); foreach (int i in wt) w.Write((ushort)i);
             }
         }
         return ms.ToArray();
@@ -102,6 +118,7 @@ public static class BodyPreset
         w.Write(m.name);
         var v = m.vertices; var n = m.normals;
         var uv1 = new List<Vector2>(); m.GetUVs(1, uv1); var uv2 = new List<Vector2>(); m.GetUVs(2, uv2);
+        var uv4 = new List<Vector3>(); m.GetUVs(4, uv4);
         var bw = m.boneWeights; var bind = m.bindposes;
         w.Write(v.Length);
         var bmin = Vector3.one * float.MaxValue; var bmax = -bmin;
@@ -117,6 +134,8 @@ public static class BodyPreset
             w.Write(S(n[i].x)); w.Write(S(n[i].y)); w.Write(S(n[i].z));
             w.Write((byte)Mathf.RoundToInt(uv1[i].x)); w.Write((byte)Mathf.RoundToInt(uv1[i].y));
             w.Write(Mathf.FloatToHalf(uv2[i].x)); w.Write(Mathf.FloatToHalf(uv2[i].y));
+            Vector3 mk = i < uv4.Count ? uv4[i] : Vector3.zero;
+            w.Write(Q(mk.x)); w.Write(Q(mk.y)); w.Write(Q(mk.z));
             var b = bw[i];
             w.Write((byte)b.boneIndex0); w.Write((byte)b.boneIndex1); w.Write((byte)b.boneIndex2); w.Write((byte)b.boneIndex3);
             w.Write(Q(b.weight0)); w.Write(Q(b.weight1)); w.Write(Q(b.weight2)); w.Write(Q(b.weight3));
@@ -154,7 +173,13 @@ public static class BodyPreset
             e.triangles = r.ReadInt32(); e.skinTriangles = r.ReadInt32(); e.skinBefore = r.ReadInt32();
             e.garmentTriangles = new int[r.ReadInt32()];
             for (int i = 0; i < e.garmentTriangles.Length; i++) e.garmentTriangles[i] = r.ReadInt32();
+            e.wigStyle = (WigStyle)r.ReadInt32(); e.jawPivot = V3(r); e.mouthCentre = V3(r); e.jawBone = r.ReadInt32();
             e.body = ReadMesh(r); e.head = ReadMesh(r);
+            int wn = r.ReadInt32();
+            e.wigV = new Vector3[wn]; e.wigN = new Vector3[wn];
+            for (int i = 0; i < wn; i++) { e.wigV[i] = V3(r); e.wigN[i] = V3(r); }
+            e.wigT = new int[r.ReadInt32()];
+            for (int i = 0; i < e.wigT.Length; i++) e.wigT[i] = r.ReadUInt16();
             var kinds = BodySurfaceBake.Kinds(e.plan);
             e.body.bake = BodySurfaceBake.Bake(e.body.v, e.body.n, e.body.w, e.body.subs, kinds);
             e.head.bake = BodySurfaceBake.Bake(e.head.v, e.head.n, e.head.w, e.head.subs, kinds, e.body.bake.hems);
@@ -171,7 +196,7 @@ public static class BodyPreset
     {
         var m = new MeshData { name = r.ReadString() };
         int nv = r.ReadInt32();
-        m.v = new Vector3[nv]; m.n = new Vector3[nv]; m.uv1 = new Vector2[nv]; m.uv2 = new Vector2[nv]; m.w = new BoneWeight[nv];
+        m.v = new Vector3[nv]; m.n = new Vector3[nv]; m.uv1 = new Vector2[nv]; m.uv2 = new Vector2[nv]; m.uv4 = new Vector3[nv]; m.w = new BoneWeight[nv];
         Vector3 bmin = V3(r), ext = V3(r);
         float Sn(byte b) => (b - 128) / 127f;
         for (int i = 0; i < nv; i++)
@@ -180,6 +205,7 @@ public static class BodyPreset
             m.n[i] = new Vector3(Sn(r.ReadByte()), Sn(r.ReadByte()), Sn(r.ReadByte())).normalized;
             m.uv1[i] = new Vector2(r.ReadByte(), r.ReadByte());
             m.uv2[i] = new Vector2(Mathf.HalfToFloat(r.ReadUInt16()), Mathf.HalfToFloat(r.ReadUInt16()));
+            m.uv4[i] = new Vector3(r.ReadByte() / 255f, r.ReadByte() / 255f, r.ReadByte() / 255f);
             int b0 = r.ReadByte(), b1 = r.ReadByte(), b2 = r.ReadByte(), b3 = r.ReadByte();
             float w0 = r.ReadByte(), w1 = r.ReadByte(), w2 = r.ReadByte(), w3 = r.ReadByte();
             float sum = Mathf.Max(1f, w0 + w1 + w2 + w3);

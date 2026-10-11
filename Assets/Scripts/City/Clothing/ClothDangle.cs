@@ -49,11 +49,9 @@ public class ClothDangle : MonoBehaviour
         var d = f.gameObject.AddComponent<ClothDangle>();
         d.fig = f;
         d.pelvis = f.Hips;
-        bool hair = false;
         foreach (var cs in a.chains)
         {
             bool head = cs.anchor == "Head" && f.HeadJoint != null;
-            hair |= head;
             var anchor = head ? f.HeadJoint : f.Hips;
             Vector3 anchorRest = a.plan.JointPos(a.plan.Index(head ? "Head" : "Hips"));
             var s = new Set { def = cs, anchor = anchor, bones = new Transform[cs.BoneCount], restLocal = new Vector3[cs.joints.Length], x = new Vector3[cs.joints.Length], xp = new Vector3[cs.joints.Length], seg = new float[cs.BoneCount] };
@@ -76,16 +74,6 @@ public class ClothDangle : MonoBehaviour
         d.capsules.Add((f.HipL, f.KneeL, R("HipL"))); d.capsules.Add((f.HipR, f.KneeR, R("HipR")));
         d.capsules.Add((f.KneeL, f.AnkleL, R("KneeL"))); d.capsules.Add((f.KneeR, f.AnkleR, R("KneeR")));
         d.capsules.Add((f.Hips, f.Spine, R("Hips")));
-        if (hair)
-        {
-            // Long hair: the head, neck, upper back and shoulders.
-            float hm = 0.015f;
-            float Rh(string bone) { int i = a.plan.Index(bone); var b = a.plan.bones[i]; return Mathf.Max(b.Outer.x, Mathf.Max(b.Outer.y, b.Outer.z)) + hm; }
-            if (f.Head != null) d.capsules.Add((f.HeadJoint, f.Head, Rh("Head")));
-            d.capsules.Add((f.Neck, f.HeadJoint, Rh("Neck")));
-            d.capsules.Add((f.Chest, f.Neck, Rh("Chest") * 0.6f));   // the torso is flat front to back: its widest girth would swallow the back
-            d.capsules.Add((f.ShoulderL, f.ElbowL, Rh("ShoulderL"))); d.capsules.Add((f.ShoulderR, f.ElbowR, Rh("ShoulderR")));
-        }
         return list;
     }
 

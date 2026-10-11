@@ -19,7 +19,7 @@ public class ClothChainSet
     public float[] gaps;              // angles nothing blends across: the front opening and the slits (below slitTopY)
     public SkirtDef def;
     public int firstBone;             // renderer bone index of panel 0, bone 0 (after the plan's bones)
-    public string anchor = "Hips";    // the plan joint the ring follows (the pelvis; "Head" for long hair)
+    public string anchor = "Hips";    // the plan joint the ring follows
 
     public int BoneIndex(int panel, int bone) => firstBone + panel * bones + bone;
     public Vector3 Joint(int panel, int level) => joints[panel * (bones + 1) + level];
@@ -56,39 +56,6 @@ public class ClothChainSet
                     if (k.Shape(q) - off <= 0f) r = t;
                 }
                 c.joints[p * (c.bones + 1) + l] = new Vector3(c.axis.x, y, c.axis.y) + dir * Mathf.Max(0.05f, r - g.thickness * 0.5f);
-            }
-        }
-        return c;
-    }
-
-    // Long hair (Head spec Part E): panels round the back and sides of the head (none in front), each a
-    // chain from a ring at the nape down to the hair's ends, following the head.
-    public static ClothChainSet BuildHair(GarmentKernel k, GarmentDef g, int garment, Vector2 axis, float napeY, float endY, int firstBone)
-    {
-        var sk = g.hair.dangle;
-        var c = new ClothChainSet
-        {
-            garment = garment, panels = Mathf.Max(2, sk.panels), bones = Mathf.Max(1, sk.bonesPerPanel), def = sk, firstBone = firstBone,
-            axis = axis, ringY = napeY, hemY = endY + 0.01f, slitTopY = -10f, anchor = "Head", gaps = new[] { 0f },
-        };
-        c.angles = new float[c.panels];
-        for (int p = 0; p < c.panels; p++) c.angles[p] = Mathf.DeltaAngle(0f, 125f + p * 110f / (c.panels - 1));   // 125 .. 235 deg: the back (the sides stay with the head)
-        c.joints = new Vector3[c.panels * (c.bones + 1)];
-        float off = g.thickness + g.gap;
-        for (int p = 0; p < c.panels; p++)
-        {
-            float a = c.angles[p] * Mathf.Deg2Rad;
-            Vector3 dir = new Vector3(Mathf.Sin(a), 0f, Mathf.Cos(a));
-            for (int l = 0; l <= c.bones; l++)
-            {
-                float y = Mathf.Lerp(c.ringY, c.hemY, l / (float)c.bones);
-                float r = 0.04f;
-                for (float t = 0.02f; t < 0.4f; t += 0.003f)
-                {
-                    Vector3 q = new Vector3(axis.x, y, axis.y) + dir * t;
-                    if (k.Shape(q) - off <= 0f && k.HairRegion(q) <= 0f) r = t;
-                }
-                c.joints[p * (c.bones + 1) + l] = new Vector3(axis.x, y, axis.y) + dir * Mathf.Max(0.04f, r - g.thickness * 0.5f);
             }
         }
         return c;

@@ -58,6 +58,8 @@ public class CharacterFigure : MonoBehaviour
     public Vector3? LookTarget { get; set; }
     public readonly List<Renderer> FaceRenderers = new List<Renderer>();
     public Transform EyeL, EyeR;
+    public Transform Jaw;          // generated bodies: the jaw bone (FaceAnimator opens it)
+    public Renderer Wig;           // generated bodies: the hair, rigid on the head
     public readonly List<(Transform shoulder, Transform elbow, Transform wrist, int side)> ExtraArms = new List<(Transform, Transform, Transform, int)>();
     // Generated bodies: finger and thumb joints (one bone each), with their fist rotation (the open hand is
     // the rest pose). hand 0 = left, 1 = right (extra arms by their side). FigureAnimator blends a curl.
@@ -261,9 +263,20 @@ public class CharacterFigure : MonoBehaviour
         // Renderers (meshes shared by every character using this body).
         // Renderer bones: the skeleton's, then the skirts' spring-chain bones (ClothDangle).
         var chainBones = ClothDangle.Attach(f, a);
-        var bones = new Transform[sk.Bones.Count + chainBones.Count];
+        var bones = new Transform[Mathf.Max(sk.Bones.Count + chainBones.Count, a.jawBone + 1)];
         for (int i = 0; i < sk.Bones.Count; i++) bones[i] = sk.Bones[i].joint;
         for (int i = 0; i < chainBones.Count; i++) bones[sk.Bones.Count + i] = chainBones[i];
+        // The jaw (after the chain bones): hinged under the ears, on the head joint.
+        if (a.jawBone >= 0)
+        {
+            var jaw = new GameObject("Jaw").transform;
+            jaw.SetParent(sk.Head, false);
+            jaw.localPosition = a.jawPivot - headStart;
+            jaw.gameObject.layer = layer;
+            bones[a.jawBone] = jaw;
+            f.Jaw = jaw;
+        }
+        for (int i = 0; i < bones.Length; i++) if (bones[i] == null) bones[i] = sk.Hips;
         var skin = BodyMaterials.Skin(BodyMaterials.SkinTone(a.sheet.seed));
         var bodyR = BodySkinner.AddRenderer(root, "BodyMesh", a.body, bones, sk.Hips, skin, shadows);
         bodyR.sharedMaterials = BodyMaterials.Clothes(a, role, colorSeed, skin);
@@ -304,6 +317,38 @@ public class CharacterFigure : MonoBehaviour
         f.EyeR = Eye("EyeR", a.eyeR);
         var look = root.gameObject.AddComponent<EyeLook>();
         look.eyeL = f.EyeL; look.eyeR = f.EyeR;
+
+        // Eyelids (skin caps just outside the eyeball; FaceAnimator blinks them) and the wig.
+        var face = root.gameObject.AddComponent<FaceAnimator>();
+        face.Jaw = f.Jaw;
+        foreach (var eye in new[] { f.EyeL, f.EyeR })
+        {
+            Transform Lid(string n, bool upper)
+            {
+                var go = new GameObject(n);
+                go.layer = layer;
+                go.transform.SetParent(sk.Head, false);
+                go.transform.localPosition = eye.localPosition;
+                go.AddComponent<MeshFilter>().sharedMesh = FaceAnimator.LidMesh(er * 1.18f, upper);
+                var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = skin;
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                f.FaceRenderers.Add(r);
+                return go.transform;
+            }
+            face.UpperLids.Add(Lid(eye.name + "UpperLid", true));
+            face.LowerLids.Add(Lid(eye.name + "LowerLid", false));
+        }
+        if (a.wig != null)
+        {
+            var go = new GameObject("Wig");
+            go.layer = layer;
+            go.transform.SetParent(sk.Head, false);
+            go.AddComponent<MeshFilter>().sharedMesh = a.wig;
+            var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = BodyMaterials.Wig(a.sheet.seed);
+            r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+            f.FaceRenderers.Add(r);
+            f.Wig = r;
+        }
 
         // Hit colliders per bone (triggers tagged with their location), from the generated girths.
         if (hitColliders)

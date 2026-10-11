@@ -90,9 +90,9 @@ public class FaceDef
         P("MuzzleLower", FacePartShape.HalfEllipsoidLower, new Vector3(0f, -0.47f, 0.8f), Vector3.zero, new Vector3(0.36f, 0.22f, 0.22f), 0.012f,
           sizeVar: new Vector3(0.06f, 0.06f, 0.06f)),
         // Lips: each from two capsules meeting at the centre with a small angle (crisp blends).
-        P("LipUpper", FacePartShape.Capsule, new Vector3(0.085f, -0.45f, 1.07f), new Vector3(0f, 14f, -84f), new Vector3(0.06f, 0.1f, 0f), 0.003f,
+        P("LipUpper", FacePartShape.Capsule, new Vector3(0.085f, -0.445f, 1.1f), new Vector3(0f, 14f, -84f), new Vector3(0.075f, 0.1f, 0f), 0.003f,
           mirrored: true, femaleSize: new Vector3(1.35f, 1.05f, 1f), sizeVar: new Vector3(0.15f, 0.08f, 0f)),
-        P("LipLower", FacePartShape.Capsule, new Vector3(0.075f, -0.515f, 1.05f), new Vector3(0f, 14f, -96f), new Vector3(0.068f, 0.09f, 0f), 0.003f,
+        P("LipLower", FacePartShape.Capsule, new Vector3(0.075f, -0.52f, 1.08f), new Vector3(0f, 14f, -96f), new Vector3(0.085f, 0.09f, 0f), 0.003f,
           mirrored: true, femaleSize: new Vector3(1.35f, 1.05f, 1f), sizeVar: new Vector3(0.15f, 0.08f, 0f)),
         // The mouth line: a thin groove between the lips, cut after the fat.
         P("MouthLine", FacePartShape.Capsule, new Vector3(0f, -0.483f, 1.12f), new Vector3(0f, 0f, -90f), new Vector3(0.03f, 0.18f, 0f), 0.002f,

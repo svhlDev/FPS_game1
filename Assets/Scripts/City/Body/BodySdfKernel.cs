@@ -38,6 +38,7 @@ public struct BodySdfKernel : IDisposable
         public Vector3 centre;          // a sphere round the hand that bounds the cut
         public float radius;
         public int hand;
+        public float cutBody, cutHand, shrink;   // per cut (the head's overlap is longer); 0 = the kernel's
     }
 
     public struct Ellipsoid
@@ -88,7 +89,7 @@ public struct BodySdfKernel : IDisposable
 
     public const int MaxBones = 31;
     const int KPelvis = (int)BoneKind.Pelvis, KLumbar = (int)BoneKind.Lumbar, KChest = (int)BoneKind.Chest,
-              KHead = (int)BoneKind.Head, KHand = (int)BoneKind.Hand, KFoot = (int)BoneKind.Foot;
+              KHead = (int)BoneKind.Head, KHand = (int)BoneKind.Hand, KFoot = (int)BoneKind.Foot, KUpperArm = (int)BoneKind.UpperArm;
 
     public void Dispose()
     {
@@ -133,6 +134,24 @@ public struct BodySdfKernel : IDisposable
         float s = EggScale(p.y, r.y, bottom, top);
         float d = EllipsoidDist(new Vector3(p.x / s, p.y, p.z / s), r);
         return d * Mathf.Min(1f, Mathf.Min(bottom, top)) * 0.9f;
+    }
+
+    // Where face fat collects (multiplies the head's fat): pooled in the cheeks, the jowls and under the
+    // chin, thin over the forehead, the nose, round the eyes and on the cranium.
+    float FaceFatMask(Vector3 p)
+    {
+        Vector3 l = skull.ToLocal(p);
+        Vector3 u = new Vector3(l.x / skull.r.x, l.y / skull.r.y, l.z / skull.r.z);
+        float ax = Mathf.Abs(u.x);
+        float G(float x) => Mathf.Exp(-x * x);
+        float front = Mathf.Clamp01(u.z * 2f + 0.6f);
+        float cheeks = G((ax - 0.5f) / 0.28f) * G((u.y + 0.38f) / 0.28f) * front;
+        float jowls = G((ax - 0.45f) / 0.3f) * G((u.y + 0.72f) / 0.22f);
+        float chin = G(ax / 0.55f) * G((u.y + 0.92f) / 0.25f);
+        float pool = Mathf.Max(cheeks, Mathf.Max(jowls, chin));
+        // Lips carry almost no fat (so they stay visible on any face).
+        float mouth = G(ax / 0.32f) * G((u.y + 0.48f) / 0.1f) * front;
+        return Mathf.Lerp(Mathf.Lerp(0.35f, 1.7f, pool), 0.12f, mouth);
     }
 
     public static float FaceDist(FacePrim f, Vector3 p)
@@ -260,7 +279,16 @@ public struct BodySdfKernel : IDisposable
         }
         float d1 = RoundCone(s, b.girth.x, b.girth.y, L2);
         float d2 = RoundCone(s - new Vector3(0f, L2, 0f), b.girth.y, b.girth.z, L2);
-        return Mathf.Min(d1, d2) * dr; // squashing z by 1/dr stretches distances: stay a lower bound
+        float limb = Mathf.Min(d1, d2) * dr; // squashing z by 1/dr stretches distances: stay a lower bound
+        // Arm roots: a capsule from the shoulder joint in toward the chest's axis, so a lean, narrow chest
+        // never leaves the arm floating beside it (the joint blend alone can't bridge that gap).
+        if (b.kind == KUpperArm && b.parent >= 0 && IsTorso(bones[b.parent].kind))
+        {
+            var pa = bones[b.parent];
+            Vector3 inner = pa.o + pa.y * Vector3.Dot(b.o - pa.o, pa.y);
+            limb = Mathf.Min(limb, SegmentDist(p, b.o, Vector3.Lerp(b.o, inner, 0.8f)) - b.girth.x * 0.85f);
+        }
+        return limb;
     }
 
     // Fat thickness by one bone: its fat profile, steered round the torso (belly in front, buttocks
@@ -312,7 +340,7 @@ public struct BodySdfKernel : IDisposable
         {
             int neck = bones[headIndex].parent;
             float m = neck >= 0 ? Mathf.Clamp01((d[neck] - d[headIndex]) / 0.03f + 0.5f) : 1f;
-            if (m > 0f) fat = Mathf.Lerp(fat, FatAt(p, headIndex), m);
+            if (m > 0f) fat = Mathf.Lerp(fat, FatAt(p, headIndex) * FaceFatMask(p), m);
         }
         // Hands carry their fat in the palm and finger sizes: a fat offset (and its wide blend) past the
         // wrist would fuse the fingers into a mitten.
@@ -376,10 +404,10 @@ public struct BodySdfKernel : IDisposable
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
     }
 
-    // The meshing cuts (see the top). s = distance along the hand from the wrist.
+    // The meshing cuts (see the top). s = distance along the hand from the wrist. Each cut may carry its
+    // own positions and shrink (the head's seam needs a longer overlap: its grid is much finer than the body's).
     float Cut(Vector3 p, float skin)
     {
-        float span = Mathf.Max(1e-4f, cutBody - cutHand);
         if (cutMode == 1)
         {
             for (int h = 0; h < cuts.Length; h++)
@@ -387,17 +415,21 @@ public struct BodySdfKernel : IDisposable
                 var c = cuts[h];
                 float sphere = (p - c.centre).magnitude - c.radius;
                 if (sphere > 0.02f) continue;
+                float cb = c.shrink > 0f ? c.cutBody : cutBody, ch = c.shrink > 0f ? c.cutHand : cutHand, sh = c.shrink > 0f ? c.shrink : cutShrink;
+                float span = Mathf.Max(1e-4f, cb - ch);
                 float s = Vector3.Dot(p - c.o, c.axis);
                 // Shrinks under the hand's skin toward the cut, removed past it (inside the sphere).
-                skin += cutShrink * Mathf.Clamp01((s - cutHand) / span) * Mathf.Clamp01(-sphere / 0.02f);
-                skin = Mathf.Max(skin, -Mathf.Max(cutBody - s, sphere));
+                skin += sh * Mathf.Clamp01((s - ch) / span) * Mathf.Clamp01(-sphere / 0.02f);
+                skin = Mathf.Max(skin, -Mathf.Max(cb - s, sphere));
             }
             return skin;
         }
         var k = cuts[cutMode - 2];
+        float kb = k.shrink > 0f ? k.cutBody : cutBody, kh = k.shrink > 0f ? k.cutHand : cutHand, ks = k.shrink > 0f ? k.shrink : cutShrink;
+        float kspan = Mathf.Max(1e-4f, kb - kh);
         float sk = Vector3.Dot(p - k.o, k.axis);
-        skin += cutShrink * Mathf.Clamp01((cutBody - sk) / span);
-        return Mathf.Max(skin, Mathf.Max(cutHand - sk, (p - k.centre).magnitude - k.radius));
+        skin += ks * Mathf.Clamp01((kb - sk) / kspan);
+        return Mathf.Max(skin, Mathf.Max(kh - sk, (p - k.centre).magnitude - k.radius));
     }
 
     public float Skin(Vector3 p) => Eval(p).skin;
