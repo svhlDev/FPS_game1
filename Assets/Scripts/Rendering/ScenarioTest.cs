@@ -873,7 +873,7 @@ public partial class ScenarioTest : MonoBehaviour
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
                 HeadCanonOverlay.Attach(f);
-                Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; {f.Asset.neckWeld}");
+                Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; hair cards {(f.Asset.hairCards != null ? f.Asset.hairCards.triangles.Length / 3 : 0)} triangles; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);
                 yield return null;
@@ -914,6 +914,27 @@ public partial class ScenarioTest : MonoBehaviour
                 if (ov != null) ov.Show(HeadCanonOverlay.View.Off);
                 foreach (var rr in hidden) if (rr != null) rr.enabled = true;
             }
+        }
+        // Long hair cards swing on their chains: turn the long-haired head's figure sharply, the tips lag.
+        {
+            var lh = GameObject.Find("wig Long");
+            var dg = lh != null ? lh.GetComponent<ClothDangle>() : null;
+            var lf = lh != null ? lh.GetComponent<CharacterFigure>() : null;
+            if (dg != null && lf != null && lf.Asset.chains.Count > 0)
+            {
+                int set = lf.Asset.chains.Count - 1, mid = lf.Asset.chains[set].panels / 2, tip = lf.Asset.chains[set].bones;
+                cam.transform.SetPositionAndRotation(lh.transform.position + Vector3.up * 1.4f - lh.transform.forward * 1.5f, Quaternion.LookRotation(lh.transform.forward));
+                yield return new WaitForSeconds(0.3f);
+                lh.transform.Rotate(0f, 70f, 0f);
+                float lag = 0f;
+                for (int q = 0; q < 6; q++) { yield return null; lag = Mathf.Max(lag, (dg.DebugJoint(set, mid, tip) - dg.DebugRest(set, mid, tip)).magnitude); }
+                yield return new WaitForSeconds(1.5f);
+                float settle = (dg.DebugJoint(set, mid, tip) - dg.DebugRest(set, mid, tip)).magnitude;
+                lh.transform.Rotate(0f, -70f, 0f);
+                Log($"long hair: {lf.Asset.chains[set].panels} strand groups x {tip} bones, tip lag after a 70 deg turn {lag * 100f:0.0} cm, {settle * 100f:0.0} cm after 1.5 s");
+                Log(lag > 0.01f && settle < lag ? "PASS long hair swings on its chains and settles" : "FAIL long hair chains");
+            }
+            else Log("FAIL no long-hair chains on 'wig Long'");
         }
         // The face rig: wigs, eyelids, the jaw. Close the eyes and open every mouth, shoot the first row again.
         int wigs = 0, rigs = 0;

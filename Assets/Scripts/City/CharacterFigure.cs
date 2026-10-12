@@ -60,6 +60,7 @@ public class CharacterFigure : MonoBehaviour
     public Transform EyeL, EyeR;
     public Transform Jaw;          // generated bodies: the jaw bone (FaceAnimator opens it)
     public Renderer Wig;           // generated bodies: the hair, rigid on the head
+    public Renderer HairCards;     // generated bodies: hair cards (Face Fix Part 9)
     public readonly List<(Transform shoulder, Transform elbow, Transform wrist, int side)> ExtraArms = new List<(Transform, Transform, Transform, int)>();
     // Generated bodies: finger and thumb joints (one bone each), with their fist rotation (the open hand is
     // the rest pose). hand 0 = left, 1 = right (extra arms by their side). FigureAnimator blends a curl.
@@ -343,11 +344,20 @@ public class CharacterFigure : MonoBehaviour
             go.AddComponent<MeshFilter>().sharedMesh = a.wig;
             var r = go.AddComponent<MeshRenderer>();
             // The hair, and the brows drawn as strands (FPS/Brow).
-            r.sharedMaterials = a.wig.subMeshCount > 1 ? new[] { BodyMaterials.Wig(a.sheet.seed), BodyMaterials.Brow(BodyMaterials.HairColour(a.sheet.seed)) }
-                                                       : new[] { BodyMaterials.Wig(a.sheet.seed) };
+            // (Under hair cards the shell is the darker inner layer.)
+            var shellMat = BodyMaterials.Wig(a.sheet.seed, a.hairCards != null);
+            r.sharedMaterials = a.wig.subMeshCount > 1 ? new[] { shellMat, BodyMaterials.Brow(BodyMaterials.HairColour(a.sheet.seed)) } : new[] { shellMat };
             r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
             f.FaceRenderers.Add(r);
             f.Wig = r;
+        }
+        // Hair cards (Face Fix Part 9): skinned to the head and long hair's chains; off far away (the shell remains).
+        if (a.hairCards != null)
+        {
+            var hr2 = BodySkinner.AddRenderer(root, "HairCards", a.hairCards, bones, sk.Hips, BodyMaterials.HairCards(BodyMaterials.HairColour(a.sheet.seed)), shadows);
+            f.FaceRenderers.Add(hr2);
+            f.HairCards = hr2;
+            root.gameObject.AddComponent<HairLOD>().cards = hr2;
         }
 
         // Hit colliders per bone (triggers tagged with their location), from the generated girths.

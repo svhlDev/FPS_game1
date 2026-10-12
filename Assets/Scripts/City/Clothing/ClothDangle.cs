@@ -74,6 +74,17 @@ public class ClothDangle : MonoBehaviour
         d.capsules.Add((f.HipL, f.KneeL, R("HipL"))); d.capsules.Add((f.HipR, f.KneeR, R("HipR")));
         d.capsules.Add((f.KneeL, f.AnkleL, R("KneeL"))); d.capsules.Add((f.KneeR, f.AnkleR, R("KneeR")));
         d.capsules.Add((f.Hips, f.Spine, R("Hips")));
+        // Long hair (Face Fix Part 9): the head, the neck and the shoulders.
+        bool hair = false; foreach (var cs in a.chains) if (cs.anchor == "Head") hair = true;
+        if (hair && f.HeadJoint != null && f.Neck != null && f.Head != null)
+        {
+            float RB(string bone, float m) { int i = a.plan.Index(bone); var b = a.plan.bones[i]; return Mathf.Max(b.Outer.x, Mathf.Max(b.Outer.y, b.Outer.z)) + m; }
+            d.capsules.Add((f.Neck, f.HeadJoint, RB("Neck", 0.008f)));
+            d.capsules.Add((f.HeadJoint, f.Head, RB("Head", 0.004f)));
+            if (f.ShoulderL != null && f.ElbowL != null) d.capsules.Add((f.ShoulderL, f.ElbowL, RB("ShoulderL", 0.01f)));
+            if (f.ShoulderR != null && f.ElbowR != null) d.capsules.Add((f.ShoulderR, f.ElbowR, RB("ShoulderR", 0.01f)));
+            if (f.Chest != null) d.capsules.Add((f.Chest, f.Neck, RB("Chest", 0.01f) * 0.8f));
+        }
         return list;
     }
 

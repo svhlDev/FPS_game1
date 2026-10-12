@@ -111,7 +111,22 @@ public static class BodyMaterials
     };
     static readonly Color[] NeonHair = { new Color(0.9f, 0.1f, 0.6f), new Color(0.1f, 0.75f, 0.9f), new Color(0.5f, 0.2f, 0.95f) };
 
-    public static Material Wig(int seed) => MaterialLibrary.Get(SurfaceType.Hair, HairColour(seed), MaterialLibrary.Variant.Object);
+    public static Material Wig(int seed, bool inner = false) => inner ? MaterialLibrary.Get(SurfaceType.Rubber, HairColour(seed) * 0.4f, MaterialLibrary.Variant.Object)   // under cards: dark and matte (no sheen between the cards)
+                                                                    : MaterialLibrary.Get(SurfaceType.Hair, HairColour(seed), MaterialLibrary.Variant.Object);
+
+    // Hair cards (Face Fix Part 9), per hair colour.
+    static readonly Dictionary<Color, Material> cardMats = new Dictionary<Color, Material>();
+    static Shader hairShader;
+    public static Material HairCards(Color hair)
+    {
+        if (cardMats.TryGetValue(hair, out var m) && m != null) return m;
+        if (hairShader == null) hairShader = Shader.Find("FPS/Hair");
+        if (hairShader == null) return MaterialLibrary.Get(SurfaceType.Hair, hair, MaterialLibrary.Variant.Skinned);
+        m = new Material(hairShader) { name = $"Hair cards {ColorUtility.ToHtmlStringRGB(hair)}" };
+        m.SetColor("_HairColor", hair);
+        cardMats[hair] = m;
+        return m;
+    }
 
     public static Color HairColour(int seed)
     {

@@ -34,8 +34,9 @@ public static class WigBuilder
     // position). k: the body's kernel (the egg: skull frame, radii, egg scales). Safe on a worker thread.
     // uvs: the brows' strand coordinates (along, across; Face Fix Part 8), zero on the wig. The brows' triangles
     // come last (browTris of them: their own submesh, FPS/Brow).
+    // inner: under hair cards (Face Fix Part 9) - a thin shell close to the scalp (no volume on top).
     public static bool Build(BodySdfKernel k, WigStyle style, int seed, Vector3 headJoint, IList<BodySdfKernel.FacePrim> brows,
-                             out Vector3[] verts, out Vector3[] normals, out int[] tris, out Vector2[] uvs, out int browTris)
+                             out Vector3[] verts, out Vector3[] normals, out int[] tris, out Vector2[] uvs, out int browTris, bool inner = false)
     {
         verts = null; normals = null; tris = null; uvs = null;
         var bv = new List<Vector3>(); var bn = new List<Vector3>(); var bt = new List<int>(); var bu = new List<Vector2>();
@@ -54,6 +55,7 @@ public static class WigBuilder
         float part = (rng.Value() < 0.5f ? -1f : 1f) * rng.Range(0.002f, 0.005f);
         float thick = style == WigStyle.Buzz ? 0.009f : rng.Range(0.01f, 0.015f);
         float top = style == WigStyle.Buzz ? 0f : rng.Range(0.006f, 0.014f);
+        if (inner) { thick = 0.0045f; top = 0f; }
         const float gap = 0.0015f;
         // The scalp lies a little outside the bare egg (the head's fat): measure it over the cranium, so
         // the wig sits on the skin, not under it.

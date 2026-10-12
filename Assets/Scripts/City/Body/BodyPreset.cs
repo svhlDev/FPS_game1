@@ -17,7 +17,7 @@ using UnityEngine.Rendering;
 // warning to re-bake (the bodies are valid, just not what the current rules would make).
 public static class BodyPreset
 {
-    public const int Version = 6;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble; 5: the eye shape; 6: brow strands
+    public const int Version = 7;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble; 5: the eye shape; 6: brow strands; 7: hair cards
     public const string ResourceName = "BodyPoolPreset";
 
     [Serializable] class ChainList { public List<ClothChainSet> chains = new List<ClothChainSet>(); }
@@ -54,6 +54,7 @@ public static class BodyPreset
         public MeshData body, head;
         public WigStyle wigStyle; public Vector3 jawPivot, mouthCentre; public int jawBone; public EyeShape eye;
         public Vector3[] wigV, wigN; public int[] wigT; public Vector2[] wigUV; public int wigBrowTris;
+        public Vector3[] cardV, cardN; public Vector4[] cardT; public Vector2[] cardUV, cardUV2; public BoneWeight[] cardW; public int[] cardTri;
 
         public BodyAsset ToAsset()
         {
@@ -68,6 +69,10 @@ public static class BodyPreset
             if (wigV != null && wigV.Length > 0)
             {
                 a.wig = BodyBuild.WigMesh("Wig", wigV, wigN, wigT, wigUV, wigBrowTris);
+            }
+            if (cardV != null && cardV.Length > 0)
+            {
+                a.hairCards = BodyBuild.CardMesh("Hair", cardV, cardN, cardT, cardUV, cardUV2, cardW, cardTri, a.body.bindposes);
             }
             return a;
         }
@@ -112,6 +117,23 @@ public static class BodyPreset
                 w.Write(wb.Length / 3);
                 var wu = new List<Vector2>(); if (a.wig != null) a.wig.GetUVs(0, wu);
                 w.Write(wu.Count); foreach (var u in wu) { w.Write(u.x); w.Write(u.y); }
+                // Hair cards (Face Fix Part 9).
+                var hm = a.hairCards;
+                int hn = hm != null ? hm.vertexCount : 0;
+                w.Write(hn);
+                if (hn > 0)
+                {
+                    var hv = hm.vertices; var hnn = hm.normals; var ht = hm.tangents; var hu = new List<Vector2>(); hm.GetUVs(0, hu); var hu2 = new List<Vector2>(); hm.GetUVs(1, hu2);
+                    var hw = hm.boneWeights;
+                    for (int i = 0; i < hn; i++)
+                    {
+                        W(w, hv[i]); W(w, hnn[i]); W(w, (Vector3)ht[i]); w.Write(hu[i].x); w.Write(hu[i].y); w.Write(hu2[i].x); w.Write(hu2[i].y);
+                        var b = hw[i];
+                        w.Write((byte)b.boneIndex0); w.Write((byte)b.boneIndex1); w.Write((byte)b.boneIndex2); w.Write((byte)b.boneIndex3);
+                        w.Write(b.weight0); w.Write(b.weight1); w.Write(b.weight2); w.Write(b.weight3);
+                    }
+                    var htr = hm.triangles; w.Write(htr.Length); foreach (int i in htr) w.Write((ushort)i);
+                }
             }
         }
         return ms.ToArray();
@@ -196,6 +218,20 @@ public static class BodyPreset
             e.wigBrowTris = r.ReadInt32();
             e.wigUV = new Vector2[r.ReadInt32()];
             for (int q = 0; q < e.wigUV.Length; q++) e.wigUV[q] = new Vector2(r.ReadSingle(), r.ReadSingle());
+            int cn = r.ReadInt32();
+            if (cn > 0)
+            {
+                e.cardV = new Vector3[cn]; e.cardN = new Vector3[cn]; e.cardT = new Vector4[cn]; e.cardUV = new Vector2[cn]; e.cardUV2 = new Vector2[cn]; e.cardW = new BoneWeight[cn];
+                for (int q = 0; q < cn; q++)
+                {
+                    e.cardV[q] = V3(r); e.cardN[q] = V3(r); var tt = V3(r); e.cardT[q] = new Vector4(tt.x, tt.y, tt.z, 1f);
+                    e.cardUV[q] = new Vector2(r.ReadSingle(), r.ReadSingle()); e.cardUV2[q] = new Vector2(r.ReadSingle(), r.ReadSingle());
+                    e.cardW[q] = new BoneWeight { boneIndex0 = r.ReadByte(), boneIndex1 = r.ReadByte(), boneIndex2 = r.ReadByte(), boneIndex3 = r.ReadByte(),
+                                                  weight0 = r.ReadSingle(), weight1 = r.ReadSingle(), weight2 = r.ReadSingle(), weight3 = r.ReadSingle() };
+                }
+                e.cardTri = new int[r.ReadInt32()];
+                for (int q = 0; q < e.cardTri.Length; q++) e.cardTri[q] = r.ReadUInt16();
+            }
             var kinds = BodySurfaceBake.Kinds(e.plan);
             e.body.bake = BodySurfaceBake.Bake(e.body.v, e.body.n, e.body.w, e.body.subs, kinds);
             e.head.bake = BodySurfaceBake.Bake(e.head.v, e.head.n, e.head.w, e.head.subs, kinds, e.body.bake.hems);

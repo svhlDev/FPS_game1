@@ -25,6 +25,7 @@ public class BodyAsset
     public readonly List<ClothChainSet> chains = new List<ClothChainSet>();   // skirts' spring chains (bones after the plan's)
     public const int Skin = 0;           // submesh; garment g is submesh 1 + g
     public Mesh wig;                     // rigid hair on the head joint (head joint space), or null
+    public Mesh hairCards;               // Face Fix Part 9: hair cards (skinned: the head, long hair's chains), or null
     public WigStyle wigStyle;
     public Vector3 jawPivot;             // root space, rest
     public Vector3 mouthCentre;          // root space, rest (the mouth cavity sits behind it)
@@ -111,6 +112,8 @@ public class BodyBuild
     int jawBone = -1;
     WigStyle wigStyle;
     bool hasWig; Vector3[] wigV, wigN; int[] wigT; Vector2[] wigUV; int wigBrowTris;
+    HairStyle hairStyle; ClothChainSet hairChains;
+    bool hasCards; Vector3[] cardV, cardN; Vector4[] cardT; Vector2[] cardUV, cardUV2; BoneWeight[] cardW; int[] cardTri;
     readonly List<ClothChainSet> chainSets = new List<ClothChainSet>();
     Matrix4x4[] bindposes;
     int skinBefore;
@@ -469,6 +472,15 @@ public class BodyBuild
         var CW = cwts.IsCreated ? cwts.ToArray() : new BoneWeight[0];
         var CG = vertGarment;
         DisposeVertexArrays();
+        // Hair (Face Fix Part 9): the style first - long hair's strand-group chains join the chain bones.
+        wigStyle = WigBuilder.Pick(sheet);
+        hairStyle = HairStyle.For(wigStyle);
+        if (hairStyle != null && hairStyle.chains && sdf.HasHeadPiece)
+        {
+            int nb = plan.bones.Count; foreach (var c0 in chainSets) nb += c0.BoneCount;
+            hairChains = HairCards.Chains(sdf.Kernel, hairStyle, sdf.Canon, nb);
+            chainSets.Add(hairChains);
+        }
         bindposes = BodySkinner.BindPoses(sdf);
         // Chain bones after the plan's (bind = each joint, unrotated, in root space), then the jaw.
         var bp = new List<Matrix4x4>(bindposes);
@@ -481,7 +493,6 @@ public class BodyBuild
         int pelvisBone = plan.Index("Hips");
         var T = tris.ToArray(); var CT = ctris.ToArray();
         int ng = fields.Count;
-        wigStyle = WigBuilder.Pick(sheet);
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
         var browPrims = new List<BodySdfKernel.FacePrim>();
         for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow.")) browPrims.Add(sdf.FacePrims[j]);
@@ -492,11 +503,15 @@ public class BodyBuild
         Vector3 cutO = sdf.HeadCutOrigin, cutAxis = sdf.HeadCutAxis; float cutR = sdf.HeadCutRadius;
         int headMode = sdf.HeadMode; float headCell = BodyRules.Default.mesh.headCell, bodyCell = ms.cell;
         var VP = vertPiece;
+        var canon = sdf.Canon; int headBone = plan.Index("Head"); var hs = hairStyle; var hch = hairChains;
         task = Task.Run(() =>
         {
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
-            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris);
+            // (Under long hair cards the shell is bob length: the cards hang beyond it.)
+            var shellStyle = hs != null && wigStyle == WigStyle.Long ? WigStyle.Bob : wigStyle;
+            hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);
+            if (hs != null) hasCards = HairCards.Build(kernelCopy, hs, sheet.seed, canon, headBone, hch, out cardV, out cardN, out cardT, out cardUV, out cardUV2, out cardW, out cardTri);
         });
         CurrentStage = Stage.Split;
     }
@@ -912,12 +927,26 @@ public class BodyBuild
         {
             Asset.wig = WigMesh("Wig " + sheet, wigV, wigN, wigT, wigUV, wigBrowTris);
         }
+        if (hasCards)
+        {
+            Asset.hairCards = CardMesh("Hair " + sheet, cardV, cardN, cardT, cardUV, cardUV2, cardW, cardTri, bindposes);
+        }
         DisposeFields();
         sdf.Dispose(); sdf = null;
         wall.Stop();
         Asset.wallMs = (float)wall.Elapsed.TotalMilliseconds;
         Asset.mainThreadMs = (float)mainMs;
         CurrentStage = Stage.Done;
+    }
+
+    // Hair cards (Face Fix Part 9): skinned like the body (its bind poses).
+    public static Mesh CardMesh(string name, Vector3[] v, Vector3[] n, Vector4[] t, Vector2[] uv, Vector2[] uv2, BoneWeight[] w, int[] tri, Matrix4x4[] bind)
+    {
+        var m = new Mesh { name = name, indexFormat = v.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
+        m.vertices = v; m.normals = n; m.tangents = t; m.uv = uv; m.SetUVs(1, uv2);
+        m.triangles = tri; m.boneWeights = w; m.bindposes = bind;
+        m.RecalculateBounds();
+        return m;
     }
 
     // The wig's mesh: submesh 0 the hair, submesh 1 the brows (its last browTris triangles, FPS/Brow).
