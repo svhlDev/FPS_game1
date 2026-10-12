@@ -84,6 +84,12 @@ public class FaceDef
     [Tooltip("How far forward the eye centres sit (x the half depth).")]
     public float eyeDepth = 0.74f;
 
+    [Header("Ears (Face Fix Part 5): height from the canon (brow line to nose base); metres, degrees")]
+    [Tooltip("Width / height, tilt back from vertical, flare (the back edge out from the head), thickness, rim tube radius.")]
+    public float earWidth = 0.58f, earTilt = 15f, earFlare = 20f, earThickness = 0.003f, earRim = 0.0034f;
+    [Tooltip("Seed variation (+-): size (fraction), flare (degrees).")]
+    public float earSizeVariation = 0.08f, earFlareVariation = 8f;
+
     [Header("Lids (Face Fix Part 3): degrees on the eyeball; thickness, crease depth in metres")]
     [Tooltip("The upper curve's rise and the lower one's drop at mid-eye (relaxed: the upper lid over the iris's top, the lower touching its bottom).")]
     public float lidUpper = 24f, lidLower = 27f;

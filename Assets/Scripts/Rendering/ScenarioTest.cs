@@ -897,10 +897,11 @@ public partial class ScenarioTest : MonoBehaviour
                                                      ("34", c + fwd * 0.36f + right * 0.3f + Vector3.up * 0.03f),
                                                      ("eye", c + fwd * 0.2f + right * 0.05f + Vector3.up * 0.01f),
                                                      ("mouth", c + fwd * 0.24f + right * 0.08f - Vector3.up * 0.045f),
+                                                     ("ear", c + right * 0.24f + fwd * 0.04f - Vector3.up * 0.02f),
                                                      ("back", c - fwd * 0.5f + right * 0.2f - Vector3.up * 0.06f),
                                                      ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
-                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : view == "mouth" ? c - Vector3.up * 0.055f : c;
+                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : view == "mouth" ? c - Vector3.up * 0.055f : view == "ear" ? c + right * 0.06f - Vector3.up * 0.03f : c;
                     bool ortho = view == "canon" || view == "side";
                     cam.orthographic = ortho; cam.orthographicSize = 0.17f;
                     if (ov != null) ov.Show(view == "canon" ? HeadCanonOverlay.View.Front : view == "side" ? HeadCanonOverlay.View.Side : HeadCanonOverlay.View.Off);

@@ -10,7 +10,7 @@ using UnityEngine;
 //          thickest fat there plus a margin: blend inflation ("tentacles") grows surface far from all
 //          of them
 // A failing vertex is reported with the face parts near it, the fat thickness and the face fat mask.
-// Run after every face change: scenario "facesanity", or BodyPoolBaker-style in the editor.
+// (Ears count as shapes.) Run after every face change: scenario "facesanity", or BodyPoolBaker-style in the editor.
 public static class FaceSanity
 {
     public struct Case { public string label; public CharacterSheet sheet; }
@@ -79,6 +79,7 @@ public static class FaceSanity
             if (Mathf.Abs(smp.skin) > 0.008f) { offSurface++; continue; }   // a vertex off the SDF surface: the head / body seam (Part 7)
             float shapes = smp.muscle;
             for (int j = 0; j < k.breasts.Length; j++) shapes = Mathf.Min(shapes, BodySdfKernel.EllipsoidDist(k.breasts[j].ToLocal(p), k.breasts[j].r));
+            if (k.earL.on != 0) shapes = Mathf.Min(shapes, Mathf.Min(BodySdfKernel.EarDist(k.earL, p), BodySdfKernel.EarDist(k.earR, p)));
             float kFat = Mathf.Min(sdf.fatBlendMin + sdf.fatBlendPerMetre * smp.fat, sdf.fatBlendMax);
             Over("far from every shape", shapes - (smp.fat + kFat * 0.25f + 0.01f));
             if (why == null) continue;

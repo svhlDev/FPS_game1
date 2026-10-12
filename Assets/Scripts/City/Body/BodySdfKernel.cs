@@ -79,6 +79,19 @@ public struct BodySdfKernel : IDisposable
         public EyeShape s;
     }
 
+    // Face Fix Part 5: an ear. Frame: u up the ear (tilted back), v toward its back edge, n out of its outer
+    // face. A flat oval disc (half height h, half width w, half thickness t), a C-shaped rim round its top,
+    // back and bottom (open at the front, where it meets the face), a lobe, and the bowl (concha) cut into
+    // its outer face.
+    public struct Ear
+    {
+        public Vector3 c, u, v, n;
+        public float h, w, t, rimR, lobeR;
+        public Vector3 lobe;                // lobe centre (root space)
+        public Vector3 bowl, bowlR;         // bowl centre (root space), radii (v, u, n)
+        public int on;
+    }
+
     public struct Sample
     {
         public float skin;      // signed distance to the skin
@@ -105,6 +118,7 @@ public struct BodySdfKernel : IDisposable
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
     public EyeLid lidL, lidR;           // Face Fix Part 3 (lids: r > 0)
+    public Ear earL, earR;              // Face Fix Part 5
     public float muscleBlend, fatBlendPerMetre, fatBlendMin, breastBlend, featureBlend, eyeCarveBlend;
     public float socketClearance;   // eye sockets cut through the face fat in front of the eye, plus this
     public float faceReach;         // face parts are evaluated within this distance of the skull's centre (covers every part + blend + fat)
@@ -507,8 +521,29 @@ public struct BodySdfKernel : IDisposable
                 skin = SMax(skin, -Mathf.Min((p - eyeR).magnitude - eyeRadius, SegmentDist(p, eyeR, eyeR + outDir) - rr), eyeCarveBlend);
             }
         }
+        // Ears (after the fat: they stay thin on any face), blended onto the side of the head.
+        if (earL.on != 0 && nearHead) skin = SMin(skin, Mathf.Min(EarDist(earL, p), EarDist(earR, p)), 0.004f);
         if (cutMode > 0) skin = Cut(p, skin);
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
+    }
+
+    public static float EarDist(in Ear e, Vector3 p)
+    {
+        Vector3 d = p - e.c;
+        float bound = d.magnitude - (e.h + 0.01f);
+        if (bound > 0.01f) return bound;
+        float a = Vector3.Dot(d, e.u), b = Vector3.Dot(d, e.v), c = Vector3.Dot(d, e.n);
+        float disc = EllipsoidDist(new Vector3(b, a, c), new Vector3(e.w, e.h, e.t));
+        // The rim: a tube along the oval's outline, standing a little out of the outer face; none at the front.
+        float k0 = new Vector2(b / e.w, a / e.h).magnitude, k1 = new Vector2(b / (e.w * e.w), a / (e.h * e.h)).magnitude;
+        float edge = k1 > 1e-6f ? k0 * (k0 - 1f) / k1 : -Mathf.Min(e.w, e.h);
+        float rim = new Vector2(edge + e.rimR * 0.7f, c - e.t * 0.9f).magnitude - e.rimR;
+        rim += Mathf.Max(0f, -b / e.w - 0.25f) * 0.03f;
+        float ear = SMin(Mathf.Min(disc, rim), (p - e.lobe).magnitude - e.lobeR, 0.003f);
+        // The bowl, cut into the outer face.
+        Vector3 q = p - e.bowl;
+        float bowl = EllipsoidDist(new Vector3(Vector3.Dot(q, e.v), Vector3.Dot(q, e.u), Vector3.Dot(q, e.n)), e.bowlR);
+        return SMax(ear, -bowl, 0.0015f);
     }
 
     static Vector3 EyeLocal(in EyeLid e, Vector3 p) { p -= e.c; return new Vector3(Vector3.Dot(p, e.x), Vector3.Dot(p, e.y), Vector3.Dot(p, e.z)); }

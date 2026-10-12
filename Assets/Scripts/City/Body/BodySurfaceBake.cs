@@ -28,9 +28,10 @@ public static class BodySurfaceBake
         public readonly List<byte> kinds = new List<byte>();
         public BodySdfKernel.Ellipsoid skull;
         public bool stubble;            // the scalp gets short hair (not on bald heads)
+        public BodySdfKernel.Ear earL, earR;   // no stubble on the ears (Face Fix Part 5)
         public static FaceMarks From(BodySDF sdf, WigStyle wig)
         {
-            var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None };
+            var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None, earL = sdf.Kernel.earL, earR = sdf.Kernel.earR };
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {
                 string n = sdf.FacePartNames[i];
@@ -142,6 +143,12 @@ public static class BodySurfaceBake
                     Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
                     float window = Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y + 0.2f) / 0.78f).magnitude);
                     stub = Mathf.Clamp01(-window / 0.06f) * Mathf.Clamp01((u.y + 0.62f) / 0.1f);
+                    if (face.earL.on != 0)
+                    {
+                        // Not on the ears (nor right where they join the head).
+                        float ear = Mathf.Min(BodySdfKernel.EarDist(face.earL, v[i]), BodySdfKernel.EarDist(face.earR, v[i]));
+                        stub *= Mathf.Clamp01((ear - 0.002f) / 0.004f);
+                    }
                 }
                 // The lips lie under a little fat: the skin over them is a few mm out.
                 res.uv4[i] = new Vector3(stub, 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f), 0f);

@@ -58,6 +58,9 @@ public class BodySDF : IDisposable
     public HeadCanon Canon;                        // Face Fix Part 1: the proportions the face is built on
     public EyeShape Eye;                           // Face Fix Part 3: the eye opening and lids
     BodySdfKernel.EyeLid LidL, LidR;
+    BodySdfKernel.Ear EarLeft, EarRight;
+    public Vector3 EarL => EarLeft.c;
+    public Vector3 EarR => EarRight.c;
     public Bounds bounds;
     readonly float[] jointK;
     readonly int headIndex;
@@ -192,6 +195,51 @@ public class BodySDF : IDisposable
         }
         kernel = BuildKernel(Allocator.Persistent);
         SnapFaceParts();
+        BuildEars();
+    }
+
+    // Face Fix Part 5: the ears, on the canon (from the brow line to the nose base, their centre at the
+    // canon's ear depth), their front edge on the side of the head (found on the finished head), tilted
+    // back, the back edge flaring out by a seeded angle. Size and flare vary with the seed.
+    void BuildEars()
+    {
+        if (headIndex < 0) return;
+        var fd = BodyRules.Default.face;
+        var f = frames[headIndex];
+        var rng = new PcgRandom(plan.sheet.seed, "ears");
+        float h = (Canon.brow - Canon.noseBase) * 0.5f * (1f + fd.earSizeVariation * rng.Signed());
+        float w = h * fd.earWidth;
+        float flare = (fd.earFlare + fd.earFlareVariation * rng.Signed()) * Mathf.Deg2Rad, tilt = fd.earTilt * Mathf.Deg2Rad;
+        float yc = (Canon.brow + Canon.noseBase) * 0.5f;
+        BodySdfKernel.Ear Make(float s)
+        {
+            // The attachment: the side of the head at the ear's front edge.
+            Vector3 front = Canon.o + f.y * yc + f.z * (Canon.earZ + w * 0.55f);
+            Vector3 p = front + f.x * (s * Canon.halfW * 2f);
+            for (int it = 0; it < 400; it++)
+            {
+                float d = kernel.Eval(p).skin;
+                if (d <= 0f) break;
+                p -= f.x * s * Mathf.Clamp(d * 0.8f, 0.0003f, 0.004f);
+            }
+            Vector3 back = (f.x * (s * Mathf.Sin(flare)) - f.z * Mathf.Cos(flare)).normalized;
+            Vector3 n = (f.x * (s * Mathf.Cos(flare)) + f.z * Mathf.Sin(flare)).normalized;
+            Vector3 u = (f.y * Mathf.Cos(tilt) + back * Mathf.Sin(tilt)).normalized;
+            Vector3 v = (back * Mathf.Cos(tilt) - f.y * Mathf.Sin(tilt)).normalized;
+            float t = fd.earThickness;
+            Vector3 c = p + v * w * 0.95f + n * (t * 0.5f);
+            return new BodySdfKernel.Ear
+            {
+                c = c, u = u, v = v, n = n, h = h, w = w, t = t, rimR = fd.earRim, lobeR = w * 0.34f,
+                lobe = c - u * h * 0.78f - v * w * 0.15f,
+                bowl = c + n * (t + 0.003f) - u * h * 0.1f - v * w * 0.1f,
+                bowlR = new Vector3(w * 0.6f, h * 0.55f, 0.0065f),
+                on = 1,
+            };
+        }
+        EarLeft = Make(-1f);
+        EarRight = Make(1f);
+        kernel.earL = EarLeft; kernel.earR = EarRight;
     }
 
     // Face Fix Part 4: grooves snapped onto the skin. Each snapped part is placed where the skin is along
@@ -259,7 +307,7 @@ public class BodySDF : IDisposable
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
-            headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius, lidL = LidL, lidR = LidR,
+            headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius, lidL = LidL, lidR = LidR, earL = EarLeft, earR = EarRight,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
             fatBlendMax = fatBlendMax, muscleReach = muscleReach,

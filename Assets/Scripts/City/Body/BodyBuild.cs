@@ -385,7 +385,8 @@ public class BodyBuild
             {
                 // The head's own grid: keep the mouth (it opens) and the eyes detailed.
                 float dm = (verts[i] - sdf.MouthCentre).magnitude, de = Mathf.Min((verts[i] - sdf.EyeL).magnitude, (verts[i] - sdf.EyeR).magnitude);
-                importance[i] = 1f + 10f * Mathf.Exp(-dm * dm / (0.025f * 0.025f)) + 4f * Mathf.Exp(-de * de / (0.02f * 0.02f));
+                float da = Mathf.Min((verts[i] - sdf.EarL).magnitude, (verts[i] - sdf.EarR).magnitude);
+                importance[i] = 1f + 10f * Mathf.Exp(-dm * dm / (0.025f * 0.025f)) + 4f * Mathf.Exp(-de * de / (0.02f * 0.02f)) + 4f * Mathf.Exp(-da * da / (0.03f * 0.03f));
             }
             if (covered[i] != 0) importance[i] *= CoveredImportance;   // hidden under clothes: dropped later, spend little on it
         }
