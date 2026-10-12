@@ -151,7 +151,8 @@ public static class FaceMetrics
         var ring = new List<int>(); for (int i = 0; i < hv.Length; i++) if (bodyIds.Contains(hmap[i])) ring.Add(i);
         float Above(Vector3 p) => weld ? Vector3.Dot(p - cutO, cutAxis) : p.y - (c.o.y + c.chin - 0.05f);
         Vector3 mouth = a.mouthCentre; float mouthHalf = c.mouthHalfWidth;
-        bool MouthSlit(Vector3 p) { Vector3 d = p - mouth; return Mathf.Abs(Vector3.Dot(d, c.x)) < mouthHalf + 0.006f && Mathf.Abs(Vector3.Dot(d, c.y)) < 0.008f && Vector3.Dot(d, c.z) > -0.035f; }
+        // (The mouth's slit and the box behind it: open / double-sided / its own piece by design.)
+        bool MouthSlit(Vector3 p) { Vector3 d = p - mouth; return Mathf.Abs(Vector3.Dot(d, c.x)) < mouthHalf + 0.006f && Mathf.Abs(Vector3.Dot(d, c.y)) < 0.016f && Vector3.Dot(d, c.z) > -0.045f; }
 
         // Open edges and pieces (topology: the same at every level).
         var use = new Dictionary<long, int>();
@@ -185,7 +186,7 @@ public static class FaceMetrics
         Union(ht, hmap); Union(bt, bmap);
         var headPieces = new HashSet<int>();
         var usedH = new bool[hv.Length]; foreach (int i in ht) usedH[i] = true;
-        for (int i = 0; i < hv.Length; i++) if (usedH[i] && Above(hv[i]) > 0.01f) headPieces.Add(Find(hmap[i]));
+        for (int i = 0; i < hv.Length; i++) if (usedH[i] && Above(hv[i]) > 0.01f && !MouthSlit(hv[i])) headPieces.Add(Find(hmap[i]));
         // (The extra pieces: their vertex count and centre.)
         var pieceAt = new StringBuilder();
         if (headPieces.Count > 1)

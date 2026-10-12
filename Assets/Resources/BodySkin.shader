@@ -152,7 +152,7 @@ Shader "FPS/BodySkin"
                 float dots = smoothstep(0.58, 0.78, VNoise(i.restPos * 1600.0));
                 albedo = lerp(albedo, _HairColor.rgb, (half)(lerp(0.28, dots, stubFade) * mk.x * 0.9));
                 albedo = lerp(albedo, albedo * half3(1.08h, 0.66h, 0.66h), mk.y * 0.75h);
-                albedo = lerp(albedo, half3(0.09h, 0.02h, 0.02h), mk.z);
+                albedo = lerp(albedo, half3(0.01h, 0.008h, 0.008h), mk.z);   // (the mouth's inside: black)
 
                 // Micro relief: height in rest-pose space, bumped with screen derivatives (surface
                 // gradient), so it follows the skin whatever the pose. Fades out with distance.

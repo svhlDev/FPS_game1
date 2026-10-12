@@ -443,8 +443,9 @@ public class BodySDF : IDisposable
                 if (x.sqrMagnitude < 1e-8f) x = Vector3.ProjectOnPlane(skull.f.x, ns);
                 x.Normalize();
                 fp.z = ns; fp.x = x; fp.y = Vector3.Cross(ns, x).normalized;
-                fp.r = e.size;
-                float c = e.size.z, hgt = Mathf.Min(e.press, c * 0.95f);
+                // (A press standing out further than its depth: the ellipsoid deepens to hold it.)
+                float c = Mathf.Max(e.size.z, e.press / 0.95f), hgt = Mathf.Min(e.press, c * 0.95f);
+                fp.r = new Vector3(e.size.x, e.size.y, c);
                 fp.o = fp.op == (int)FacePartOp.Carve ? ps + ns * (c - hgt) : ps - ns * (c - hgt);
                 fp.press = hgt;
             }

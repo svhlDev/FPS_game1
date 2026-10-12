@@ -807,49 +807,32 @@ public class BodyBuild
             var mk = head.bake.uv4[i];
             head.bake.uv4[i] = new Vector3(mk.x, Mathf.Max(mk.y, Mathf.Clamp01(lip)), mk.z);
         }
-        // The bridging triangles get their own copies of their vertices (dark: the inside of the mouth), so
-        // the lips next to them never darken; closed, every bridging vertex sits on the mouth line (the
-        // band has no area: nothing dark shows), and the jaw opens it.
+        // The mouth: cut open along the mouth line (the bridging triangles go; their vertices sit on the mouth line, so
+        // closed the slit has no width), and behind it a black box open toward the slit - its top on the head, its
+        // bottom on the jaw, so it opens with the mouth.
         var ht = head.subs[0];
-        var dup = new Dictionary<int, int>();
         var V2 = new List<Vector3>(head.v); var N2 = new List<Vector3>(head.n); var R2 = new List<Vector2>(head.r); var L2 = new List<Vector2>(head.l);
         var W2 = new List<BoneWeight>(head.w); var C2 = new List<Color>(head.bake.colors); var U0 = new List<Vector2>(head.bake.uv0);
         var U3 = new List<Vector3>(head.bake.uv3); var U4 = new List<Vector3>(head.bake.uv4);
         var Z = new List<Vector2>(head.bake.zones ?? new Vector2[head.v.Length]);
         var bridge = new HashSet<int>();
-        var backs = new List<int>();
+        var kept = new List<int>(ht.Count);
         for (int k2 = 0; k2 + 2 < ht.Count; k2 += 3)
         {
             int a = ht[k2], b = ht[k2 + 1], c = ht[k2 + 2];
             bool mouthTri = inM[a] > 0.5f && inM[b] > 0.5f && inM[c] > 0.5f;
             float lo = Mathf.Min(wjs[a], Mathf.Min(wjs[b], wjs[c])), hi = Mathf.Max(wjs[a], Mathf.Max(wjs[b], wjs[c]));
-            if (!mouthTri || hi - lo < 0.5f) continue;
-            for (int q = 0; q < 3; q++)
-            {
-                int v = ht[k2 + q];
-                bridge.Add(v);
-                if (!dup.TryGetValue(v, out int nvx))
-                {
-                    nvx = V2.Count; dup[v] = nvx;
-                    V2.Add(V2[v]); N2.Add(N2[v]); R2.Add(R2[v]); L2.Add(L2[v]); W2.Add(W2[v]); C2.Add(C2[v]); U0.Add(U0[v]); U3.Add(U3[v]);
-                    U4.Add(new Vector3(U4[v].x, 0f, 1f)); Z.Add(Vector2.zero);
-                }
-                ht[k2 + q] = nvx;
-            }
-            backs.Add(ht[k2]); backs.Add(ht[k2 + 2]); backs.Add(ht[k2 + 1]);
+            if (mouthTri && hi - lo >= 0.5f) { bridge.Add(a); bridge.Add(b); bridge.Add(c); continue; }   // (cut)
+            kept.Add(a); kept.Add(b); kept.Add(c);
         }
-        // The inside of the mouth shows from both sides: opened, a bridging triangle can face away (the lips'
-        // groove folds them), and a culled one would show the head's inside through the mouth.
-        ht.AddRange(backs);
-        foreach (int v in new List<int>(bridge)) U4[v] = new Vector3(U4[v].x, U4[v].y, 0f);   // the originals: lip, not inside
-        foreach (int v in dup.Values) bridge.Add(v);
-        for (int i = 0; i < V2.Count; i++)
+        ht.Clear(); ht.AddRange(kept);
+        foreach (int v in bridge)
         {
-            if (!bridge.Contains(i)) continue;
-            float dy = Vector3.Dot(V2[i] - mouthCentre, skullCopy.y);
-            V2[i] -= skullCopy.y * dy;
-            U3[i] = V2[i];
+            float dy = Vector3.Dot(V2[v] - mouthCentre, skullCopy.y);
+            V2[v] -= skullCopy.y * dy;
+            U3[v] = V2[v];
         }
+        if (bridge.Count > 0 && splitKernel.HasValue) MouthBox(splitKernel.Value, V2, N2, R2, L2, W2, C2, U0, U3, U4, Z, ht);
         head.v = V2.ToArray(); head.n = N2.ToArray(); head.r = R2.ToArray(); head.l = L2.ToArray(); head.w = W2.ToArray();
         var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); hb.zones = Z.ToArray(); head.bake = hb;
         // Folds (thin parts under the grid's spacing): inverted triangles are culled and read as holes - flip them.
@@ -1023,6 +1006,49 @@ public class BodyBuild
     }
 
     public int FlipRepairs { get; private set; }
+
+    // The mouth's box (behind the slit): a curved band of columns across the mouth, its front just inside the
+    // skin along the mouth line (following the muzzle's curve), open at the front; top, back, bottom and the
+    // two ends, facing in. Top vertices ride on the head, bottom ones on the jaw. Black (the mouth's inside mark).
+    void MouthBox(BodySdfKernel k, List<Vector3> V, List<Vector3> N, List<Vector2> R, List<Vector2> L, List<BoneWeight> W, List<Color> C,
+                  List<Vector2> U0, List<Vector3> U3, List<Vector3> U4, List<Vector2> Zn, List<int> T)
+    {
+        k.cutMode = 0;
+        Vector3 X = skullCopy.x, Y = skullCopy.y, Zf = skullCopy.z;
+        const int cols = 12;
+        float halfW = mouthHalf + 0.003f, hFront = 0.006f, hBack = 0.012f, depth = 0.03f;
+        var headW = new BoneWeight { boneIndex0 = plan.Index("Head"), weight0 = 1f };
+        var jawW = new BoneWeight { boneIndex0 = jawBone, weight0 = 1f };
+        // Inside the skin by at least 1.5 mm (pushed back along -forward until it is).
+        Vector3 Inside(Vector3 p) { for (int it = 0; it < 60 && k.Skin(p) > -0.0015f; it++) p -= Zf * 0.001f; return p; }
+        int baseV = V.Count;
+        Vector3 centre = mouthCentre - Zf * (depth * 0.5f);
+        for (int c = 0; c <= cols; c++)
+        {
+            float x = Mathf.Lerp(-halfW, halfW, c / (float)cols);
+            // The skin's front at the mouth line here.
+            Vector3 p = mouthCentre + X * x + Zf * 0.06f;
+            for (int it = 0; it < 300; it++) { float d = k.Skin(p); if (d < 0.0002f) break; p -= Zf * Mathf.Clamp(d * 0.9f, 0.0002f, 0.01f); }
+            Vector3 front = p - Zf * 0.003f, back = front - Zf * depth;
+            // rows: 0 front top, 1 back top, 2 back bottom, 3 front bottom
+            var rows = new[] { Inside(front + Y * hFront), Inside(back + Y * hBack), Inside(back - Y * hBack), Inside(front - Y * hFront) };
+            for (int r = 0; r < 4; r++)
+            {
+                Vector3 q = rows[r];
+                V.Add(q); N.Add((centre + X * x - q).normalized); R.Add(new Vector2((int)BoneKind.Head, 0f)); L.Add(Vector2.zero);
+                W.Add(r < 2 ? headW : jawW); C.Add(new Color(0f, 1f, 0f, 0f)); U0.Add(Vector2.one); U3.Add(q); U4.Add(new Vector3(0f, 0f, 1f)); Zn.Add(Vector2.zero);
+            }
+        }
+        int Vi(int c, int r) => baseV + c * 4 + r;
+        void Quad(int a, int b, int c, int d) { T.Add(a); T.Add(b); T.Add(c); T.Add(a); T.Add(c); T.Add(d); T.Add(a); T.Add(c); T.Add(b); T.Add(a); T.Add(d); T.Add(c); }   // (both sides)
+        for (int c = 0; c < cols; c++)
+        {
+            Quad(Vi(c, 0), Vi(c + 1, 0), Vi(c + 1, 1), Vi(c, 1));   // top
+            Quad(Vi(c, 1), Vi(c + 1, 1), Vi(c + 1, 2), Vi(c, 2));   // back
+            Quad(Vi(c, 2), Vi(c + 1, 2), Vi(c + 1, 3), Vi(c, 3));   // bottom
+        }
+        foreach (int c in new[] { 0, cols }) Quad(Vi(c, 0), Vi(c, 1), Vi(c, 2), Vi(c, 3));   // the ends
+    }
 
     static bool Inverted(Vector3[] V, Vector3[] N, int a, int b, int c)
     {

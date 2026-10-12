@@ -804,6 +804,11 @@ public partial class ScenarioTest : MonoBehaviour
         foreach (var kv in use)
         {
             if (kv.Value != 1 || dressed) continue;
+            // (The mouth's slit is open by design.)
+            {
+                Vector3 m = pos[(int)(kv.Key >> 32)] - f.Asset.mouthCentre;
+                if (Mathf.Abs(Vector3.Dot(m, c.x)) < c.mouthHalfWidth + 0.006f && Mathf.Abs(Vector3.Dot(m, c.y)) < 0.008f && Vector3.Dot(m, c.z) > -0.035f) continue;
+            }
             var p = pos[(int)(kv.Key >> 32)] - c.o;
             if (p.y < c.chin - 0.05f) continue;    // (the shoulders and below: other checks)
             if (holes < 6) sb.Append($"({p.x * 100f:0.0},{p.y * 100f:0.0},{p.z * 100f:0.0}) ");
@@ -817,6 +822,10 @@ public partial class ScenarioTest : MonoBehaviour
             Vector3 a0 = hv[ht[i]], b0 = hv[ht[i + 1]], c0 = hv[ht[i + 2]];
             Vector3 fn = Vector3.Cross(b0 - a0, c0 - a0);
             if (fn.sqrMagnitude < 1e-12f) continue;
+            {
+                Vector3 m = (a0 + b0 + c0) / 3f - f.Asset.mouthCentre;   // (the mouth's box is double-sided by design)
+                if (Mathf.Abs(Vector3.Dot(m, c.x)) < c.mouthHalfWidth + 0.006f && Mathf.Abs(Vector3.Dot(m, c.y)) < 0.016f && Vector3.Dot(m, c.z) > -0.045f) continue;
+            }
             if (Vector3.Dot(fn.normalized, (hn[ht[i]] + hn[ht[i + 1]] + hn[ht[i + 2]]).normalized) < -0.2f)
             {
                 var q = (a0 + b0 + c0) / 3f - c.o;
