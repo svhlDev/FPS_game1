@@ -107,6 +107,16 @@ public class BodyBuild
             foreach (var r in ring) d = Mathf.Min(d, (pos[i] - r).magnitude);
             fade[i] = ring.Count == 0 ? 1f : Mathf.SmoothStep(0f, 1f, d / 0.015f);
         }
+        // The ears (Face Metrics): their vertices move rigidly with the ear at each level (it rides on the layers
+        // under its root) - projected one by one, the ones near the head landed on the head and folded.
+        var earW = new float[nu]; var earSide = new int[nu];
+        if (k.earL.on != 0)
+            for (int i = 0; i < nu; i++)
+            {
+                float dl = BodySdfKernel.EarDist(k.earL, pos[i]), dr = BodySdfKernel.EarDist(k.earR, pos[i]);
+                earSide[i] = dl < dr ? 0 : 1;
+                earW[i] = 1f - Mathf.SmoothStep(0f, 1f, (Mathf.Min(dl, dr) - 0.002f) / 0.004f);
+            }
         var nrm0 = new Vector3[T.Length / 3];
         for (int t = 0; t + 2 < T.Length; t += 3) nrm0[t / 3] = Vector3.Cross(pos[T[t + 1]] - pos[T[t]], pos[T[t + 2]] - pos[T[t]]);
         // Smoothed vertex normals of the finished head (area-weighted, two rounds over the neighbours).
@@ -174,6 +184,8 @@ public class BodyBuild
             // from the field cancels, so where a level changes nothing nothing moves.)
             if (l == 3) { onFinal = q; continue; }
             var dd = new Vector3[nu]; for (int i = 0; i < nu; i++) dd[i] = fixedV[i] ? Vector3.zero : (q[i] - onFinal[i]) * fade[i];
+            Vector3 EarMove(int side) { var e = side == 0 ? k.earL : k.earR; return -e.drift * ((1f - k.muscleScale) * e.driftM + (1f - k.fatScale) * e.driftF); }
+            for (int i = 0; i < nu; i++) if (earW[i] > 0f) dd[i] = Vector3.Lerp(dd[i], EarMove(earSide[i]), earW[i]);
             // Smoothed over the mesh (a few diffusion rounds: where the thickness changes fast, neighbouring
             // vertices no longer land on top of each other).
             for (int round = 0; round < 6; round++)
@@ -181,7 +193,7 @@ public class BodyBuild
                 var d2 = (Vector3[])dd.Clone();
                 for (int i = 0; i < nu; i++)
                 {
-                    if (fixedV[i] || nbr[i].Count == 0) continue;
+                    if (fixedV[i] || nbr[i].Count == 0 || earW[i] > 0.99f) continue;
                     Vector3 avg = Vector3.zero; foreach (int j in nbr[i]) avg += dd[j]; avg /= nbr[i].Count;
                     d2[i] = Vector3.Lerp(dd[i], avg, 0.5f);
                 }
@@ -189,7 +201,7 @@ public class BodyBuild
             }
             // (Back onto the level's surface after the smoothing.)
             var d = new Vector3[nu];
-            for (int i = 0; i < nu; i++) d[i] = fixedV[i] ? Vector3.zero : (Project(onFinal[i] + dd[i], 6) - onFinal[i]) * fade[i];
+            for (int i = 0; i < nu; i++) d[i] = fixedV[i] ? Vector3.zero : earW[i] > 0.99f ? dd[i] : (Project(onFinal[i] + dd[i], 6) - onFinal[i]) * fade[i];
             // Turned-over triangles (against the finished head's): their vertices take their neighbours'
             // deltas, until none is left.
             for (int pass = 0; pass < 16; pass++)

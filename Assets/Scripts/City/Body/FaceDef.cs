@@ -172,7 +172,7 @@ public class FaceDef
         P("CheekboneFront", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.22f, 0.85f), Vector3.zero, new Vector3(0.17f, 0.13f, 0.1f), 0.004f,
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(1f, -0.4f, 0f), press: 0.05f),
         P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, 0f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
-          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.1f, femaleSize: new Vector3(0.85f, 0.85f, 1f)),
+          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.07f, femaleSize: new Vector3(0.85f, 0.85f, 1f)),
         P("JawBody", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.85f, 0.4f), Vector3.zero, new Vector3(0.38f, 0.1f, 0.12f), 0.004f,
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.05f),
         P("Chin", FaceLine.Chin, FacePartShape.Ellipsoid, new Vector3(0f, 0.1f, 0.7f), Vector3.zero, new Vector3(0.24f, 0.16f, 0.14f), 0.004f, FacePartScale.Chin,
@@ -209,7 +209,7 @@ public class FaceDef
           mirrored: true, op: FacePartOp.Muscle, axis: new Vector3(0f, 1f, -0.2f), press: 0.025f),
         P("OrbicularisOris", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.24f, 0.18f), 0.004f,
           op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.08f),
-        // Face Metrics Fix 1: the chin's muscle under the lower lip fills the fold between the lip and the chin.
+        // The chin's muscle under the lower lip (grows with STR, like the masseter and the lips).
         P("Mentalis", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.13f, 0.85f), Vector3.zero, new Vector3(0.24f, 0.11f, 0.08f), 0.004f,
           op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.035f),
         P("Zygomaticus", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.42f, 0.8f), Vector3.zero, new Vector3(0.3f, 0.06f, 0.06f), 0.004f,
@@ -233,12 +233,10 @@ public class FaceDef
           op: FacePartOp.Subtract, snap: true),
         P("MouthLineSide", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.24f, -0.003f, -0.0006f), new Vector3(0f, 33.6f, -91f), new Vector3(0.022f, 0.09f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Subtract, snap: true),
-        // (press on a skin feature: a fold - the fat along it is thinned by up to that fraction, so the fat
-        // either side bulges against it and the fold deepens with the fat.)
         P("MouthCorner", FaceLine.Mouth, FacePartShape.Sphere, new Vector3(0.37f, -0.004f, -0.0022f), Vector3.zero, new Vector3(0.045f, 0f, 0f), 0.002f,
-          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.4f),
+          mirrored: true, op: FacePartOp.Subtract, snap: true),
         P("Nasolabial", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.345f, 0.04f, -0.0006f), new Vector3(0f, 0f, -153.3f), new Vector3(0.03f, 0.163f, 0f), 0.002f,
-          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.85f),
+          mirrored: true, op: FacePartOp.Subtract, snap: true),
         // Face Polish Part 2: between the nose and the mouth. The crease where the nose's underside meets the
         // upper lip, the alar creases round the back of each wing, the philtrum's two ridges, a thin ridge on
         // the upper lip's border (the vermilion border). (Face Metrics Fix 1: the chin and lower jaw as before
@@ -252,9 +250,9 @@ public class FaceDef
         P("VermilionBorder", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.15f, 0.062f, -0.0003f), new Vector3(0f, 0f, -97f), new Vector3(0.012f, 0.13f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Union, snap: true),
         P("ChinGroove", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, -0.14f, -0.0012f), new Vector3(0f, 0f, -90f), new Vector3(0.05f, 0.12f, 0f), 0.003f,
-          op: FacePartOp.Subtract, snap: true, press: 0.15f),
-        // The double chin's crease: under the jaw, only with a lot of fat (it starts as a hairline).
+          op: FacePartOp.Subtract, snap: true),
+        // The double chin's crease: under the jaw (fixed size: off until it's re-enabled with a fixed depth).
         P("DoubleChinCrease", FaceLine.Chin, FacePartShape.Capsule, new Vector3(0f, -0.12f, -0.004f), new Vector3(0f, 0f, -90f), new Vector3(0.01f, 0.3f, 0f), 0.004f,
-          op: FacePartOp.Subtract, snap: true, press: 0.35f),
+          op: FacePartOp.Subtract, snap: true),
     };
 }

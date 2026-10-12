@@ -49,6 +49,10 @@ public class BodySDF : IDisposable
     // Anatomy Rework Part 1: parts placed on the base (index, target, axis or tip, size (m), press (m), offset, root offset).
     readonly List<(int i, Vector3 target, Vector3 axis, Vector3 size, float press, float offset, float rootOffset)> pressed = new List<(int, Vector3, Vector3, Vector3, float, float, float)>();
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
+    // Face Metrics: the snapped skin features (the grooves and ridges cut / added on the finished skin:
+    // Philtrum, MouthLine, MouthLineSide, MouthCorner, Nasolabial, NoseLipCrease, AlarCrease, PhiltrumRidge,
+    // VermilionBorder, ChinGroove, DoubleChinCrease) on or off - one switch, for measuring with and without.
+    public static bool SkinFeatures = true;
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;                                 // the face's frame / profile egg (fat mask, wig, bake)
     Feature skullBase;                             // the egg without INT's growth (the brain layer scales between)
@@ -227,8 +231,24 @@ public class BodySDF : IDisposable
         kernel = BuildKernel(Allocator.Persistent);
         PressParts();
         SnapFaceParts();
+        if (!SkinFeatures) SnapMouthCentre();
         BuildEars();
         FitHeadCut();
+    }
+
+    // (Without the skin features there's no snapped mouth line: the mouth's centre onto the skin from the front.)
+    void SnapMouthCentre()
+    {
+        if (headIndex < 0) return;
+        var fz = frames[headIndex].z;
+        Vector3 p = MouthCentre + fz * 0.05f;
+        for (int it = 0; it < 300; it++)
+        {
+            float d = kernel.Eval(p).skin;
+            if (d < 0.0002f) break;
+            p -= fz * Mathf.Clamp(d * 0.9f, 0.0002f, 0.01f);
+        }
+        MouthCentre = p;
     }
 
     // Face Metrics Fix 4: the head's cut sphere must hold the whole neck above the plane (a heavy nape isn't
@@ -746,6 +766,7 @@ public class BodySDF : IDisposable
         Vector3 V3(PcgRandom r, Vector3 range) => new Vector3(range.x * r.Signed(), range.y * r.Signed(), range.z * r.Signed());
         foreach (var part in faceDef.parts)
         {
+            if (!SkinFeatures && part.snap && (part.op == FacePartOp.Subtract || part.op == FacePartOp.Union)) continue;
             var rng = new PcgRandom(plan.sheet.seed, "face." + part.name);
             Vector3 dPos = V3(rng, part.positionVar), dRot = V3(rng, part.rotationVar), dSize = V3(rng, part.sizeVar);
             for (int side = part.mirrored ? -1 : 1; side <= 1; side += 2)
@@ -773,11 +794,18 @@ public class BodySDF : IDisposable
                 {
                     o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
                     halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
-                    press = part.op == FacePartOp.Subtract ? part.press : 0f,   // (Face Polish 1: folds deepen with fat)
                 };
                 // Anatomy Rework Part 1: pressed shapes, planes and pieces are placed on the base once it exists.
                 var op = part.op;
-                float strF = part.name == "Masseter" ? 1f + 0.4f * plan.sheet.S : 1f;
+                // Face Metrics rule: STR grows the lower face's volumes - the jaw bone (jaw angles, jaw body, chin
+                // bone), the masseter, the chin muscle (mentalis) and the lips; they ride on the bone. (Creases never
+                // scale with STR or fat.)
+                float S = plan.sheet.S;
+                float strF = part.name == "Masseter" ? 1f + 0.4f * S : part.name == "Mentalis" ? 1f + 0.5f * S
+                           : part.name == "JawAngle" || part.name == "JawBody" || part.name == "Chin" ? 1f + 0.3f * S : 1f;
+                float strSize = part.name == "JawAngle" || part.name == "JawBody" || part.name == "Chin" ? 1f + 0.12f * S
+                              : part.name == "Mentalis" ? 1f + 0.1f * S : part.name == "LipUpper" || part.name == "LipLower" ? 1f + 0.12f * S : 1f;
+                if (strSize != 1f) { size *= strSize; prim.r *= strSize; prim.halfLen *= strSize; }
                 if (op == FacePartOp.Plane)
                 {
                     Vector3 nrm = W(new Vector3(side < 0 ? -part.axis.x : part.axis.x, part.axis.y, part.axis.z)).normalized;

@@ -49,7 +49,8 @@ public partial class ScenarioTest : MonoBehaviour
                 yield return null; yield return null;
             }
         t0 = Time.time;
-        Log($"scenario {scenarioName}, scene {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
+        for (int i = 0; i + 1 < argv.Length; i++) if (argv[i] == "-skinfeatures") BodySDF.SkinFeatures = argv[i + 1] != "off";
+        Log($"scenario {scenarioName}, scene {UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}{(BodySDF.SkinFeatures ? "" : ", skin features OFF")}");
         yield return new WaitForSeconds(3f); // traffic settles
         switch (scenarioName)
         {
@@ -880,6 +881,9 @@ public partial class ScenarioTest : MonoBehaviour
             new List<(string, CharacterSheet)> { ("M DEX1", new CharacterSheet(Sex.Male, 10, 10, 1, 3101)), ("M DEX10", new CharacterSheet(Sex.Male, 10, 10, 10, 3102)), ("M DEX20", new CharacterSheet(Sex.Male, 10, 10, 20, 3103)) },
             new List<(string, CharacterSheet)> { ("F DEX1", new CharacterSheet(Sex.Female, 10, 10, 1, 3201)), ("F DEX10", new CharacterSheet(Sex.Female, 10, 10, 10, 3202)), ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) },
             new List<(string, CharacterSheet)> { ("M STR1", new CharacterSheet(Sex.Male, 1, 10, 10, 3311)), ("M STR20", new CharacterSheet(Sex.Male, 20, 10, 10, 3312)), ("F STR1", new CharacterSheet(Sex.Female, 1, 10, 10, 3313)), ("F STR20", new CharacterSheet(Sex.Female, 20, 10, 10, 3314)) },
+            // (STR alone at DEX 10, one seed per sex: the lower face's volumes growing.)
+            new List<(string, CharacterSheet)> { ("M sSTR1", new CharacterSheet(Sex.Male, 1, 10, 10, 3321)), ("M sSTR10", new CharacterSheet(Sex.Male, 10, 10, 10, 3321)), ("M sSTR20", new CharacterSheet(Sex.Male, 20, 10, 10, 3321)),
+                                                 ("F sSTR1", new CharacterSheet(Sex.Female, 1, 10, 10, 3322)), ("F sSTR10", new CharacterSheet(Sex.Female, 10, 10, 10, 3322)), ("F sSTR20", new CharacterSheet(Sex.Female, 20, 10, 10, 3322)) },
             new List<(string, CharacterSheet)> { ("M INT1", new CharacterSheet(Sex.Male, 10, 1, 10, 3301)), ("M INT10", new CharacterSheet(Sex.Male, 10, 10, 10, 3305)), ("M INT15", new CharacterSheet(Sex.Male, 10, 15, 10, 3306)), ("M INT20", new CharacterSheet(Sex.Male, 10, 20, 10, 3302)), ("F INT1", new CharacterSheet(Sex.Female, 10, 1, 10, 3303)), ("F INT20", new CharacterSheet(Sex.Female, 10, 20, 10, 3304)) },
         };
         // Part D: one part exaggerated per head through the per-character overrides (move, rotate, scale).

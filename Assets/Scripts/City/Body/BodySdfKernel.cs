@@ -237,11 +237,7 @@ public struct BodySdfKernel : IDisposable
         m = Mathf.Lerp(m, 0.7f, mouthArea * (1f - thick));
         m = Mathf.Lerp(m, 0.15f, Mathf.Max(forehead, temples));
         m = Mathf.Lerp(m, 0.6f, lowerLid);
-        m = Mathf.Lerp(m, 0.03f, structure);
-        // (Face Metrics Fix 1: the lower lip keeps a little fat - between a fat-free lip and a fat chin the fold
-        // was a crater.)
-        float lowerLip = G(ax / 0.32f) * G((u.y + 0.7f) / 0.06f) * S(0.5f, 0.8f, u.z);
-        return Mathf.Max(m, 0.4f * lowerLip * thick + 0.2f * lowerLip);
+        return Mathf.Lerp(m, 0.03f, structure);
     }
 
     // Signed distance to a polygon (Inigo Quilez's sdPolygon), 4 vertices.
@@ -337,28 +333,6 @@ public struct BodySdfKernel : IDisposable
     // pressed landmarks and the overhanging pieces (nose, brow bar, lips, ears) - one small blend; muscle: the
     // bone offset by the muscle map, plus the pressed muscles; skin: the muscle offset by the fat map, base and
     // pieces joined once with a radius that grows with the fat (lean faces crisp, fat ones round).
-    // Face Polish Part 1: folds after the fat. Along a fold (a skin feature with press > 0: the nose-to-mouth
-    // fold, the mouth corners, the chin crease, the double chin's crease) the skin is tied down: the fat there
-    // is thinned (by up to `press`), in a band that only widens a little with the fat. The fat either side
-    // bulges against it, so the fold deepens with the fat (self-limiting: deeper in, the band is farther).
-    // Distance measured across the surface (the part's own z, out of the face, ignored).
-    float FoldTether(Vector3 p, float fat)
-    {
-        if (fat <= 1e-4f) return 0f;
-        float w = 0.003f + 0.2f * fat, t = 0f;
-        for (int j = 0; j < face.Length; j++)
-        {
-            var f = face[j];
-            if (f.op != (int)FacePartOp.Subtract || f.press <= 0f) continue;
-            Vector3 d = p - f.o;
-            float lx = Vector3.Dot(d, f.x), ly = Vector3.Dot(d, f.y);
-            if (f.shape == (int)FacePartShape.Capsule) ly -= Mathf.Clamp(ly, -f.halfLen, f.halfLen);
-            float r = Mathf.Sqrt(lx * lx + ly * ly) / w;
-            if (r < 3f) t = Mathf.Max(t, f.press * Mathf.Exp(-r * r));
-        }
-        return Mathf.Min(t, 0.95f);
-    }
-
     public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin)
     {
         float A = HeadBase(p);
@@ -628,7 +602,6 @@ public struct BodySdfKernel : IDisposable
         {
             float baseFat = FatAt(p, headIndex);
             headFat = baseFat * FaceFatMask(p, baseFat);
-            headFat *= 1f - FoldTether(p, headFat);
             HeadLayers(p, headFat, out float hb, out float hm, out float hs);
             if (hs < skin) fat = headFat * fatScale;
             core = Mathf.Min(core, hb);
@@ -784,7 +757,6 @@ public struct BodySdfKernel : IDisposable
         if (headIndex < 0) return float.MaxValue;
         float baseFat = FatAt(p, headIndex);
         float headFat = baseFat * FaceFatMask(p, baseFat);
-        headFat *= 1f - FoldTether(p, headFat);
         HeadLayers(p, headFat, out _, out _, out float skin);
         for (int j = 0; j < face.Length; j++)
         {
