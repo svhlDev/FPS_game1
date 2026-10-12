@@ -542,8 +542,8 @@ public class BodyBuild
         var T = tris.ToArray(); var CT = ctris.ToArray();
         int ng = fields.Count;
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
-        var browPrims = new List<BodySdfKernel.FacePrim>();
-        for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow.")) browPrims.Add(sdf.FacePrims[j]);
+        // (Face Polish Part 4: the brows are hair cards now - FaceHair - not the wig's strand ridge.)
+        var browLines = faceMarks.browLines; bool female = sheet.sex == Sex.Female;
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
@@ -559,8 +559,17 @@ public class BodyBuild
             if (FillLevels) fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n);
             // (Under long hair cards the shell is bob length: the cards hang beyond it.)
             var shellStyle = hs != null && wigStyle == WigStyle.Long ? WigStyle.Bob : wigStyle;
-            hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);
+            hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, null, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);
             if (hs != null) hasCards = HairCards.Build(kernelCopy, hs, sheet.seed, canon, headBone, hch, out cardV, out cardN, out cardT, out cardUV, out cardUV2, out cardW, out cardTri);
+            // Face hair: the brows' tufts (appended to the hair cards).
+            var face = new FaceHair.Cards();
+            FaceHair.Brows(kernelCopy, canon, browLines, sheet.seed, female, headBone, face);
+            if (face.tri.Count > 0)
+            {
+                if (!hasCards) { cardV = null; cardN = null; cardT = null; cardUV = null; cardUV2 = null; cardW = null; cardTri = null; }
+                face.AppendTo(ref cardV, ref cardN, ref cardT, ref cardUV, ref cardUV2, ref cardW, ref cardTri);
+                hasCards = true;
+            }
         });
         CurrentStage = Stage.Split;
     }

@@ -17,7 +17,7 @@ using UnityEngine.Rendering;
 // warning to re-bake (the bodies are valid, just not what the current rules would make).
 public static class BodyPreset
 {
-    public const int Version = 7;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble; 5: the eye shape; 6: brow strands; 7: hair cards
+    public const int Version = 8;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble; 5: the eye shape; 6: brow strands; 7: hair cards; 8: face hair cards
     public const string ResourceName = "BodyPoolPreset";
 
     [Serializable] class ChainList { public List<ClothChainSet> chains = new List<ClothChainSet>(); }
@@ -138,7 +138,7 @@ public static class BodyPreset
                         w.Write((ushort)Mathf.RoundToInt(q.x / cext.x * 65535f)); w.Write((ushort)Mathf.RoundToInt(q.y / cext.y * 65535f)); w.Write((ushort)Mathf.RoundToInt(q.z / cext.z * 65535f));
                         w.Write(Sb(hnn[i].x)); w.Write(Sb(hnn[i].y)); w.Write(Sb(hnn[i].z));
                         w.Write(Sb(ht[i].x)); w.Write(Sb(ht[i].y)); w.Write(Sb(ht[i].z));
-                        w.Write(Qb(hu[i].x)); w.Write(Qb(hu[i].y)); w.Write(Qb(hu2[i].x)); w.Write(Qb(hu2[i].y));
+                        w.Write(Qb(hu[i].x)); w.Write(Qb(hu[i].y)); w.Write(Qb(hu2[i].x)); w.Write(Qb((hu2[i].y + 1f) * 0.5f));   // (y -1..1: -1 face hair)
                         var b = hw[i];
                         w.Write((byte)b.boneIndex0); w.Write((byte)b.boneIndex1); w.Write((byte)b.boneIndex2); w.Write((byte)b.boneIndex3);
                         w.Write(Qb(b.weight0)); w.Write(Qb(b.weight1)); w.Write(Qb(b.weight2)); w.Write(Qb(b.weight3));
@@ -240,7 +240,7 @@ public static class BodyPreset
                     e.cardV[q] = cmin + new Vector3(r.ReadUInt16() / 65535f * cext.x, r.ReadUInt16() / 65535f * cext.y, r.ReadUInt16() / 65535f * cext.z);
                     e.cardN[q] = new Vector3(Sn(r.ReadByte()), Sn(r.ReadByte()), Sn(r.ReadByte())).normalized;
                     var tt = new Vector3(Sn(r.ReadByte()), Sn(r.ReadByte()), Sn(r.ReadByte())).normalized; e.cardT[q] = new Vector4(tt.x, tt.y, tt.z, 1f);
-                    e.cardUV[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f); e.cardUV2[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f);
+                    e.cardUV[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f); e.cardUV2[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f * 2f - 1f);
                     int b0 = r.ReadByte(), b1 = r.ReadByte(), b2 = r.ReadByte(), b3 = r.ReadByte();
                     float w0 = r.ReadByte(), w1 = r.ReadByte(), w2 = r.ReadByte(), w3 = r.ReadByte(), sum = Mathf.Max(1f, w0 + w1 + w2 + w3);
                     e.cardW[q] = new BoneWeight { boneIndex0 = b0, boneIndex1 = b1, boneIndex2 = b2, boneIndex3 = b3, weight0 = w0 / sum, weight1 = w1 / sum, weight2 = w2 / sum, weight3 = w3 / sum };

@@ -96,42 +96,47 @@ Shader "FPS/Hair"
                 return pow(saturate(sqrt(max(0.0h, 1.0h - th * th))), power);
             }
 
-            half3 HairLight(Light l, half3 albedo, half3 n, half3 T, half3 v, half sparkle)
+            half3 HairLight(Light l, half3 albedo, half3 n, half3 T, half3 v, half sparkle, half specK)
             {
                 half3 h = SafeNormalize(l.direction + v);
                 half ndl = dot(n, l.direction);
                 half diff = saturate(ndl * 0.65h + 0.35h);
-                half3 c = albedo * diff + (half3(1, 1, 1) * KK(T, n, h, _Shift1, 60.0h) * _Spec1 + albedo * 2.0h * KK(T, n, h, _Shift2, 20.0h) * _Spec2 * sparkle) * saturate(ndl + 0.3h);
+                half3 c = albedo * diff + (half3(1, 1, 1) * KK(T, n, h, _Shift1, 60.0h) * _Spec1 + albedo * 2.0h * KK(T, n, h, _Shift2, 20.0h) * _Spec2 * sparkle) * saturate(ndl + 0.3h) * specK;
                 return c * l.color * (l.distanceAttenuation * l.shadowAttenuation);
             }
 
             half4 frag(Varyings i, bool front : SV_IsFrontFace) : SV_Target
             {
-                float2 a = HairAlpha(i.uv, i.uv2.x, i.uv2.y);
+                float2 a = HairAlpha(i.uv, i.uv2.x, abs(i.uv2.y));
                 clip(a.x - Dither(i.positionCS) * 0.9 - 0.05);
                 half3 n = normalize(i.normalWS) * (front ? 1.0h : -1.0h);
                 half3 T = normalize(i.tangentWS);
                 half3 v = GetWorldSpaceNormalizeViewDir(i.positionWS);
                 // Darker at the roots, per-card jitter, per-strand darkness; the inner layer a little darker.
                 half3 albedo = _HairColor.rgb * lerp(0.55h, 1.0h, (half)smoothstep(0.0, 0.5, i.uv.y)) * lerp(0.88h, 1.12h, (half)i.uv2.x) * (half)a.y;
-                albedo *= lerp(0.92h, 1.0h, (half)i.uv2.y);
+                albedo *= lerp(0.92h, 1.0h, (half)abs(i.uv2.y));
+                // Face hair (uv2.y = -1: brows, beards; Face Polish Part 4): short tufts lying on the skin - a
+                // little darker, faint highlights (flat-lying cards caught the full sheen and read silver).
+                half face = i.uv2.y < -0.5 ? 1.0h : 0.0h;
+                albedo *= lerp(1.0h, 0.8h, face);
+                half specK = lerp(1.0h, 0.2h, face);
                 half sparkle = lerp(0.7h, 1.0h, (half)H1(floor(i.uv.x * _Strands) + i.uv2.x * 9.0));
                 float2 suv = GetNormalizedScreenSpaceUV(i.positionCS);
                 AmbientOcclusionFactor ao = GetScreenSpaceAmbientOcclusion(suv);
                 half3 c = SampleSH(n) * albedo * ao.indirectAmbientOcclusion;
                 Light ml = GetMainLight(TransformWorldToShadowCoord(i.positionWS));
                 ml.color *= ao.directAmbientOcclusion;
-                c += HairLight(ml, albedo, n, T, v, sparkle);
+                c += HairLight(ml, albedo, n, T, v, sparkle, specK);
                 #if defined(_ADDITIONAL_LIGHTS)
                     uint cnt = GetAdditionalLightsCount();
                     #if USE_CLUSTER_LIGHT_LOOP
                     [loop] for (uint li = 0; li < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); li++)
-                        c += HairLight(GetAdditionalLight(li, i.positionWS, half4(1, 1, 1, 1)), albedo, n, T, v, sparkle);
+                        c += HairLight(GetAdditionalLight(li, i.positionWS, half4(1, 1, 1, 1)), albedo, n, T, v, sparkle, specK);
                     #endif
                     InputData inputData = (InputData)0; inputData.positionWS = i.positionWS; inputData.normalizedScreenSpaceUV = suv;
                     uint pixelLightCount = cnt;
                     LIGHT_LOOP_BEGIN(pixelLightCount)
-                        c += HairLight(GetAdditionalLight(lightIndex, i.positionWS, half4(1, 1, 1, 1)), albedo, n, T, v, sparkle);
+                        c += HairLight(GetAdditionalLight(lightIndex, i.positionWS, half4(1, 1, 1, 1)), albedo, n, T, v, sparkle, specK);
                     LIGHT_LOOP_END
                 #endif
                 return half4(MixFog(c, i.fogFactor), 1);
@@ -170,7 +175,7 @@ Shader "FPS/Hair"
                 o.uv = v.uv; o.uv2 = v.uv2;
                 return o;
             }
-            half4 SF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, i.uv2.y).x - 0.5); return 0; }
+            half4 SF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, abs(i.uv2.y)).x - 0.5); return 0; }
             ENDHLSL
         }
 
@@ -185,7 +190,7 @@ Shader "FPS/Hair"
             struct A { float4 positionOS : POSITION; float2 uv : TEXCOORD0; float2 uv2 : TEXCOORD1; };
             struct V { float4 positionCS : SV_POSITION; float2 uv : TEXCOORD0; float2 uv2 : TEXCOORD1; };
             V DV(A v) { V o; o.positionCS = TransformObjectToHClip(v.positionOS.xyz); o.uv = v.uv; o.uv2 = v.uv2; return o; }
-            half DF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, i.uv2.y).x - Dither(i.positionCS) * 0.9 - 0.05); return 0; }
+            half DF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, abs(i.uv2.y)).x - Dither(i.positionCS) * 0.9 - 0.05); return 0; }
             ENDHLSL
         }
 
@@ -200,7 +205,7 @@ Shader "FPS/Hair"
             struct A { float4 positionOS : POSITION; float3 normalOS : NORMAL; float2 uv : TEXCOORD0; float2 uv2 : TEXCOORD1; };
             struct V { float4 positionCS : SV_POSITION; float3 normalWS : TEXCOORD0; float2 uv : TEXCOORD1; float2 uv2 : TEXCOORD2; };
             V NV(A v) { V o; o.positionCS = TransformObjectToHClip(v.positionOS.xyz); o.normalWS = TransformObjectToWorldNormal(v.normalOS); o.uv = v.uv; o.uv2 = v.uv2; return o; }
-            half4 NF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, i.uv2.y).x - Dither(i.positionCS) * 0.9 - 0.05); return half4(normalize(i.normalWS), 0); }
+            half4 NF(V i) : SV_Target { clip(HairAlpha(i.uv, i.uv2.x, abs(i.uv2.y)).x - Dither(i.positionCS) * 0.9 - 0.05); return half4(normalize(i.normalWS), 0); }
             ENDHLSL
         }
     }

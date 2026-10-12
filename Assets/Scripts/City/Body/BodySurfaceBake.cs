@@ -34,12 +34,16 @@ public static class BodySurfaceBake
         public readonly List<BodySdfKernel.FacePrim> cheeks = new List<BodySdfKernel.FacePrim>(), nose = new List<BodySdfKernel.FacePrim>();
         public Vector3 eyeL, eyeR; public float eyeRadius;
         public float beard;             // beard shadow strength (0: none)
+        // Face Polish Part 4: the brows' centre lines (FaceHair): a soft hair-coloured tint under the tufts.
+        public List<Vector3[]> browLines; public HeadCanon canon; public bool female;
         public static FaceMarks From(BodySDF sdf, WigStyle wig)
         {
             var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None, earL = sdf.Kernel.earL, earR = sdf.Kernel.earR,
                                     eyeL = sdf.EyeL, eyeR = sdf.EyeR, eyeRadius = sdf.EyeRadius };
             // Most men show a beard shadow (darker with darker hair: the stubble's colour).
             var sheet = sdf.Plan.sheet;
+            m.canon = sdf.Canon; m.female = sheet.sex == Sex.Female;
+            if (sdf.EyeRadius > 0f) m.browLines = FaceHair.BrowLines(sdf.Kernel, sdf.Canon, sdf.EyeL, sdf.EyeR, sheet.seed, m.female);
             var br = new PcgRandom(sheet.seed, "beard");
             if (sheet.sex == Sex.Male && br.Value() < 0.65f) m.beard = br.Range(0.25f, 0.45f);
             for (int i = 0; i < sdf.FacePrims.Count; i++)
@@ -189,6 +193,7 @@ public static class BodySurfaceBake
                     float beard = S(-0.36f, -0.46f, u.y) * S(-0.15f, 0.1f, u.z) * S(-1.45f, -1.25f, u.y) * (1f - lipM) * face.beard;
                     stub = Mathf.Max(stub, beard);
                 }
+                if (face.browLines != null) stub = Mathf.Max(stub, 0.5f * FaceHair.BrowTint(face.browLines, face.canon, v[i], face.female));
                 res.uv4[i] = new Vector3(stub, lipM, 0f);
             }
         }
