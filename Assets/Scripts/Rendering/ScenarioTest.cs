@@ -1766,7 +1766,8 @@ public partial class ScenarioTest : MonoBehaviour
             if (t >= nextLog) { Log($"  pool {pool.Ready}/{pool.Total} after {t:0} s"); nextLog += 10f; }
         }
         Log($"preset: {pool.PresetLoaded} baked bodies loaded in {pool.PresetSeconds:0.00} s{(pool.PresetProblem != null ? " (" + pool.PresetProblem + ")" : "")}; the rest generated");
-        Log(pool.PresetLoaded > 0 && pool.PresetSeconds < 5f ? "PASS the baked preset fills its slots at startup" : "WARN no preset loaded (bake one: Tools > Characters > Bake Body Pool)");
+        Log(pool.PresetLoaded == 0 ? "WARN no preset loaded (bake one: Tools > Characters > Bake Body Pool)"
+            : pool.PresetSeconds < 5f ? "PASS the baked preset fills its slots at startup" : $"WARN the preset loads slowly ({pool.PresetSeconds:0.0} s for {pool.PresetLoaded} bodies)");
         fillFrames.Sort();
         float Avg(List<float> l) { float x = 0f; foreach (var v in l) x += v; return l.Count > 0 ? x / l.Count : 0f; }
         float Pct(List<float> l, float q) => l.Count > 0 ? l[Mathf.Clamp((int)(l.Count * q), 0, l.Count - 1)] : 0f;

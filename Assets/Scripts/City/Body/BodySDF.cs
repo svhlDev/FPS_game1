@@ -192,9 +192,26 @@ public class BodySDF : IDisposable
             headCutAxis = frames[headIndex].y;
             headCutO = start[headIndex] - headCutAxis * mr.headCutBelow;
             headCutC = skull.f.o;
-            float big = Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.4f;
-            headCutR = Mathf.Max((headCutO - headCutC).magnitude + 0.045f, big);
-            HeadBounds = new Bounds(headCutC, Vector3.one * headCutR * 2f);
+            // The cut sphere: at the plane it takes just the neck (and a margin), so everything it removes from
+            // the body above the plane lies in the head's grid below; it still holds the whole head.
+            var nb0 = plan.bones[plan.bones[headIndex].parent];
+            float rN = Mathf.Max(nb0.Outer.x, Mathf.Max(nb0.Outer.y, nb0.Outer.z)) + Mathf.Max(nb0.fat.x, Mathf.Max(nb0.fat.y, nb0.fat.z)) + 0.025f;
+            float dPlane = Vector3.Dot(headCutC - headCutO, headCutAxis);
+            float big = Mathf.Max(cranium.r.x, Mathf.Max(cranium.r.y, cranium.r.z)) * 1.15f + 0.03f;
+            headCutR = Mathf.Max(Mathf.Sqrt(dPlane * dPlane + rN * rN), big);
+            // The head's grid: just the head above the cut (cranium, face, ears, the neck down to the cut, fat),
+            // not the cut sphere's whole cube - a third of the cells at the head's fine spacing.
+            var hb0 = plan.bones[headIndex];
+            float fat = Mathf.Max(hb0.fat.x, Mathf.Max(hb0.fat.y, hb0.fat.z)) * 1.7f + 0.02f;
+            float top = Mathf.Max(cranium.f.o.y + cranium.r.y, Canon.o.y + Canon.crown);
+            float back = Mathf.Min(cranium.f.o.z - cranium.r.z, start[headIndex].z - Canon.halfD);
+            // The sphere's width a little above the plane, where the body (a heavy neck's back, the trapezius)
+            // still reaches into it: all of that must be in the grid too.
+            float up = Mathf.Min(dPlane, 0.06f);
+            float capR = Mathf.Sqrt(Mathf.Max(0f, headCutR * headCutR - (dPlane - up) * (dPlane - up))) + 0.01f;
+            var lo = new Vector3(Mathf.Min(Canon.o.x - Canon.halfW * 1.45f - fat, headCutO.x - capR), headCutO.y - 0.01f, Mathf.Min(back - fat, headCutO.z - capR));
+            var hi = new Vector3(Mathf.Max(Canon.o.x + Canon.halfW * 1.45f + fat, headCutO.x + capR), top + fat, Mathf.Max(Canon.o.z + Canon.halfD * 1.75f + fat, headCutO.z + capR));
+            HeadBounds = new Bounds((lo + hi) * 0.5f, hi - lo);
         }
         kernel = BuildKernel(Allocator.Persistent);
         SnapFaceParts();
@@ -223,7 +240,7 @@ public class BodySDF : IDisposable
             {
                 float d = kernel.Eval(p).skin;
                 if (d <= 0f) break;
-                p -= f.x * s * Mathf.Clamp(d * 0.8f, 0.0003f, 0.004f);
+                p -= f.x * s * Mathf.Clamp(d * 0.9f, 0.0002f, 0.02f);
             }
             Vector3 back = (f.x * (s * Mathf.Sin(flare)) - f.z * Mathf.Cos(flare)).normalized;
             Vector3 n = (f.x * (s * Mathf.Cos(flare)) + f.z * Mathf.Sin(flare)).normalized;
@@ -264,7 +281,7 @@ public class BodySDF : IDisposable
             float prev = kernel.Eval(p).skin;
             for (int it = 0; it < 400 && prev > 0f; it++)
             {
-                float step = Mathf.Clamp(prev * 0.8f, 0.0003f, 0.004f);
+                float step = Mathf.Clamp(prev * 0.9f, 0.0002f, 0.02f);
                 p -= f.z * step;
                 prev = kernel.Eval(p).skin;
             }

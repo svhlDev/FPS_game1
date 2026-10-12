@@ -36,7 +36,7 @@ public class BodyAsset
 
 // Phase 8: generating a body without stalling the frame. A staged state machine, advanced by Step()
 // once per frame by whoever owns it (BodyPool):
-//   Start    (main, ~1 ms)  plan + SDF; schedule the sampling jobs: the body (hands cut off), each hand
+//   Start    (worker, then main ~1 ms)  plan + SDF on a worker; then schedule the sampling jobs: the body (hands cut off), each hand
 //                            on its own finer grid, and (Clothing Part A) each garment of the outfit:
 //                            its field (closing + drape on the body and the garments before it, chained),
 //                            then its surface sampled on its own grid
@@ -157,7 +157,20 @@ public class BodyBuild
         {
             switch (CurrentStage)
             {
-                case Stage.Start: StartBuild(); break;
+                case Stage.Start:
+                    // The plan and the SDF (snapping face parts, placing the ears: hundreds of SDF samples) on
+                    // a worker; the jobs are scheduled here once they're ready.
+                    if (task == null)
+                    {
+                        wall.Start();
+                        SurfaceNets.Init();
+                        var warm = BodyRules.Default;   // (loads on the main thread)
+                        task = Task.Run(() => { plan = BodyPlanner.Generate(sheet, null, template); sdf = new BodySDF(plan); });
+                        if (sync) task.Wait();
+                        else break;
+                    }
+                    if (TaskDone()) StartBuild();
+                    break;
                 case Stage.Sampling: if (Ready()) AfterSampling(); break;
                 case Stage.Extract: if (TaskDone()) AfterExtract(); break;
                 case Stage.Project: if (Ready()) AfterProject(); break;
@@ -213,10 +226,6 @@ public class BodyBuild
 
     void StartBuild()
     {
-        wall.Start();
-        SurfaceNets.Init();
-        plan = BodyPlanner.Generate(sheet, null, template);
-        sdf = new BodySDF(plan);
         var hr = BodyRules.Default.hands;
         handCell = hr.cell;
         bool hands = sdf.HandCount > 0;

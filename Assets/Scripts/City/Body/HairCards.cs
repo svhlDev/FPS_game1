@@ -85,7 +85,13 @@ public static class HairCards
                 Vector3 centre = new Vector3(axisP.x, y, axisP.z);
                 // Outward to the surface (head, neck, shoulders), then a little past it.
                 float r = 0.03f;
-                for (float t = 0.03f; t < 0.4f; t += 0.004f) { if (k.Skin(centre + dir * t) > 0f) { r = t; break; } r = t; }
+                for (float t = 0.03f; t < 0.4f; )
+                {
+                    float sd = k.Skin(centre + dir * t);
+                    r = t;
+                    if (sd > 0f) break;
+                    t += Mathf.Max(-sd * 0.9f, 0.002f);   // (inside: step by the distance to the surface)
+                }
                 cs.joints[p * (cs.bones + 1) + l] = centre + dir * (r + 0.012f);
             }
         }

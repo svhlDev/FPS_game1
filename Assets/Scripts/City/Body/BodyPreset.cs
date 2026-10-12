@@ -125,12 +125,23 @@ public static class BodyPreset
                 {
                     var hv = hm.vertices; var hnn = hm.normals; var ht = hm.tangents; var hu = new List<Vector2>(); hm.GetUVs(0, hu); var hu2 = new List<Vector2>(); hm.GetUVs(1, hu2);
                     var hw = hm.boneWeights;
+                    // Quantized like the body: positions in the cards' bounds, unit vectors and uvs as bytes.
+                    var cmin = Vector3.one * float.MaxValue; var cmax = -cmin;
+                    foreach (var p in hv) { cmin = Vector3.Min(cmin, p); cmax = Vector3.Max(cmax, p); }
+                    Vector3 cext = Vector3.Max(cmax - cmin, Vector3.one * 1e-4f);
+                    W(w, cmin); W(w, cext);
+                    byte Sb(float x) => (byte)Mathf.Clamp(Mathf.RoundToInt(x * 127f) + 128, 0, 255);
+                    byte Qb(float x) => (byte)Mathf.Clamp(Mathf.RoundToInt(x * 255f), 0, 255);
                     for (int i = 0; i < hn; i++)
                     {
-                        W(w, hv[i]); W(w, hnn[i]); W(w, (Vector3)ht[i]); w.Write(hu[i].x); w.Write(hu[i].y); w.Write(hu2[i].x); w.Write(hu2[i].y);
+                        Vector3 q = hv[i] - cmin;
+                        w.Write((ushort)Mathf.RoundToInt(q.x / cext.x * 65535f)); w.Write((ushort)Mathf.RoundToInt(q.y / cext.y * 65535f)); w.Write((ushort)Mathf.RoundToInt(q.z / cext.z * 65535f));
+                        w.Write(Sb(hnn[i].x)); w.Write(Sb(hnn[i].y)); w.Write(Sb(hnn[i].z));
+                        w.Write(Sb(ht[i].x)); w.Write(Sb(ht[i].y)); w.Write(Sb(ht[i].z));
+                        w.Write(Qb(hu[i].x)); w.Write(Qb(hu[i].y)); w.Write(Qb(hu2[i].x)); w.Write(Qb(hu2[i].y));
                         var b = hw[i];
                         w.Write((byte)b.boneIndex0); w.Write((byte)b.boneIndex1); w.Write((byte)b.boneIndex2); w.Write((byte)b.boneIndex3);
-                        w.Write(b.weight0); w.Write(b.weight1); w.Write(b.weight2); w.Write(b.weight3);
+                        w.Write(Qb(b.weight0)); w.Write(Qb(b.weight1)); w.Write(Qb(b.weight2)); w.Write(Qb(b.weight3));
                     }
                     var htr = hm.triangles; w.Write(htr.Length); foreach (int i in htr) w.Write((ushort)i);
                 }
@@ -222,12 +233,17 @@ public static class BodyPreset
             if (cn > 0)
             {
                 e.cardV = new Vector3[cn]; e.cardN = new Vector3[cn]; e.cardT = new Vector4[cn]; e.cardUV = new Vector2[cn]; e.cardUV2 = new Vector2[cn]; e.cardW = new BoneWeight[cn];
+                Vector3 cmin = V3(r), cext = V3(r);
+                float Sn(byte x) => (x - 128) / 127f;
                 for (int q = 0; q < cn; q++)
                 {
-                    e.cardV[q] = V3(r); e.cardN[q] = V3(r); var tt = V3(r); e.cardT[q] = new Vector4(tt.x, tt.y, tt.z, 1f);
-                    e.cardUV[q] = new Vector2(r.ReadSingle(), r.ReadSingle()); e.cardUV2[q] = new Vector2(r.ReadSingle(), r.ReadSingle());
-                    e.cardW[q] = new BoneWeight { boneIndex0 = r.ReadByte(), boneIndex1 = r.ReadByte(), boneIndex2 = r.ReadByte(), boneIndex3 = r.ReadByte(),
-                                                  weight0 = r.ReadSingle(), weight1 = r.ReadSingle(), weight2 = r.ReadSingle(), weight3 = r.ReadSingle() };
+                    e.cardV[q] = cmin + new Vector3(r.ReadUInt16() / 65535f * cext.x, r.ReadUInt16() / 65535f * cext.y, r.ReadUInt16() / 65535f * cext.z);
+                    e.cardN[q] = new Vector3(Sn(r.ReadByte()), Sn(r.ReadByte()), Sn(r.ReadByte())).normalized;
+                    var tt = new Vector3(Sn(r.ReadByte()), Sn(r.ReadByte()), Sn(r.ReadByte())).normalized; e.cardT[q] = new Vector4(tt.x, tt.y, tt.z, 1f);
+                    e.cardUV[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f); e.cardUV2[q] = new Vector2(r.ReadByte() / 255f, r.ReadByte() / 255f);
+                    int b0 = r.ReadByte(), b1 = r.ReadByte(), b2 = r.ReadByte(), b3 = r.ReadByte();
+                    float w0 = r.ReadByte(), w1 = r.ReadByte(), w2 = r.ReadByte(), w3 = r.ReadByte(), sum = Mathf.Max(1f, w0 + w1 + w2 + w3);
+                    e.cardW[q] = new BoneWeight { boneIndex0 = b0, boneIndex1 = b1, boneIndex2 = b2, boneIndex3 = b3, weight0 = w0 / sum, weight1 = w1 / sum, weight2 = w2 / sum, weight3 = w3 / sum };
                 }
                 e.cardTri = new int[r.ReadInt32()];
                 for (int q = 0; q < e.cardTri.Length; q++) e.cardTri[q] = r.ReadUInt16();
