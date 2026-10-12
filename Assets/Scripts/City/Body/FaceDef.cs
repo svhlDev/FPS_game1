@@ -191,7 +191,7 @@ public class FaceDef
         P("UpperJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0.06f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.17f, 0.16f), 0.004f,
           op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.09f, pushDir: new Vector3(0f, 0f, 1f), strength: true),
         P("LowerJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.1f, 0.9f), Vector3.zero, new Vector3(0.38f, 0.14f, 0.15f), 0.004f,
-          op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.08f, pushDir: new Vector3(0f, 0f, 1f), strength: true),
+          op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.052f, pushDir: new Vector3(0f, 0f, 1f), strength: true),   // (~2 mm behind the upper arc)
         // ---- Bone: carves ----
         P("Temple", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.88f, 0.15f, 0.4f), Vector3.zero, new Vector3(0.22f, 0.18f, 0.12f), 0.006f,
           mirrored: true, op: FacePartOp.Carve, axis: new Vector3(0f, 1f, 0f), press: 0.05f),
@@ -214,7 +214,7 @@ public class FaceDef
         // Lips: an M-shaped upper lip (two capsules wrapping back round the muzzle), a fuller lower lip behind it.
         P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.1875f, 0.02f, 0.004f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.055f, 0.145f, 0f), 0.003f,
           mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(1.3f, 1.02f, 1f), sizeVar: new Vector3(0.15f, 0.06f, 0f), strength: true),
-        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.045f, 0.002f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.1f), 0.003f,
+        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.045f, 0.001f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.1f), 0.003f,
           op: FacePartOp.Piece, femaleSize: new Vector3(1.05f, 1.3f, 1.15f), sizeVar: new Vector3(0.08f, 0.15f, 0.1f), strength: true),
         // ---- Muscle ----
         P("Masseter", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.8f, -0.5f, 0.15f), Vector3.zero, new Vector3(0.26f, 0.15f, 0.1f), 0.004f,
