@@ -24,6 +24,10 @@ public static class FaceSanity
                 foreach (int str in new[] { 1, 20 })
                     foreach (int intel in new[] { 1, 20 })
                         list.Add(new Case { label = $"{(sex == Sex.Male ? "M" : "F")} STR{str} INT{intel} DEX{dex}", sheet = new CharacterSheet(sex, str, intel, dex, seed++) });
+        // Face Polish Part 3: the INT steps (the forehead must stay smooth all the way).
+        foreach (var sex in new[] { Sex.Male, Sex.Female })
+            foreach (int intel in new[] { 10, 15 })
+                list.Add(new Case { label = $"{(sex == Sex.Male ? "M" : "F")} STR10 INT{intel} DEX10", sheet = new CharacterSheet(sex, 10, intel, 10, seed++) });
         for (int i = 0; i < randomSeeds; i++)
         {
             var sh = CharacterSheet.Roll(77000 + i * 13, 0f, 0f, 0f, 5f);
@@ -79,6 +83,8 @@ public static class FaceSanity
             if (Mathf.Abs(smp.skin) > 0.008f) { offSurface++; continue; }   // a vertex off the SDF surface: the head / body seam (Part 7)
             float shapes = smp.muscle;
             for (int j = 0; j < k.breasts.Length; j++) shapes = Mathf.Min(shapes, BodySdfKernel.EllipsoidDist(k.breasts[j].ToLocal(p), k.breasts[j].r));
+            // (Skin ridges - Union parts, added after the fat - are shapes too.)
+            for (int j = 0; j < k.face.Length; j++) if (k.face[j].op == (int)FacePartOp.Union) shapes = Mathf.Min(shapes, BodySdfKernel.FaceDist(k.face[j], p));
             if (k.earL.on != 0) shapes = Mathf.Min(shapes, Mathf.Min(BodySdfKernel.EarDist(k.earL, p), BodySdfKernel.EarDist(k.earR, p)));
             float kFat = Mathf.Min(sdf.fatBlendMin + sdf.fatBlendPerMetre * smp.fat, sdf.fatBlendMax);
             Over("far from every shape", shapes - (smp.fat + kFat * 0.25f + 0.01f));

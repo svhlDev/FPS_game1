@@ -234,7 +234,7 @@ public class FaceDef
         // (press on a skin feature: a fold - the fat along it is thinned by up to that fraction, so the fat
         // either side bulges against it and the fold deepens with the fat.)
         P("MouthCorner", FaceLine.Mouth, FacePartShape.Sphere, new Vector3(0.37f, -0.004f, -0.0022f), Vector3.zero, new Vector3(0.045f, 0f, 0f), 0.002f,
-          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.7f),
+          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.4f),
         P("Nasolabial", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.345f, 0.04f, -0.0006f), new Vector3(0f, 0f, -153.3f), new Vector3(0.03f, 0.163f, 0f), 0.002f,
           mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.85f),
         // Face Polish Part 2: between the nose and the mouth. The crease where the nose's underside meets the

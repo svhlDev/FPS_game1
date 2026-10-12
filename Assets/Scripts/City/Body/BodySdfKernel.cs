@@ -266,33 +266,51 @@ public struct BodySdfKernel : IDisposable
 
     // Anatomy Rework Part 1: the egg (crown to chin; its lower half leaning forward), between its size
     // without INT's growth and with it (the brain layer).
-    public float HeadEgg(Vector3 p)
+    // (The egg with INT's growth: the base egg less the brain's offset.)
+    public float HeadEgg(Vector3 p) => EggOf(skullBase, p) - brainScale * BrainGrowth(p);
+
+    float EggOf(Ellipsoid e, Vector3 p)
     {
-        float s = brainScale;
-        Vector3 o = Vector3.Lerp(skullBase.o, skull.o, s), r = Vector3.Lerp(skullBase.r, skull.r, s);
-        Vector3 d = p - o;
+        Vector3 d = p - e.o;
         Vector3 l = new Vector3(Vector3.Dot(d, skull.x), Vector3.Dot(d, skull.y), Vector3.Dot(d, skull.z));
         if (l.y < 0f) l.z += eggShear * l.y;          // (the lower slices' centres move forward)
-        return EggDist(l, r, eggBottom, eggTop) / Mathf.Sqrt(1f + eggShear * eggShear);
+        return EggDist(l, e.r, eggBottom, eggTop) / Mathf.Sqrt(1f + eggShear * eggShear);
+    }
+
+    // Face Polish Part 3: INT's growth as one smooth outward offset of the cranium (m): how far the grown
+    // egg stands outside the base egg, faded in above the brow line (from the brow up at the front, lower
+    // round the back - the face below never moves). Applied after the planes, so the forehead plane moves
+    // out with the cranium: no step, no dent.
+    float BrainGrowth(Vector3 p)
+    {
+        float g = EggOf(skullBase, p) - EggOf(skull, p);
+        if (g <= 0f) return 0f;
+        Vector3 d = p - faceO;
+        float uy = Vector3.Dot(d, skull.y) / faceR.y, uz = Vector3.Dot(d, skull.z) / faceR.z;
+        float back = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.2f, -0.8f, uz));
+        float lo = Mathf.Lerp(0.12f, -0.5f, back);
+        return g * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(lo, lo + 0.45f, uy));
     }
 
     // The bone layer's base: the egg, flattened by its planes (forehead, face sides, under the jaw) where
     // their masks reach. (Presses and carves are placed on this.)
     public float HeadBase(Vector3 p)
     {
-        float A = HeadEgg(p);
+        float A = EggOf(skullBase, p);
         for (int j = 0; j < face.Length; j++)
         {
             var f = face[j];
             if (f.op != (int)FacePartOp.Plane) continue;
             Vector3 d = p - f.o;
             float pd = Vector3.Dot(d, f.y);
-            Vector3 l = new Vector3(Vector3.Dot(d, f.x) / f.r.x, Vector3.Dot(d, f.y) / f.r.y, Vector3.Dot(d, f.z) / f.r.z);
+            // (The mask spans the plane only - fading along its normal pulled a dent into the forehead where the
+            // smooth max's rounding faded out; Face Polish Part 3.)
+            Vector2 l = new Vector2(Vector3.Dot(d, f.x) / f.r.x, Vector3.Dot(d, f.z) / f.r.z);
             float w = Mathf.Clamp01(1f - l.sqrMagnitude);
             w = w * w * (3f - 2f * w);
             if (w > 0f) A = Mathf.Lerp(A, SMax(A, pd, f.blend), w);
         }
-        return A;
+        return A - brainScale * BrainGrowth(p);
     }
 
     // The face's muscle thickness (m): thin everywhere, a little more over the cheeks and the temples; none
