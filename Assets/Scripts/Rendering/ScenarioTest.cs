@@ -932,8 +932,35 @@ public partial class ScenarioTest : MonoBehaviour
         return rows.ToArray();
     }
 
+    // Clay (-clay): grey, no hair or brows, no skin detail - the shapes only.
+    static bool clay;
+    static Material clayMat;
+    static void Clay(CharacterFigure f)
+    {
+        if (clayMat == null)
+        {
+            var sh = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("FPS/BodySkin");
+            clayMat = new Material(sh);
+            if (clayMat.HasProperty("_PoreStrength")) clayMat.SetFloat("_PoreStrength", 0f);
+            if (clayMat.HasProperty("_Redness")) clayMat.SetFloat("_Redness", 0f);
+            clayMat.SetColor("_BaseColor", new Color(0.62f, 0.62f, 0.6f));
+            clayMat.SetFloat("_Smoothness", 0.25f);
+        }
+        if (f.Wig != null) f.Wig.gameObject.SetActive(false);
+        if (f.HairCards != null) f.HairCards.gameObject.SetActive(false);
+        foreach (var hl in f.GetComponentsInChildren<HairLOD>()) hl.enabled = false;
+        foreach (var r in f.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (r == f.HairCards || r == f.Wig) continue;
+            var m = r.sharedMaterials;
+            for (int i = 0; i < m.Length; i++) if (m[i] != null && m[i].shader != null && m[i].shader.name.Contains("BodySkin")) m[i] = clayMat;
+            r.sharedMaterials = m;
+        }
+    }
+
     IEnumerator HeadsTest(List<(string label, CharacterSheet sheet)>[] customRows = null, bool dressLast = true)
     {
+        foreach (var a0 in System.Environment.GetCommandLineArgs()) if (a0 == "-clay") clay = true;
         string dir = Path.GetDirectoryName(Application.dataPath);
         var origin = new Vector3(0f, 1500f, 0f);
         var cam = Camera.main;
@@ -986,6 +1013,8 @@ public partial class ScenarioTest : MonoBehaviour
                         Log($"  {lbl} parts (cm from the eye line's centre): {sbp}");
                     }
                 { int holes = FaceHoles(f, out string where); faceHoles += holes > 0 ? 1 : 0; if (holes > 0) Log($"  {lbl}: {holes} open edges in the face at {where}"); }
+                Log($"  {lbl}: {FaceMetrics.Profile(f.Plan)}");
+                if (clay) Clay(f);
                 Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; hair cards {(f.Asset.hairCards != null ? f.Asset.hairCards.triangles.Length / 3 : 0)} triangles; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);

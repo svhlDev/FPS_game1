@@ -45,7 +45,8 @@ public class BodySDF : IDisposable
     readonly List<BodySdfKernel.FacePrim> faceParts = new List<BodySdfKernel.FacePrim>();
     public readonly List<string> FacePartNames = new List<string>();
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
-    readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();   // snapped face parts: their offset from the skin (m)
+    readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();
+    readonly Dictionary<int, Vector3> pushDirs = new Dictionary<int, Vector3>();   // presses standing out in a set direction (root space)   // snapped face parts: their offset from the skin (m)
     // Anatomy Rework Part 1: parts placed on the base (index, target, axis or tip, size (m), press (m), offset, root offset).
     readonly List<(int i, Vector3 target, Vector3 axis, Vector3 size, float press, float offset, float rootOffset)> pressed = new List<(int, Vector3, Vector3, Vector3, float, float, float)>();
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
@@ -387,10 +388,30 @@ public class BodySDF : IDisposable
                                     k.HeadBase(p + Vector3.forward * h) - k.HeadBase(p - Vector3.forward * h));
             return (p, g.sqrMagnitude > 1e-12f ? g.normalized : dir);
         }
+        // The lips sit on the bone in front - the base plus the pressed bone placed so far (the teeth): snapped
+        // onto that, not the bare egg.
+        var placed = new List<int>();
+        float Bone(Vector3 p) { float d = k.HeadBase(p); foreach (int j in placed) d = Mathf.Min(d, BodySdfKernel.FaceDist(face[j], p)); return d; }
+        (Vector3 p, Vector3 n) SnapBone(Vector3 target)
+        {
+            Vector3 dir = (target - c0).normalized;
+            Vector3 p = c0 + dir * 0.3f;
+            for (int it = 0; it < 200; it++)
+            {
+                float d = Bone(p);
+                if (Mathf.Abs(d) < 1e-4f) break;
+                p -= dir * Mathf.Clamp(d * 0.9f, -0.02f, 0.02f);
+            }
+            const float h = 0.001f;
+            Vector3 g = new Vector3(Bone(p + Vector3.right * h) - Bone(p - Vector3.right * h), Bone(p + Vector3.up * h) - Bone(p - Vector3.up * h),
+                                    Bone(p + Vector3.forward * h) - Bone(p - Vector3.forward * h));
+            return (p, g.sqrMagnitude > 1e-12f ? g.normalized : dir);
+        }
         Vector3 noseTip = Vector3.zero, noseUp = Vector3.up, noseN = Vector3.forward; float noseR = 0f; bool nose = false;
         foreach (var e in pressed)
         {
             var fp = face[e.i];
+            bool lip = FacePartNames[e.i].StartsWith("Lip");
             if (fp.op == (int)FacePartOp.Piece)
             {
                 if (fp.shape == (int)FacePartShape.RoundCone)
@@ -404,13 +425,15 @@ public class BodySDF : IDisposable
                 }
                 else
                 {
-                    var (ps, ns) = Snap(e.target);
+                    var (ps, ns) = lip ? SnapBone(e.target) : Snap(e.target);
                     fp.o = ps + ns * e.offset;
                 }
             }
             else
             {
                 var (ps, ns) = Snap(e.target);
+                // (A set push direction: it stands out that way instead of along the base's normal.)
+                if (pushDirs.TryGetValue(e.i, out var pd)) ns = pd;
                 Vector3 x = Vector3.ProjectOnPlane(e.axis, ns);
                 if (x.sqrMagnitude < 1e-8f) x = Vector3.ProjectOnPlane(skull.f.x, ns);
                 x.Normalize();
@@ -421,6 +444,7 @@ public class BodySDF : IDisposable
                 fp.press = hgt;
             }
             face[e.i] = fp; faceParts[e.i] = fp;
+            if (fp.op == (int)FacePartOp.Press) placed.Add(e.i);
         }
         // The nostrils: under the tip, either side of the middle, sunk a little.
         if (nose)
@@ -776,7 +800,9 @@ public class BodySDF : IDisposable
                 Vector3 pos = part.position + dPos + V3(asym, part.positionVar) * faceDef.asymmetry + (female ? part.femaleOffset : Vector3.zero);
                 pos.y += Anchor(part.anchor);
                 Vector3 rot = part.rotationEuler + dRot + V3(asym, part.rotationVar) * faceDef.asymmetry;
-                Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy);
+                // (STR drives the lower face's volumes: size and press.)
+                float strK = part.strength ? 1f + faceDef.strFace * plan.sheet.S : 1f;
+                Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy) * strK;
                 if (female) size = Vector3.Scale(size, part.femaleSize);
                 if (overrides != null)
                     foreach (var ov in overrides)
@@ -797,15 +823,7 @@ public class BodySDF : IDisposable
                 };
                 // Anatomy Rework Part 1: pressed shapes, planes and pieces are placed on the base once it exists.
                 var op = part.op;
-                // Face Metrics rule: STR grows the lower face's volumes - the jaw bone (jaw angles, jaw body, chin
-                // bone), the masseter, the chin muscle (mentalis) and the lips; they ride on the bone. (Creases never
-                // scale with STR or fat.)
-                float S = plan.sheet.S;
-                float strF = part.name == "Masseter" ? 1f + 0.4f * S : part.name == "Mentalis" ? 1f + 0.5f * S
-                           : part.name == "JawAngle" || part.name == "JawBody" || part.name == "Chin" ? 1f + 0.3f * S : 1f;
-                float strSize = part.name == "JawAngle" || part.name == "JawBody" || part.name == "Chin" ? 1f + 0.12f * S
-                              : part.name == "Mentalis" ? 1f + 0.1f * S : part.name == "LipUpper" || part.name == "LipLower" ? 1f + 0.12f * S : 1f;
-                if (strSize != 1f) { size *= strSize; prim.r *= strSize; prim.halfLen *= strSize; }
+                float strF = strK;
                 if (op == FacePartOp.Plane)
                 {
                     Vector3 nrm = W(new Vector3(side < 0 ? -part.axis.x : part.axis.x, part.axis.y, part.axis.z)).normalized;
@@ -823,6 +841,9 @@ public class BodySDF : IDisposable
                     pressed.Add((faceParts.Count, FacePoint(new Vector3(pos.x, pos.y, aimZ)), op == FacePartOp.Piece && part.shape == FacePartShape.RoundCone ? FacePoint(new Vector3(ax.x, ax.y, 0.9f)) : W(ax),
                                  size * rx, part.press * (op == FacePartOp.Piece ? 1f : rx) * strF, pos.z, part.shape == FacePartShape.RoundCone ? size.z : 0f));
                 }
+                if (part.name == "Nose" || part.name == "Ala" || part.name == "NoseUnder") prim.noFat = 1;
+                if (part.snap) prim.snapped = 1;
+                if (part.pushDir != Vector3.zero) pushDirs[faceParts.Count] = W(part.pushDir).normalized;
                 faceParts.Add(prim);
                 FacePartNames.Add(inst);
             }

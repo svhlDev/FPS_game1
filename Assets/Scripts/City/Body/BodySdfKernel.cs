@@ -58,6 +58,8 @@ public struct BodySdfKernel : IDisposable
         public float halfLen, blend;
         public int shape, op;
         public float press;             // pressed shapes: how far they stand out of the layer below (m)
+        public int noFat;               // a piece the fat never covers (the nose)
+        public int snapped;             // a skin feature (snapped onto the finished skin): none at the bone / + muscle levels
     }
 
     // Face Fix Part 2: the lower jaw. Top view (x, z in the head frame): a trapezoid from the chin (front,
@@ -237,7 +239,8 @@ public struct BodySdfKernel : IDisposable
         m = Mathf.Lerp(m, 0.7f, mouthArea * (1f - thick));
         m = Mathf.Lerp(m, 0.15f, Mathf.Max(forehead, temples));
         m = Mathf.Lerp(m, 0.6f, lowerLid);
-        return Mathf.Lerp(m, 0.03f, structure);
+        m = Mathf.Lerp(m, 0.03f, structure);
+        return Mathf.Lerp(m, 0f, nose);   // (none on the nose)
     }
 
     // Signed distance to a polygon (Inigo Quilez's sdPolygon), 4 vertices.
@@ -336,13 +339,18 @@ public struct BodySdfKernel : IDisposable
     public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin)
     {
         float A = HeadBase(p);
-        float P = float.MaxValue, M = float.MaxValue;
+        float P = float.MaxValue, M = float.MaxValue, PN = float.MaxValue, PF = float.MaxValue;
         for (int j = 0; j < face.Length; j++)
         {
             var f = face[j];
             int op = f.op;
             if (op == (int)FacePartOp.Carve) A = SMax(A, -FaceDist(f, p), f.blend);
-            else if (op == (int)FacePartOp.Press || op == (int)FacePartOp.Piece) P = Mathf.Min(P, FaceDist(f, p));
+            else if (op == (int)FacePartOp.Press || op == (int)FacePartOp.Piece)
+            {
+                float dd = FaceDist(f, p);
+                P = Mathf.Min(P, dd);
+                if (f.noFat != 0) PN = Mathf.Min(PN, dd); else PF = Mathf.Min(PF, dd);
+            }
             else if (op == (int)FacePartOp.Muscle) M = Mathf.Min(M, FaceDist(f, p) + (1f - muscleScale) * f.press);
         }
         if (lidL.r > 0f) A = SMax(A, -Mathf.Min(Socket(lidL, p), Socket(lidR, p)), 0.004f);
@@ -352,7 +360,13 @@ public struct BodySdfKernel : IDisposable
         float on = Mathf.Min(P - m, M);
         muscle = SMin(A - m, on, headBlend);
         float f0 = fatThick * fatScale;
-        skin = SMin(A - m - f0, on - f0, headBlend + Mathf.Min(faceFatBlendMax, f0 * 1.2f));
+        // (The nose's pieces carry no fat: on a fat face the nose stands out of the fat, never sinks into it.)
+        // (Near the nose: no fat, and a tight fat blend - the wide one rounded the fat over the nose and filled the
+        // gap between wing and cheek.)
+        float nearNose = PN < float.MaxValue ? 1f - Mathf.SmoothStep(0f, 1f, (PN - 0.002f) / 0.008f) : 0f;
+        f0 *= 1f - nearNose;
+        skin = SMin(A - m - f0, Mathf.Min(PF - m, M) - f0, headBlend + Mathf.Min(Mathf.Lerp(faceFatBlendMax, 0.004f, nearNose), f0 * 1.2f));
+        if (PN < float.MaxValue) skin = SMin(skin, PN - m, headBlend);
         // Ears: cartilage under a trace of fat (they never swell with the face).
         if (ears < float.MaxValue)
         {
@@ -613,6 +627,7 @@ public struct BodySdfKernel : IDisposable
             {
                 // Skin features after the fat: grooves cut in, ridges (Union: the philtrum's ridges, the lip
                 // border) added on (Face Polish Part 2).
+                if (face[j].snapped != 0 && fatScale < 0.5f) continue;   // (skin features: the finished skin's only)
                 if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
                 else if (face[j].op == (int)FacePartOp.Union) skin = SMin(skin, FaceDist(face[j], p), face[j].blend);
             }
@@ -760,6 +775,7 @@ public struct BodySdfKernel : IDisposable
         HeadLayers(p, headFat, out _, out _, out float skin);
         for (int j = 0; j < face.Length; j++)
         {
+            if (face[j].snapped != 0 && fatScale < 0.5f) continue;
             if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
             else if (face[j].op == (int)FacePartOp.Union) skin = SMin(skin, FaceDist(face[j], p), face[j].blend);
         }

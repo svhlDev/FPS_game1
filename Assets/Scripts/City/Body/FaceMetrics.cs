@@ -463,6 +463,38 @@ public static class FaceMetrics
         return res;
     }
 
+    // Face Metrics lower face: the side profile's numbers on the finished head (mm, forward from the eye line's
+    // centre): upper lip, lower lip, the fold under it, the chin's front; the nose tip's projection in front of
+    // the cheek; the jaw's width at the jaw line (cm).
+    public static string Profile(BodyPlan plan)
+    {
+        using var sdf = new BodySDF(plan);
+        var c = sdf.Canon; var k = sdf.Kernel; k.cutMode = 0;
+        float Front(float x, float y)
+        {
+            Vector3 b = c.o + c.x * x + c.y * y;
+            float z = c.halfD * 2.2f;
+            for (int it = 0; it < 300; it++) { float d = k.Skin(b + c.z * z); if (d < 0.0001f) break; z -= Mathf.Clamp(d * 0.8f, 0.0001f, 0.01f); }
+            return z;
+        }
+        float MaxF(float y0, float y1) { float m = float.MinValue; for (float y = y0; y <= y1; y += 0.0005f) m = Mathf.Max(m, Front(0f, y)); return m; }
+        float upper = MaxF(c.mouth + 0.001f, c.mouth + 0.012f);
+        float lower = MaxF(c.mouth - 0.012f, c.mouth - 0.001f);
+        // The lower lip's front height, then the chin below it (to the chin line), and the deepest point between.
+        float yl = c.mouth - 0.006f, best = float.MinValue;
+        for (float y = c.mouth - 0.014f; y <= c.mouth; y += 0.0005f) { float f = Front(0f, y); if (f > best) { best = f; yl = y; } }
+        float chin = float.MinValue, yc = c.chin;
+        for (float y = c.chin; y <= yl - 0.006f; y += 0.0005f) { float f = Front(0f, y); if (f > chin) { chin = f; yc = y; } }
+        float fold = float.MaxValue; for (float y = yc; y <= yl; y += 0.0005f) fold = Mathf.Min(fold, Front(0f, y));
+        float foldDepth = Mathf.Min(lower, chin) - fold;
+        float noseTip = MaxF(c.noseBase - 0.002f, c.noseBase + 0.03f);
+        float cheek = Front(c.halfW * 0.45f, c.noseBase + 0.005f);
+        var ke = k; ke.earL.on = 0; ke.earR.on = 0;
+        float jaw = Silhouette(ke, c, -0.66f * c.halfH);
+        return $"profile mm: upper lip {F(upper * 1000f)}, lower lip {F(lower * 1000f)} ({F((lower - upper) * 1000f)} vs upper), fold {F(foldDepth * 1000f)} deep, chin {F(chin * 1000f)} ({F((chin - lower) * 1000f)} vs lower lip); " +
+               $"nose tip {F((noseTip - cheek) * 1000f)} mm in front of the cheek; jaw width {F(jaw * 100f, "0.00")} cm";
+    }
+
     // An ear's attachment: at each height down its top 80%, a walk from its front edge (inside the ear)
     // straight in toward the head until the head (the field without the ears) is reached; the most air
     // crossed on the way (the field with the ears above 0) is the gap there. Returns the largest.
