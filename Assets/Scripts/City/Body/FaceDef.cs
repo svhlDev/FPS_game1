@@ -206,7 +206,8 @@ public class FaceDef
         // Nose: one tapered piece from the nasal root to the tip (its length scales the whole piece).
         P("Nose", FaceLine.NoseBase, FacePartShape.RoundCone, new Vector3(0f, 0.42f, 0f), Vector3.zero, new Vector3(0.065f, 0.11f, -0.004f), 0.004f, FacePartScale.Nose,
           op: FacePartOp.Piece, axis: new Vector3(0f, 0.06f, 0f), press: 0.017f, femaleSize: new Vector3(0.85f, 0.85f, 0.85f)),
-        P("Ala", FaceLine.NoseBase, FacePartShape.Ellipsoid, new Vector3(0.15f, 0.05f, 0.005f), Vector3.zero, new Vector3(0.09f, 0.07f, 0.09f), 0.004f, FacePartScale.Nose,
+        // (The wings: small and flat, tucked against the tip's sides - big round ones read as a snout from the front.)
+        P("Ala", FaceLine.NoseBase, FacePartShape.Ellipsoid, new Vector3(0.12f, 0.045f, 0.001f), Vector3.zero, new Vector3(0.065f, 0.055f, 0.05f), 0.004f, FacePartScale.Nose,
           mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(0.85f, 0.9f, 0.9f), sizeVar: new Vector3(0.12f, 0.1f, 0.1f)),
         P("NoseUnder", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.01f, 0.008f), new Vector3(76f, 0f, 0f), new Vector3(0.05f, 0.062f, 0f), 0.004f, FacePartScale.Nose,
           op: FacePartOp.Piece, femaleSize: new Vector3(0.85f, 0.9f, 1f)),

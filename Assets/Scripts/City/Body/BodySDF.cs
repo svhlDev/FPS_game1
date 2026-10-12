@@ -455,8 +455,8 @@ public class BodySDF : IDisposable
                 var fp = face[j];
                 Vector3 side = Vector3.Cross(noseUp, noseN).normalized;
                 if (Vector3.Dot(side, skull.f.x) < 0f) side = -side;
-                fp.o = noseTip + noseUp * (noseR * 0.15f) - noseN * (noseR * 0.75f) + side * (s * noseR * 0.55f) - Vector3.Cross(side, noseUp).normalized * 0f;
-                fp.o -= noseUp * noseR * 0.9f;
+                // (Set back under the tip and close to the middle: open downward, seen mainly from below.)
+                fp.o = noseTip - noseN * (noseR * 0.95f) + side * (s * noseR * 0.42f) - noseUp * (noseR * 0.8f);
                 face[j] = fp; faceParts[j] = fp;
             }
     }
