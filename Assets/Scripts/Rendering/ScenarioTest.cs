@@ -78,12 +78,32 @@ public partial class ScenarioTest : MonoBehaviour
             case "lab": yield return LabTest(); break;
             case "heads": yield return HeadsTest(); break;
             case "headsfat": yield return HeadsTest(LowDexRows(), false); break;
+            case "facemetrics": yield return FaceMetricsRun(); break;
             case "facesanity": { bool ok = FaceSanity.Run(out string rep); foreach (var l in rep.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd()); yield return null; break; }
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
+    }
+
+    // Face Metrics Fix Step 0: the measurements (FaceMetrics) for every lineup head and fill level; the table
+    // goes to the log, the JSON next to it (face_metrics.json). -metricsonly <label part>, -metricseeds <n>.
+    IEnumerator FaceMetricsRun()
+    {
+        var args = System.Environment.GetCommandLineArgs();
+        string only = null; int seeds = 20;
+        for (int i = 0; i + 1 < args.Length; i++)
+        {
+            if (args[i] == "-metricsonly") only = args[i + 1].Replace('_', ' ');   // (underscores for spaces)
+            if (args[i] == "-metricseeds") int.TryParse(args[i + 1], out seeds);
+        }
+        yield return null;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        FaceMetrics.Run(out string table, out string json, seeds, only);
+        foreach (var l in table.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd());
+        Log($"face metrics took {sw.Elapsed.TotalSeconds:0} s");
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(Application.dataPath), "face_metrics.json"), json);
     }
 
     void Log(string line)

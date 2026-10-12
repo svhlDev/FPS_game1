@@ -91,6 +91,9 @@ public struct BodySdfKernel : IDisposable
         public float h, w, t, rimR, lobeR;
         public Vector3 lobe;                // lobe centre (root space)
         public Vector3 bowl, bowlR;         // bowl centre (root space), radii (v, u, n)
+        // Face Metrics Fix 2: the ear rides on the head's layers - drift: out from the head at its root; the
+        // muscle and fat under the root (m). At a fill level it sits that much less far out.
+        public Vector3 drift; public float driftM, driftF;
         public int on;
     }
 
@@ -365,7 +368,7 @@ public struct BodySdfKernel : IDisposable
             else if (op == (int)FacePartOp.Muscle) M = Mathf.Min(M, FaceDist(f, p) + (1f - muscleScale) * f.press);
         }
         if (lidL.r > 0f) A = SMax(A, -Mathf.Min(Socket(lidL, p), Socket(lidR, p)), 0.004f);
-        float ears = earL.on != 0 ? Mathf.Min(EarDist(earL, p), EarDist(earR, p)) : float.MaxValue;
+        float ears = earL.on != 0 ? Mathf.Min(EarDistAt(earL, p), EarDistAt(earR, p)) : float.MaxValue;
         bone = SMin(A, Mathf.Min(P, ears), headBlend);
         float m = HeadMuscleMap(p) * muscleScale;
         float on = Mathf.Min(P - m, M);
@@ -660,6 +663,15 @@ public struct BodySdfKernel : IDisposable
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
     }
 
+    // The ear at this kernel's fill level (it rides on the layers under its root).
+    public float EarDistAt(in Ear e, Vector3 p) => EarDist(e, p + e.drift * ((1f - muscleScale) * e.driftM + (1f - fatScale) * e.driftF));
+    public Ear EarAt(in Ear e)
+    {
+        var r = e; Vector3 off = -e.drift * ((1f - muscleScale) * e.driftM + (1f - fatScale) * e.driftF);
+        r.c += off; r.lobe += off; r.bowl += off;
+        return r;
+    }
+
     public static float EarDist(in Ear e, Vector3 p)
     {
         Vector3 d = p - e.c;
@@ -673,6 +685,15 @@ public struct BodySdfKernel : IDisposable
         float rim = new Vector2(edge + e.rimR * 0.7f, c - e.t * 0.9f).magnitude - e.rimR;
         rim += Mathf.Max(0f, -b / e.w - 0.25f) * 0.03f;
         float ear = SMin(Mathf.Min(disc, rim), (p - e.lobe).magnitude - e.lobeR, 0.003f);
+        // Face Metrics Fix 5: the attachment strip - along the front edge from the top to the lobe's start,
+        // reaching a few mm into the head, so the ear is joined all the way down (only the lobe hangs free).
+        if (e.drift.sqrMagnitude > 0.5f)
+        {
+            Vector3 inward = -e.drift * 0.004f;
+            Vector3 s0 = e.c + e.u * (e.h * 0.8f) - e.v * (e.w * 0.5f) + inward, s1 = e.c - e.v * (e.w * 0.9f) + inward, s2 = e.c - e.u * (e.h * 0.55f) - e.v * (e.w * 0.75f) + inward;
+            float strip = Mathf.Min(SegmentDist(p, s0, s1), SegmentDist(p, s1, s2)) - e.t * 0.9f;
+            ear = SMin(ear, strip, 0.002f);
+        }
         // The bowl, cut into the outer face.
         Vector3 q = p - e.bowl;
         float bowl = EllipsoidDist(new Vector3(Vector3.Dot(q, e.v), Vector3.Dot(q, e.u), Vector3.Dot(q, e.n)), e.bowlR);
@@ -752,6 +773,22 @@ public struct BodySdfKernel : IDisposable
     }
 
     public float Skin(Vector3 p) => Eval(p).skin;
+
+    // The head's own skin (its layers and skin features, no neck or body): measurements (FaceMetrics).
+    public float HeadSkin(Vector3 p)
+    {
+        if (headIndex < 0) return float.MaxValue;
+        float baseFat = FatAt(p, headIndex);
+        float headFat = baseFat * FaceFatMask(p, baseFat);
+        headFat *= 1f - FoldTether(p, headFat);
+        HeadLayers(p, headFat, out _, out _, out float skin);
+        for (int j = 0; j < face.Length; j++)
+        {
+            if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
+            else if (face[j].op == (int)FacePartOp.Union) skin = SMin(skin, FaceDist(face[j], p), face[j].blend);
+        }
+        return skin;
+    }
 
     // Unit gradient of the skin distance (central differences): the surface normal.
     public Vector3 Normal(Vector3 p, float h)

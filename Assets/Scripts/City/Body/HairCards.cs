@@ -52,6 +52,22 @@ public class HairStyle
 
 public static class HairCards
 {
+    // The masks (shared with FaceMetrics). Face units: x half widths, y half heights from the eye line, z half depths.
+    public static Vector3 FaceU(HeadCanon c, Vector3 p) { Vector3 d = p - c.o; return new Vector3(Vector3.Dot(d, c.x) / c.halfW, Vector3.Dot(d, c.y) / c.halfH, Vector3.Dot(d, c.z) / c.halfD); }
+    // The wigs' face window (> 0 inside).
+    public static float Window(Vector3 u) => Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y - 0.05f) / 0.72f).magnitude);
+    // The scalp inside the hairline (outside the face window, above the nape line, not round and below the ears).
+    public static bool ScalpU(Vector3 u, float nape, float margin = 0f)
+    {
+        float ax = Mathf.Abs(u.x);
+        if (Window(u) > -0.03f + margin) return false;                       // the face
+        if (u.y < nape - margin) return false;
+        if (ax > 0.7f + margin && u.y < 0.15f - margin && u.z > -0.6f - margin) return false;     // round and below the ears (no sideburns hanging down)
+        return true;
+    }
+    // On or in front of the face (the window below the forehead, or the front half down to the chin): no head hair there.
+    public static bool OnFaceU(Vector3 u) => (Window(u) > -0.02f && u.y < 0.35f) || (u.z > 0f && u.y < 0.1f && u.y > -1.15f && Mathf.Abs(u.x) < 0.95f);
+
     static float Hash01(int i) { uint h = (uint)i * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; return (h & 0xffffff) / 16777216f; }
 
     // The light spring preset for strand groups.
@@ -111,18 +127,9 @@ public static class HairCards
         k.cutMode = 0;
         var sk = k.skull;
         var rng = new PcgRandom(seed, "hairCards");
-        Vector3 U(Vector3 p) { Vector3 d = p - c.o; return new Vector3(Vector3.Dot(d, c.x) / c.halfW, Vector3.Dot(d, c.y) / c.halfH, Vector3.Dot(d, c.z) / c.halfD); }
-        // The scalp inside the hairline (the wigs' face window, the nape line, not the ears).
-        float Window(Vector3 u) => Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y - 0.05f) / 0.72f).magnitude);
-        bool Scalp(Vector3 u)
-        {
-            float ax = Mathf.Abs(u.x);
-            float window = Window(u);
-            if (window > -0.03f) return false;                       // the face
-            if (u.y < st.nape) return false;
-            if (ax > 0.7f && u.y < 0.15f && u.z > -0.6f) return false;     // round and below the ears (no sideburns hanging down)
-            return true;
-        }
+        Vector3 U(Vector3 p) => FaceU(c, p);
+        // (Roots well inside the mask: Face Metrics Fix 6 - a root stays in it measured back on the skin.)
+        bool Scalp(Vector3 u) => ScalpU(u, st.nape, -0.03f);
         // Roots: Fibonacci directions onto the skin, then dart throwing to the target count.
         var cand = new List<Vector3>();
         const int N = 1400;
@@ -209,7 +216,7 @@ public static class HairCards
             // window below the forehead, or anywhere in front of the face down to the chin - is a stray on the
             // cheek: dropped. Sideburns are the beard's.)
             bool onFace = false;
-            for (int s = 1; s <= S && !onFace; s++) { Vector3 us = U(pts[s]); onFace = (Window(us) > -0.02f && us.y < 0.35f) || (us.z > 0f && us.y < 0.1f && us.y > -1.15f && Mathf.Abs(us.x) < 0.95f); }
+            for (int s = 1; s <= S && !onFace; s++) onFace = OnFaceU(U(pts[s]));
             if (onFace) continue;
             strands.Add(pts); layer.Add(outer);
         }
@@ -247,7 +254,7 @@ public static class HairCards
             float w0 = (layer[i] ? st.outerWidth : st.innerWidth) * (1f + 0.25f * rng.Signed());
             // (Colour jitter: mostly the clump's, a little the card's.)
             float twist = 0.4f * rng.Signed(), rnd = Mathf.Lerp(Hash01(clumpOf[i]), rng.Value(), 0.35f);
-            int baseV = V.Count;
+            int baseV = V.Count, baseT = Tr.Count;
             for (int s = 0; s <= S; s++)
             {
                 float t = s / (float)S;
@@ -276,6 +283,16 @@ public static class HairCards
                     Tr.Add(a); Tr.Add(a + 2); Tr.Add(a + 1);
                     Tr.Add(a + 1); Tr.Add(a + 2); Tr.Add(a + 3);
                 }
+            }
+            // (Face Metrics Fix 6: clumping and curl move the strand after the face test - a finished card with
+            // any corner on or in front of the face is dropped.)
+            bool onFace = false;
+            for (int q = baseV; q < V.Count && !onFace; q++) onFace = OnFaceU(U(V[q]));
+            if (onFace)
+            {
+                int nvx = V.Count - baseV;
+                V.RemoveRange(baseV, nvx); Nn.RemoveRange(baseV, nvx); T4.RemoveRange(baseV, nvx); UV.RemoveRange(baseV, nvx); UV2.RemoveRange(baseV, nvx); W.RemoveRange(baseV, nvx);
+                Tr.RemoveRange(baseT, Tr.Count - baseT);
             }
         }
         verts = V.ToArray(); normals = Nn.ToArray(); tangents = T4.ToArray(); uv = UV.ToArray(); uv2 = UV2.ToArray(); weights = W.ToArray(); tris = Tr.ToArray();

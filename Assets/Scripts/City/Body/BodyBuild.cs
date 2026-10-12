@@ -64,43 +64,163 @@ public class BodyBuild
 
     // Anatomy Rework R8: fill levels. When set, each head vertex also gets its position at bone only, + muscle,
     // + fat (the finished head is + brain): the field evaluated with the later layers scaled to 0, the vertex
-    // projected along its normal onto that surface. Stored as blend shapes "fill.bone", "fill.muscle",
+    // projected onto that surface (FillLevelDeltas). Stored as blend shapes "fill.bone", "fill.muscle",
     // "fill.fat" (deltas from the finished head). Off for the crowd (it costs ~0.5 s a body); tests and the
     // player turn it on.
     public static bool FillLevels;
     public static readonly string[] FillShapes = { "fill.bone", "fill.muscle", "fill.fat" };
     Vector3[][] fillDeltas;
 
-    // (Face Polish Part 6: the deltas fade to nothing over the last 7 cm above the neck's cut, so the head's
-    // seam ring stays welded to the body - whose neck the levels don't change - at every level.)
-    static Vector3[][] FillLevelDeltas(BodySdfKernel k, Vector3[] v, Vector3[] n, Vector3 cutO, Vector3 cutAxis)
+    // Face Metrics Fix 3: fill positions by projection + constrained smoothing. Per level: every (welded)
+    // vertex projected onto the level's surface along that field's gradient; the deltas smoothed over the
+    // mesh and projected again, so where the thickness changes fast the vertices don't pile up; then any
+    // triangle turned over (against the
+    // finished head's, or against the field's gradient) gets its vertices' deltas from their neighbours,
+    // repeated until none flips. The seam ring (head vertices shared with the body, whose neck the levels
+    // don't change) stays put, with the deltas fading in over 1.5 cm from it.
+    static Vector3[][] FillLevelDeltas(BodySdfKernel k, Vector3[] v, Vector3[] n, List<int> tris, Vector3[] bodyV, out string report)
     {
+        int nv = v.Length;
+        // Welded vertices (twins at one place - the mouth's inside, split seams - move as one).
+        var ids = new Dictionary<Vector3Int, int>(); var map = new int[nv]; var pos = new List<Vector3>();
+        Vector3Int Key(Vector3 p) => new Vector3Int(Mathf.RoundToInt(p.x * 5000f), Mathf.RoundToInt(p.y * 5000f), Mathf.RoundToInt(p.z * 5000f));
+        for (int i = 0; i < nv; i++) { var key = Key(v[i]); if (!ids.TryGetValue(key, out int id)) { id = pos.Count; ids[key] = id; pos.Add(v[i]); } map[i] = id; }
+        int nu = pos.Count;
+        var nbr = new List<int>[nu]; for (int i = 0; i < nu; i++) nbr[i] = new List<int>(6);
+        var T = new int[tris.Count]; for (int i = 0; i < T.Length; i++) T[i] = map[tris[i]];
+        for (int t = 0; t + 2 < T.Length; t += 3)
+            for (int e = 0; e < 3; e++)
+            {
+                int a = T[t + e], b = T[t + (e + 1) % 3];
+                if (a == b) continue;
+                if (!nbr[a].Contains(b)) nbr[a].Add(b);
+                if (!nbr[b].Contains(a)) nbr[b].Add(a);
+            }
+        // The seam ring and each vertex's distance from it.
+        var bodyKeys = new HashSet<Vector3Int>(); foreach (var p in bodyV) bodyKeys.Add(Key(p));
+        var ring = new List<Vector3>(); var fixedV = new bool[nu];
+        for (int i = 0; i < nu; i++) if (bodyKeys.Contains(Key(pos[i]))) { ring.Add(pos[i]); fixedV[i] = true; }
+        var fade = new float[nu];
+        for (int i = 0; i < nu; i++)
+        {
+            float d = 1f;
+            foreach (var r in ring) d = Mathf.Min(d, (pos[i] - r).magnitude);
+            fade[i] = ring.Count == 0 ? 1f : Mathf.SmoothStep(0f, 1f, d / 0.015f);
+        }
+        var nrm0 = new Vector3[T.Length / 3];
+        for (int t = 0; t + 2 < T.Length; t += 3) nrm0[t / 3] = Vector3.Cross(pos[T[t + 1]] - pos[T[t]], pos[T[t + 2]] - pos[T[t]]);
+        // Smoothed vertex normals of the finished head (area-weighted, two rounds over the neighbours).
+        var sn = new Vector3[nu];
+        for (int t = 0; t + 2 < T.Length; t += 3) { var fnn = nrm0[t / 3]; sn[T[t]] += fnn; sn[T[t + 1]] += fnn; sn[T[t + 2]] += fnn; }
+        for (int round = 0; round < 2; round++)
+        {
+            var s2 = new Vector3[nu];
+            for (int i = 0; i < nu; i++) { s2[i] = sn[i]; foreach (int j in nbr[i]) s2[i] += sn[j] * 0.5f; }
+            sn = s2;
+        }
+        for (int i = 0; i < nu; i++) sn[i] = sn[i].sqrMagnitude > 1e-20f ? sn[i].normalized : Vector3.up;
+
         var res = new Vector3[3][];
-        var levels = new[] { (0f, 0f, 0f), (1f, 0f, 0f), (1f, 1f, 0f) };   // (muscle, fat, brain)
+        var levels = new[] { (0f, 0f, 0f), (1f, 0f, 0f), (1f, 1f, 0f), (1f, 1f, 1f) };   // (muscle, fat, brain); the last: finished
         k.cutMode = 0;
-        for (int l = 0; l < 3; l++)
+        int flippedLeft = 0, repaired = 0;
+        Vector3[] onFinal = null;
+        for (int l = 3; l >= 0; l--)
         {
             k.muscleScale = levels[l].Item1; k.fatScale = levels[l].Item2; k.brainScale = levels[l].Item3;
-            var d = new Vector3[v.Length];
-            for (int i = 0; i < v.Length; i++)
+            Vector3 Grad(Vector3 p, float s)
             {
-                // Along the target field's own gradient (forward differences): onto the nearest point of that
-                // surface (stepping along the vertex normal shoots through thin parts: the nose, the ears).
-                Vector3 p = v[i];
                 const float h = 0.0015f;
-                for (int it = 0; it < 12; it++)
+                return new Vector3(k.Skin(p + new Vector3(h, 0f, 0f)) - s, k.Skin(p + new Vector3(0f, h, 0f)) - s, k.Skin(p + new Vector3(0f, 0f, h)) - s);
+            }
+            Vector3 Project(Vector3 p, int iters)
+            {
+                for (int it = 0; it < iters; it++)
                 {
                     float s = k.Skin(p);
                     if (Mathf.Abs(s) < 1e-4f) break;
-                    Vector3 g = new Vector3(k.Skin(p + new Vector3(h, 0f, 0f)) - s, k.Skin(p + new Vector3(0f, h, 0f)) - s, k.Skin(p + new Vector3(0f, 0f, h)) - s);
+                    Vector3 g = Grad(p, s);
                     if (g.sqrMagnitude < 1e-14f) break;
                     p -= g.normalized * Mathf.Clamp(s, -0.008f, 0.008f);
                 }
-                d[i] = p - v[i];
-                if (cutAxis != Vector3.zero) d[i] *= Mathf.SmoothStep(0f, 1f, Vector3.Dot(v[i] - cutO, cutAxis) / 0.07f);
+                return p;
             }
-            res[l] = d;
+            var q = new Vector3[nu];
+            for (int i = 0; i < nu; i++) q[i] = Project(pos[i], 12);
+            // Where a thick layer goes (a vertex moves more than a few mm), vertices pile up on the thinner
+            // surface: there they slide toward their neighbours' average along the surface (the normal part
+            // dropped) and back onto it, a few rounds - in proportion to how far they moved, so a level that
+            // changes little stays put.
+            if (onFinal != null)
+            {
+                var wgt = new float[nu];
+                for (int i = 0; i < nu; i++) wgt[i] = fixedV[i] ? 0f : 0.5f * Mathf.Clamp01(((q[i] - onFinal[i]).magnitude - 0.002f) / 0.006f);
+                for (int round = 0; round < 12; round++)
+                {
+                    var q2 = (Vector3[])q.Clone();
+                    for (int i = 0; i < nu; i++)
+                    {
+                        if (wgt[i] <= 0f || nbr[i].Count == 0) continue;
+                        Vector3 avg = Vector3.zero; foreach (int j in nbr[i]) avg += q[j]; avg /= nbr[i].Count;
+                        float s0 = k.Skin(q[i]); Vector3 g = Grad(q[i], s0);
+                        Vector3 mv = avg - q[i];
+                        if (g.sqrMagnitude > 1e-14f) { g.Normalize(); mv -= g * Vector3.Dot(mv, g); }
+                        q2[i] = Project(q[i] + mv * wgt[i], 3);
+                    }
+                    q = q2;
+                }
+            }
+            // (The delta: this level's projection less the finished field's - the mesh's own small distance
+            // from the field cancels, so where a level changes nothing nothing moves.)
+            if (l == 3) { onFinal = q; continue; }
+            var dd = new Vector3[nu]; for (int i = 0; i < nu; i++) dd[i] = fixedV[i] ? Vector3.zero : (q[i] - onFinal[i]) * fade[i];
+            // Smoothed over the mesh (a few diffusion rounds: where the thickness changes fast, neighbouring
+            // vertices no longer land on top of each other).
+            for (int round = 0; round < 6; round++)
+            {
+                var d2 = (Vector3[])dd.Clone();
+                for (int i = 0; i < nu; i++)
+                {
+                    if (fixedV[i] || nbr[i].Count == 0) continue;
+                    Vector3 avg = Vector3.zero; foreach (int j in nbr[i]) avg += dd[j]; avg /= nbr[i].Count;
+                    d2[i] = Vector3.Lerp(dd[i], avg, 0.5f);
+                }
+                dd = d2;
+            }
+            // (Back onto the level's surface after the smoothing.)
+            var d = new Vector3[nu];
+            for (int i = 0; i < nu; i++) d[i] = fixedV[i] ? Vector3.zero : (Project(onFinal[i] + dd[i], 6) - onFinal[i]) * fade[i];
+            // Turned-over triangles (against the finished head's): their vertices take their neighbours'
+            // deltas, until none is left.
+            for (int pass = 0; pass < 16; pass++)
+            {
+                var bad = new HashSet<int>();
+                for (int t = 0; t + 2 < T.Length; t += 3)
+                {
+                    int a = T[t], b = T[t + 1], c = T[t + 2];
+                    if (a == b || b == c || a == c) continue;
+                    Vector3 fn = Vector3.Cross(pos[b] + d[b] - pos[a] - d[a], pos[c] + d[c] - pos[a] - d[a]);
+                    if (fn.sqrMagnitude < 1e-16f) continue;
+                    if (Vector3.Dot(fn, nrm0[t / 3]) < 0f) { bad.Add(a); bad.Add(b); bad.Add(c); }
+                }
+                if (bad.Count == 0) break;
+                if (pass == 15) { flippedLeft += bad.Count; break; }
+                var nd = (Vector3[])d.Clone();
+                foreach (int i in bad)
+                {
+                    if (fixedV[i] || nbr[i].Count == 0) continue;
+                    Vector3 avg = Vector3.zero; int cnt = 0;
+                    foreach (int j in nbr[i]) if (!bad.Contains(j)) { avg += d[j]; cnt++; }
+                    if (cnt == 0) foreach (int j in nbr[i]) { avg += d[j]; cnt++; }
+                    nd[i] = avg / cnt; repaired++;
+                }
+                d = nd;
+            }
+            var dv = new Vector3[nv];
+            for (int i = 0; i < nv; i++) dv[i] = d[map[i]];
+            res[l] = dv;
         }
+        report = $"fill levels: {ring.Count} seam vertices fixed, {repaired} vertex repairs, {flippedLeft} still on turned triangles";
         return res;
     }
     double stageStart;
@@ -558,8 +678,8 @@ public class BodyBuild
         task = Task.Run(() =>
         {
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
-            SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
-            if (FillLevels) fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n, weld ? cutO : Vector3.zero, weld ? cutAxis : Vector3.zero);
+            SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone, weld ? VP : null, headMode);
+            if (FillLevels) { fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n, headParts.subs[0], bodyParts.v, out string frep); NeckReport += "; " + frep; }
             // (Under long hair cards the shell is bob length: the cards hang beyond it.)
             var shellStyle = hs != null && wigStyle == WigStyle.Long ? WigStyle.Bob : wigStyle;
             hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, null, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);
@@ -584,7 +704,8 @@ public class BodyBuild
     // weights are smoothed over the garment surface first (cloth spanning a crotch or an armpit mustn't
     // snap to one bone).
     void SplitParts(Vector3[] V, Vector3[] N, Vector2[] R, Vector2[] L, BoneWeight[] W, byte[] Cov, int[] T,
-                    Vector3[] CV, Vector3[] CN, Vector2[] CR, Vector2[] CL, BoneWeight[] CW, byte[] CF, byte[] CG, int[] CT, int ng, int pelvisBone)
+                    Vector3[] CV, Vector3[] CN, Vector2[] CR, Vector2[] CL, BoneWeight[] CW, byte[] CF, byte[] CG, int[] CT, int ng, int pelvisBone,
+                    byte[] piece = null, int headMode = -1)
     {
         if (CV.Length > 0) CW = SmoothWeights(CW, CT, 3);
         // Skirts: their vertices below the ring go to the spring chains.
@@ -612,7 +733,11 @@ public class BodyBuild
         for (int t = 0; t < T.Length; t += 3)
         {
             int a = T[t], b = T[t + 1], c = T[t + 2];
-            int heads = (K(a) == BoneKind.Head ? 1 : 0) + (K(b) == BoneKind.Head ? 1 : 0) + (K(c) == BoneKind.Head ? 1 : 0);
+            // (Face Metrics Fix 4: a welded head goes by piece - the head piece's triangles, the seam's by
+            // majority - so the head / body border is the weld ring on the cut plane; else by bone.)
+            int heads = piece != null && a < piece.Length && b < piece.Length && c < piece.Length
+                ? (piece[a] == headMode ? 1 : 0) + (piece[b] == headMode ? 1 : 0) + (piece[c] == headMode ? 1 : 0)
+                : (K(a) == BoneKind.Head ? 1 : 0) + (K(b) == BoneKind.Head ? 1 : 0) + (K(c) == BoneKind.Head ? 1 : 0);
             if (heads >= 2) { Add(head, headMap, hv, head.subs[0], a, b, c); continue; }
             skinBefore++;
             if (Cov[a] != 0 && Cov[b] != 0 && Cov[c] != 0) continue;   // under the clothes

@@ -200,6 +200,14 @@ public class BodySDF : IDisposable
             var nb0 = plan.bones[plan.bones[headIndex].parent];
             float rN = Mathf.Max(nb0.Outer.x, Mathf.Max(nb0.Outer.y, nb0.Outer.z)) + Mathf.Max(nb0.fat.x, Mathf.Max(nb0.fat.y, nb0.fat.z)) + 0.025f;
             float dPlane = Vector3.Dot(headCutC - headCutO, headCutAxis);
+            // (Face Metrics Fix 4: the neck's axis lies behind the skull's centre - measured round the neck's
+            // own axis, the sphere clipped the nape above the plane and left a buried wall there.)
+            int nk = plan.bones[headIndex].parent;
+            Vector3 na = start[nk], nbv = start[headIndex];
+            float tn = Mathf.Clamp01(Vector3.Dot(headCutO - na, nbv - na) / Mathf.Max(1e-6f, (nbv - na).sqrMagnitude));
+            Vector3 neckAt = na + (nbv - na) * tn;
+            float offN = Vector3.ProjectOnPlane(headCutC - neckAt, headCutAxis).magnitude;
+            rN += offN;
             float big = (skull.f.o - headCutC).magnitude + Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.2f + 0.03f;   // the whole egg (with INT's growth)
             headCutR = Mathf.Max(Mathf.Sqrt(dPlane * dPlane + rN * rN), big);
             // The head's grid: just the head above the cut (cranium, face, ears, the neck down to the cut, fat),
@@ -220,6 +228,54 @@ public class BodySDF : IDisposable
         PressParts();
         SnapFaceParts();
         BuildEars();
+        FitHeadCut();
+    }
+
+    // Face Metrics Fix 4: the head's cut sphere must hold the whole neck above the plane (a heavy nape isn't
+    // round about the neck's bone): out from the neck's axis at a few heights above the plane, to the skin;
+    // the sphere (and the head's grid) grow to hold every crossing with a margin. Else the sphere clips the
+    // nape and leaves a buried wall in the head piece.
+    void FitHeadCut()
+    {
+        if (!HasHeadPiece || headIndex < 0) return;
+        int nk = plan.bones[headIndex].parent;
+        Vector3 na = start[nk], nb = start[headIndex];
+        var k = kernel; k.cutMode = 0;
+        Vector3 ax = headCutAxis, t1 = Vector3.Cross(ax, Vector3.forward).sqrMagnitude > 1e-6f ? Vector3.Cross(ax, Vector3.forward).normalized : Vector3.right, t2 = Vector3.Cross(t1, ax);
+        float need = headCutR; var lo = HeadBounds.min; var hi = HeadBounds.max;
+        float dPlane = Vector3.Dot(headCutC - headCutO, ax);
+        for (float h = 0f; h <= Mathf.Min(0.06f, dPlane); h += 0.015f)
+        {
+            Vector3 o = headCutO + ax * h;
+            float tn = Mathf.Clamp01(Vector3.Dot(o - na, nb - na) / Mathf.Max(1e-6f, (nb - na).sqrMagnitude));
+            Vector3 c0 = na + (nb - na) * tn; c0 += ax * Vector3.Dot(o - c0, ax);
+            for (int a = 0; a < 24; a++)
+            {
+                float ang = a * Mathf.PI * 2f / 24f;
+                Vector3 dir = t1 * Mathf.Cos(ang) + t2 * Mathf.Sin(ang);
+                float r = 0f;
+                for (int it = 0; it < 200 && r < 0.25f; it++)
+                {
+                    float sd = k.Eval(c0 + dir * r).skin;
+                    if (sd > 0f) break;
+                    r += Mathf.Clamp(-sd * 0.9f, 0.001f, 0.01f);
+                }
+                Vector3 p = c0 + dir * r;
+                need = Mathf.Max(need, (p - headCutC).magnitude + 0.015f);
+                lo = Vector3.Min(lo, p - Vector3.one * 0.015f); hi = Vector3.Max(hi, p + Vector3.one * 0.015f);
+            }
+        }
+        if (need > headCutR)
+        {
+            headCutR = need;
+            var cuts = kernel.cuts; var hc = cuts[cuts.Length - 1]; hc.radius = need; cuts[cuts.Length - 1] = hc;
+            // (The grid holds the sphere's width a little above the plane: whatever the body loses to it.)
+            float up = Mathf.Min(dPlane, 0.06f);
+            float capR = Mathf.Sqrt(Mathf.Max(0f, need * need - (dPlane - up) * (dPlane - up))) + 0.01f;
+            lo = Vector3.Min(lo, new Vector3(headCutO.x - capR, lo.y, headCutO.z - capR));
+            hi = Vector3.Max(hi, new Vector3(headCutO.x + capR, hi.y, headCutO.z + capR));
+        }
+        HeadBounds = new Bounds((lo + hi) * 0.5f, hi - lo);
     }
 
     // Face Fix Part 5: the ears, on the canon (from the brow line to the nose base, their centre at the
@@ -252,8 +308,25 @@ public class BodySDF : IDisposable
             Vector3 v = (back * Mathf.Cos(tilt) - f.y * Mathf.Sin(tilt)).normalized;
             float t = fd.earThickness;
             Vector3 c = p + v * w * 0.95f + n * (t * 0.5f);
+            // How much muscle and fat lie under the root (the ear rides on them at the fill levels): in from
+            // the skin to the muscle surface, then to the bone.
+            Vector3 drift = f.x * s;
+            float Depth(float ms, float fs)
+            {
+                var kk = kernel; kk.muscleScale = ms; kk.fatScale = fs; kk.earL.on = 0; kk.earR.on = 0;
+                float dd = 0f;
+                for (int it = 0; it < 200 && dd < 0.06f; it++)
+                {
+                    float sd = kk.Eval(p - drift * dd).skin;
+                    if (sd <= 0f) break;
+                    dd += Mathf.Clamp(sd * 0.9f, 0.0002f, 0.01f);
+                }
+                return dd;
+            }
+            float toMuscle = Depth(1f, 0f), toBone = Depth(0f, 0f);
             return new BodySdfKernel.Ear
             {
+                drift = drift, driftF = toMuscle, driftM = Mathf.Max(0f, toBone - toMuscle),
                 c = c, u = u, v = v, n = n, h = h, w = w, t = t, rimR = fd.earRim, lobeR = w * 0.34f,
                 lobe = c - u * h * 0.78f - v * w * 0.15f,
                 bowl = c + n * (t + 0.003f) - u * h * 0.1f - v * w * 0.1f,
