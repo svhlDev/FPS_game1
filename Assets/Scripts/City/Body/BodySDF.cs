@@ -391,7 +391,10 @@ public class BodySDF : IDisposable
         // The lips sit on the bone in front - the base plus the pressed bone placed so far (the teeth): snapped
         // onto that, not the bare egg.
         var placed = new List<int>();
-        float Bone(Vector3 p) { float d = k.HeadBase(p); foreach (int j in placed) d = Mathf.Min(d, BodySdfKernel.FaceDist(face[j], p)); return d; }
+        // (Each lip on its own arc: the upper lip on the upper jaw's, the lower on the lower's - the upper arc reaches
+        // down past the lower lip.)
+        string skipArc = null;
+        float Bone(Vector3 p) { float d = k.HeadBase(p); foreach (int j in placed) if (FacePartNames[j] != skipArc) d = Mathf.Min(d, BodySdfKernel.FaceDist(face[j], p)); return d; }
         (Vector3 p, Vector3 n) SnapBone(Vector3 target)
         {
             Vector3 dir = (target - c0).normalized;
@@ -412,6 +415,7 @@ public class BodySDF : IDisposable
         {
             var fp = face[e.i];
             bool lip = FacePartNames[e.i].StartsWith("Lip");
+            skipArc = FacePartNames[e.i].StartsWith("LipLower") ? "UpperJawArc" : FacePartNames[e.i].StartsWith("LipUpper") ? "LowerJawArc" : null;
             if (fp.op == (int)FacePartOp.Piece)
             {
                 if (fp.shape == (int)FacePartShape.RoundCone)
