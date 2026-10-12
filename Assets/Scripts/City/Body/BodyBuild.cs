@@ -700,6 +700,8 @@ public class BodyBuild
         }
         head.v = V2.ToArray(); head.n = N2.ToArray(); head.r = R2.ToArray(); head.l = L2.ToArray(); head.w = W2.ToArray();
         var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); hb.zones = Z.ToArray(); head.bake = hb;
+        // Folds (thin parts under the grid's spacing): inverted triangles are culled and read as holes - flip them.
+        FlipRepairs = RepairFolds(head.v, head.n, head.subs[0]) + RepairFolds(body.v, body.n, body.subs[0]);
         bodyParts = body; headParts = head;
     }
 
@@ -865,6 +867,26 @@ public class BodyBuild
         }
         report = $"neck welded: caps {capH} head / {capB} body triangles dropped, rings {nH} head / {nB} body vertices, {seam.Count / 3} seam triangles, loops {loopsH} / {loopsB}, {open} open / {over} non-manifold edges left near it";
         return keep.ToArray();
+    }
+
+    public int FlipRepairs { get; private set; }
+
+    static bool Inverted(Vector3[] V, Vector3[] N, int a, int b, int c)
+    {
+        Vector3 fn = Vector3.Cross(V[b] - V[a], V[c] - V[a]);
+        if (fn.sqrMagnitude < 1e-14f) return false;
+        return Vector3.Dot(fn.normalized, (N[a] + N[b] + N[c]).normalized) < -0.2f;
+    }
+
+    // Flips triangles facing against their vertices' normals (folds where thin parts - ears, lips, nostrils -
+    // fall under the grid's spacing: culled, they read as holes). Vertices stay put (some have twins at the
+    // same place - across the head / body split, the mouth's inside - that must not part). Returns the count.
+    static int RepairFolds(Vector3[] V, Vector3[] N, List<int> T)
+    {
+        int found = 0;
+        for (int t = 0; t + 2 < T.Count; t += 3)
+            if (Inverted(V, N, T[t], T[t + 1], T[t + 2])) { found++; int tmp = T[t + 1]; T[t + 1] = T[t + 2]; T[t + 2] = tmp; }
+        return found;
     }
 
     // How much a head vertex follows the jaw (0..1).

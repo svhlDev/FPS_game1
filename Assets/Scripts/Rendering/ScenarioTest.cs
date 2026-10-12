@@ -741,6 +741,66 @@ public partial class ScenarioTest : MonoBehaviour
     // softens the face), INT 1 / 20 (egg elongation), and (Part D) one part exaggerated per head through
     // the per-character face overrides. Neutral key + fill light, no outfit, so the face reads.
     // Edges used by one triangle only (holes; the wig's brow strips are closed too).
+    // Holes in the face and neck: the head and body meshes welded by position (they share the split's
+    // vertices), then edges used by one triangle above the shoulders.
+    static int FaceHoles(CharacterFigure f, out string where)
+    {
+        where = "";
+        if (f.Asset == null || f.Asset.head == null || f.Asset.body == null) return 0;
+        var plan = f.Plan; int hi = plan.Index("Head");
+        var c = HeadCanon.From(plan, hi, plan.JointPos(hi), Vector3.right, Vector3.up, Vector3.forward);
+        var ids = new Dictionary<Vector3Int, int>(); var pos = new List<Vector3>();
+        var use = new Dictionary<long, int>();
+        void Add(Mesh m, int sub)
+        {
+            var v = m.vertices; var t = m.GetTriangles(sub);
+            var map = new int[v.Length];
+            for (int i = 0; i < v.Length; i++)
+            {
+                var key = new Vector3Int(Mathf.RoundToInt(v[i].x * 5000f), Mathf.RoundToInt(v[i].y * 5000f), Mathf.RoundToInt(v[i].z * 5000f));
+                if (!ids.TryGetValue(key, out int id)) { id = pos.Count; ids[key] = id; pos.Add(v[i]); }
+                map[i] = id;
+            }
+            for (int i = 0; i < t.Length; i += 3)
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = map[t[i + e]], b = map[t[i + (e + 1) % 3]];
+                    if (a == b) continue;
+                    long key = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                    use.TryGetValue(key, out int n); use[key] = n + 1;
+                }
+        }
+        Add(f.Asset.head, 0); Add(f.Asset.body, 0);
+        bool dressed = f.Asset.outfit != null && f.Asset.outfit.Count > 0;   // (skin under a collar is dropped: open by design)
+        int holes = 0; var sb = new System.Text.StringBuilder();
+        foreach (var kv in use)
+        {
+            if (kv.Value != 1 || dressed) continue;
+            var p = pos[(int)(kv.Key >> 32)] - c.o;
+            if (p.y < c.chin - 0.05f) continue;    // (the shoulders and below: other checks)
+            if (holes < 6) sb.Append($"({p.x * 100f:0.0},{p.y * 100f:0.0},{p.z * 100f:0.0}) ");
+            holes++;
+        }
+        // Inverted triangles (facing against their vertices' normals): culled, they look like holes.
+        var hm = f.Asset.head; var hv = hm.vertices; var hn = hm.normals; var ht = hm.triangles;
+        int flipped = 0; var sf = new System.Text.StringBuilder();
+        for (int i = 0; i < ht.Length; i += 3)
+        {
+            Vector3 a0 = hv[ht[i]], b0 = hv[ht[i + 1]], c0 = hv[ht[i + 2]];
+            Vector3 fn = Vector3.Cross(b0 - a0, c0 - a0);
+            if (fn.sqrMagnitude < 1e-12f) continue;
+            if (Vector3.Dot(fn.normalized, (hn[ht[i]] + hn[ht[i + 1]] + hn[ht[i + 2]]).normalized) < -0.2f)
+            {
+                var q = (a0 + b0 + c0) / 3f - c.o;
+                if (flipped < 6) sf.Append($"({q.x * 100f:0.0},{q.y * 100f:0.0},{q.z * 100f:0.0}) ");
+                flipped++;
+            }
+        }
+        if (flipped > 0) { where += $"; {flipped} inverted triangles at {sf}"; holes += flipped; }
+        where = sb.ToString() + "cm from the eye line's centre" + where;
+        return holes;
+    }
+
     static string lastOpen = "";
     static int OpenEdges(Mesh m)
     {
@@ -848,7 +908,7 @@ public partial class ScenarioTest : MonoBehaviour
         var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(12f); }
         var rows = customRows ?? HeadRows();
         BodyBuild.FillLevels = true;   // (Anatomy Rework R8: the layer views below)
-        int wigsChecked = 0, wigsOpen = 0;
+        int wigsChecked = 0, wigsOpen = 0; int faceHoles = 0;
         float totalMs = 0f; int built = 0, headTris = 0;
         for (int r = 0; r < rows.Length; r++)
         {
@@ -886,6 +946,7 @@ public partial class ScenarioTest : MonoBehaviour
                         }
                         Log($"  {lbl} parts (cm from the eye line's centre): {sbp}");
                     }
+                { int holes = FaceHoles(f, out string where); faceHoles += holes > 0 ? 1 : 0; if (holes > 0) Log($"  {lbl}: {holes} open edges in the face at {where}"); }
                 Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; hair cards {(f.Asset.hairCards != null ? f.Asset.hairCards.triangles.Length / 3 : 0)} triangles; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);
@@ -1106,7 +1167,8 @@ public partial class ScenarioTest : MonoBehaviour
             }
         }
         Log(rigs == anims.Count && rigs > 0 ? "PASS every face has a jaw and eyelids" : "FAIL face rig");
-        Log(wigsOpen == 0 ? $"PASS every wig mesh is closed ({wigsChecked} wigs)" : $"FAIL {wigsOpen} of {wigsChecked} wig meshes have holes (open edges)");
+        Log(faceHoles == 0 ? "PASS no holes in the faces" : $"FAIL {faceHoles} heads have holes in the face");
+                Log(wigsOpen == 0 ? $"PASS every wig mesh is closed ({wigsChecked} wigs)" : $"FAIL {wigsOpen} of {wigsChecked} wig meshes have holes (open edges)");
         Log($"heads: {built} built, {totalMs / Mathf.Max(1, built):0} ms each (whole body, sync), head mesh {headTris / Mathf.Max(1, built)} triangles avg");
         Log(built > 0 ? "PASS heads built" : "FAIL no heads");
         if (fpc != null) fpc.enabled = true;
