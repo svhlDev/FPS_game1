@@ -75,6 +75,7 @@ Shader "FPS/BodySkin"
                 float3 restPos : TEXCOORD3;
                 half4 color : TEXCOORD4;
                 half3 marks : TEXCOORD5;
+                half2 zones : TEXCOORD6;    // redness (cheeks, nose, ears), darker eye surroundings
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -92,10 +93,12 @@ Shader "FPS/BodySkin"
                 o.color = v.color;
                 // Scalp stubble, lips, the mouth's inside (decoded per vertex, then interpolated).
                 float w = v.restPos.w;
-                float inside = floor(w / 65536.0);
-                float rest = w - inside * 65536.0;
-                float lip = floor(rest / 256.0);
-                o.marks = half3((rest - lip * 256.0) / 255.0, lip / 255.0, inside);
+                float dark = floor(w / 262144.0); w -= dark * 262144.0;
+                float red = floor(w / 8192.0); w -= red * 8192.0;
+                float inside = floor(w / 4096.0); w -= inside * 4096.0;
+                float lip = floor(w / 64.0);
+                o.marks = half3((w - lip * 64.0) / 63.0, lip / 63.0, inside);
+                o.zones = half2(red / 31.0, dark / 31.0);
                 return o;
             }
 
@@ -133,7 +136,10 @@ Shader "FPS/BodySkin"
                 // Baked per-vertex data (a mesh without colours reads white: ignore it).
                 half4 vc = dot(i.color, 1.0) > 3.99 ? half4(0, 0, 0, 0) : i.color;
                 albedo = lerp(albedo, albedo * half3(1.18, 0.78, 0.76), vc.a * _Redness);
-                albedo *= 1.0h - vc.g * 0.25h;
+                albedo *= 1.0h - vc.g * 0.4h;   // cavities: lid crease, nostrils, mouth corners, ear bowl, creases
+                // Colour zones (Face Fix Part 8): redder cheeks, nose and ears; a little darker round the eyes.
+                albedo = lerp(albedo, albedo * half3(1.12h, 0.8h, 0.78h), i.zones.x * 0.55h);
+                albedo *= 1.0h - i.zones.y * 0.22h;
                 // Scalp stubble (short hair in the hair colour, speckled), lips (rosier), the mouth's inside (dark red).
                 half3 mk = saturate(i.marks);
                 float stubbleFine = lerp(0.5, VNoise(i.restPos * 1100.0), DetailFade(i.restPos, 1100.0));
@@ -147,7 +153,7 @@ Shader "FPS/BodySkin"
                 half smoothVar = 1.0h;
                 if (fade > 0.01)
                 {
-                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade * (1.0 - _QualityDetailCut) * (1.0 - mk.y * 0.85);   // metres (lips: smooth)
+                    float h = SkinHeight(i.restPos) * 0.00025 * _PoreStrength * fade * (1.0 - _QualityDetailCut) * (1.0 - mk.y * 0.85);   // metres (lips: smooth)
                     float3 dpdx = ddx(i.positionWS), dpdy = ddy(i.positionWS);
                     float3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
                     float det = dot(dpdx, r1);

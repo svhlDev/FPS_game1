@@ -139,6 +139,21 @@ public static class BodyMaterials
         return m;
     }
 
+    // Eyebrow strands (Face Fix Part 8), per hair colour.
+    static readonly Dictionary<Color, Material> browMats = new Dictionary<Color, Material>();
+    static Shader browShader;
+    public static Material Brow(Color hair)
+    {
+        if (browMats.TryGetValue(hair, out var m) && m != null) return m;
+        if (browShader == null) browShader = Shader.Find("FPS/Brow");
+        if (browShader == null) return MaterialLibrary.Get(SurfaceType.Hair, hair, MaterialLibrary.Variant.Object);
+        // Brows read darker than most hair (grey and blond brows stay a little darker than the hair).
+        m = new Material(browShader) { name = $"Brow {ColorUtility.ToHtmlStringRGB(hair)}", enableInstancing = true };
+        m.SetColor("_HairColor", Color.Lerp(hair, hair * 0.55f, 0.5f));
+        browMats[hair] = m;
+        return m;
+    }
+
     public static Material Sclera()
     {
         if (sclera != null) return sclera;

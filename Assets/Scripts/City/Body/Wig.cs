@@ -32,16 +32,19 @@ public static class WigBuilder
 
     // The wig's mesh in the head joint's space (its rest frame is unrotated: subtract the joint's rest
     // position). k: the body's kernel (the egg: skull frame, radii, egg scales). Safe on a worker thread.
+    // uvs: the brows' strand coordinates (along, across; Face Fix Part 8), zero on the wig. The brows' triangles
+    // come last (browTris of them: their own submesh, FPS/Brow).
     public static bool Build(BodySdfKernel k, WigStyle style, int seed, Vector3 headJoint, IList<BodySdfKernel.FacePrim> brows,
-                             out Vector3[] verts, out Vector3[] normals, out int[] tris)
+                             out Vector3[] verts, out Vector3[] normals, out int[] tris, out Vector2[] uvs, out int browTris)
     {
-        verts = null; normals = null; tris = null;
-        var bv = new List<Vector3>(); var bn = new List<Vector3>(); var bt = new List<int>();
-        if (brows != null && brows.Count > 0) BuildBrows(k, brows, seed, bv, bn, bt);
+        verts = null; normals = null; tris = null; uvs = null;
+        var bv = new List<Vector3>(); var bn = new List<Vector3>(); var bt = new List<int>(); var bu = new List<Vector2>();
+        if (brows != null && brows.Count > 0) BuildBrows(k, brows, seed, bv, bn, bt, bu);
+        browTris = bt.Count / 3;
         if (style == WigStyle.None)
         {
             if (bt.Count == 0) return false;
-            verts = new Vector3[bv.Count]; normals = bn.ToArray(); tris = bt.ToArray();
+            verts = new Vector3[bv.Count]; normals = bn.ToArray(); tris = bt.ToArray(); uvs = bu.ToArray();
             for (int i = 0; i < bv.Count; i++) verts[i] = bv[i] - headJoint;
             return true;
         }
@@ -170,17 +173,18 @@ public static class WigBuilder
         }
         // Append the brows (root space -> head joint space).
         var allV = new List<Vector3>(verts); var allN = new List<Vector3>(normals); var allT = new List<int>(t);
+        var allU = new List<Vector2>(new Vector2[verts.Length]);
         int o0 = allV.Count;
-        for (int i = 0; i < bv.Count; i++) { allV.Add(bv[i] - headJoint); allN.Add(bn[i]); }
+        for (int i = 0; i < bv.Count; i++) { allV.Add(bv[i] - headJoint); allN.Add(bn[i]); allU.Add(bu[i]); }
         foreach (int i in bt) allT.Add(o0 + i);
-        verts = allV.ToArray(); normals = allN.ToArray(); tris = allT.ToArray();
+        verts = allV.ToArray(); normals = allN.ToArray(); tris = allT.ToArray(); uvs = allU.ToArray();
         return true;
     }
 
     // Brows as hair: along each brow part, a flattened tapering ridge just on the skin (thicker at the
     // inner end), its surface broken into fine strands by noise; meshed on a 1.5 mm grid. Root space.
     public const float BrowCell = 0.0015f;
-    static void BuildBrows(BodySdfKernel k, IList<BodySdfKernel.FacePrim> brows, int seed, List<Vector3> outV, List<Vector3> outN, List<int> outT)
+    static void BuildBrows(BodySdfKernel k, IList<BodySdfKernel.FacePrim> brows, int seed, List<Vector3> outV, List<Vector3> outN, List<int> outT, List<Vector2> outU)
     {
         var segs = new List<(Vector3 a, Vector3 b, Vector3 n, float rIn, float rOut)>();
         var bounds = new Bounds();
@@ -237,6 +241,19 @@ public static class WigBuilder
             Vector3 g = new Vector3(Sdf(p + new Vector3(h, 0, 0)) - Sdf(p - new Vector3(h, 0, 0)), Sdf(p + new Vector3(0, h, 0)) - Sdf(p - new Vector3(0, h, 0)),
                                     Sdf(p + new Vector3(0, 0, h)) - Sdf(p - new Vector3(0, 0, h)));
             outV.Add(p); outN.Add(g.sqrMagnitude > 1e-14f ? g.normalized : Vector3.up);
+            // Strand coordinates: along the nearest brow from its inner end, across it (+ up).
+            float best = float.MaxValue; Vector2 uv = Vector2.zero;
+            foreach (var s in segs)
+            {
+                Vector3 ab = s.b - s.a; float len = ab.magnitude, hh = Mathf.Clamp01(Vector3.Dot(p - s.a, ab) / ab.sqrMagnitude);
+                Vector3 q = p - (s.a + ab * hh);
+                float d = q.sqrMagnitude;
+                if (d >= best) continue;
+                best = d;
+                Vector3 up = Vector3.Cross(ab / Mathf.Max(len, 1e-6f), s.n); if (Vector3.Dot(up, k.skull.y) < 0f) up = -up;
+                uv = new Vector2(hh * len, Vector3.Dot(q, up.normalized));
+            }
+            outU.Add(uv);
         }
         outT.AddRange(t);
     }

@@ -19,7 +19,8 @@ public static class BodySurfaceBake
 {
     const float HemReach = 0.06f;   // hem queries look this far (one grid cell: 27 cells per query)
 
-    public struct Result { public Color[] colors; public Vector2[] uv0; public Vector3[] uv3, uv4; public List<Vector3> hems; }
+    // zones (head skin, Face Fix Part 8): x redness (cheeks, nose tip and wings, ears), y darker eye surroundings.
+    public struct Result { public Color[] colors; public Vector2[] uv0; public Vector3[] uv3, uv4; public Vector2[] zones; public List<Vector3> hems; }
 
     // The face parts that mark the skin: kind 1 brow, 2 lip, 3 mouth line.
     public class FaceMarks
@@ -29,9 +30,24 @@ public static class BodySurfaceBake
         public BodySdfKernel.Ellipsoid skull;
         public bool stubble;            // the scalp gets short hair (not on bald heads)
         public BodySdfKernel.Ear earL, earR;   // no stubble on the ears (Face Fix Part 5)
+        // Face Fix Part 8: colour zones and the beard shadow.
+        public readonly List<BodySdfKernel.FacePrim> cheeks = new List<BodySdfKernel.FacePrim>(), nose = new List<BodySdfKernel.FacePrim>();
+        public Vector3 eyeL, eyeR; public float eyeRadius;
+        public float beard;             // beard shadow strength (0: none)
         public static FaceMarks From(BodySDF sdf, WigStyle wig)
         {
-            var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None, earL = sdf.Kernel.earL, earR = sdf.Kernel.earR };
+            var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None, earL = sdf.Kernel.earL, earR = sdf.Kernel.earR,
+                                    eyeL = sdf.EyeL, eyeR = sdf.EyeR, eyeRadius = sdf.EyeRadius };
+            // Most men show a beard shadow (darker with darker hair: the stubble's colour).
+            var sheet = sdf.Plan.sheet;
+            var br = new PcgRandom(sheet.seed, "beard");
+            if (sheet.sex == Sex.Male && br.Value() < 0.65f) m.beard = br.Range(0.25f, 0.45f);
+            for (int i = 0; i < sdf.FacePrims.Count; i++)
+            {
+                string n = sdf.FacePartNames[i];
+                if (n.StartsWith("Cheek.")) m.cheeks.Add(sdf.FacePrims[i]);
+                else if (n == "NoseTip" || n.StartsWith("Ala.")) m.nose.Add(sdf.FacePrims[i]);
+            }
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {
                 string n = sdf.FacePartNames[i];
@@ -128,6 +144,7 @@ public static class BodySurfaceBake
         if (face != null && face.prims.Count > 0)
         {
             res.uv4 = new Vector3[nv];
+            res.zones = new Vector2[nv];
             for (int i = 0; i < nv; i++)
             {
                 if (sub[i] != 0) continue;
@@ -153,7 +170,26 @@ public static class BodySurfaceBake
                     }
                 }
                 // The lips lie under a little fat: the skin over them is a few mm out.
-                res.uv4[i] = new Vector3(stub, 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f), 0f);
+                float lipM = 1f - Mathf.SmoothStep(0f, 1f, (lip - 0.003f) / 0.006f);
+                // Colour zones: redder cheeks, nose tip and wings, ears; darker round the eyes.
+                float red = 0f;
+                foreach (var c in face.cheeks) red = Mathf.Max(red, 0.6f * Mathf.Clamp01(1f - Mathf.Max(0f, BodySdfKernel.FaceDist(c, v[i])) / 0.012f));
+                foreach (var c in face.nose) red = Mathf.Max(red, 0.8f * Mathf.Clamp01(1f - Mathf.Max(0f, BodySdfKernel.FaceDist(c, v[i])) / 0.006f));
+                if (face.earL.on != 0) red = Mathf.Max(red, 0.8f * Mathf.Clamp01(1f - Mathf.Max(0f, Mathf.Min(BodySdfKernel.EarDist(face.earL, v[i]), BodySdfKernel.EarDist(face.earR, v[i]))) / 0.004f));
+                float eyeD = Mathf.Min((v[i] - face.eyeL).magnitude, (v[i] - face.eyeR).magnitude) - face.eyeRadius;
+                float dark = 0.7f * Mathf.Clamp01(1f - Mathf.Max(0f, eyeD) / 0.012f);
+                res.zones[i] = new Vector2(red, dark);
+                // The beard shadow: the lower face and under the jaw (not the lips), in the stubble channel.
+                if (face.beard > 0f)
+                {
+                    var sk = face.skull;
+                    Vector3 l = sk.ToLocal(v[i]);
+                    Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
+                    float S(float a, float b, float x) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, x));
+                    float beard = S(-0.36f, -0.46f, u.y) * S(-0.15f, 0.1f, u.z) * S(-1.45f, -1.25f, u.y) * (1f - lipM) * face.beard;
+                    stub = Mathf.Max(stub, beard);
+                }
+                res.uv4[i] = new Vector3(stub, lipM, 0f);
             }
         }
         return res;
@@ -176,8 +212,11 @@ public static class BodySurfaceBake
     // The face marks also ride in uv3.w, packed (stubble and lip 8 bits each, the mouth's inside 1 bit):
     // skinned meshes don't reliably hand UV channel 4 to the shader (Face Fix Part 4: the face read lip
     // everywhere, bodies without the channel read garbage); channel 3 works. FPS/BodySkin decodes it per vertex.
-    public static float PackMarks(Vector3 m) =>
-        Mathf.Round(Mathf.Clamp01(m.x) * 255f) + Mathf.Round(Mathf.Clamp01(m.y) * 255f) * 256f + (m.z > 0.5f ? 65536f : 0f);
+    // (Stubble and lip 6 bits each, the mouth's inside 1 bit, redness and the eyes' darkening 5 bits each:
+    // under 2^23, exact in a float.)
+    public static float PackMarks(Vector3 m, Vector2 z) =>
+        Mathf.Round(Mathf.Clamp01(m.x) * 63f) + Mathf.Round(Mathf.Clamp01(m.y) * 63f) * 64f + (m.z > 0.5f ? 4096f : 0f)
+        + Mathf.Round(Mathf.Clamp01(z.x) * 31f) * 8192f + Mathf.Round(Mathf.Clamp01(z.y) * 31f) * 262144f;
 
     public static void Apply(Mesh m, Result r)
     {
@@ -185,7 +224,13 @@ public static class BodySurfaceBake
         m.colors = r.colors;
         m.SetUVs(0, r.uv0);
         var u3 = new Vector4[r.uv3.Length];
-        for (int i = 0; i < u3.Length; i++) { var p = r.uv3[i]; u3[i] = new Vector4(p.x, p.y, p.z, r.uv4 != null && i < r.uv4.Length ? PackMarks(r.uv4[i]) : 0f); }
+        for (int i = 0; i < u3.Length; i++)
+        {
+            var p = r.uv3[i];
+            var mk = r.uv4 != null && i < r.uv4.Length ? r.uv4[i] : Vector3.zero;
+            var z = r.zones != null && i < r.zones.Length ? r.zones[i] : Vector2.zero;
+            u3[i] = new Vector4(p.x, p.y, p.z, PackMarks(mk, z));
+        }
         m.SetUVs(3, u3);
         if (r.uv4 != null) m.SetUVs(4, r.uv4);
     }

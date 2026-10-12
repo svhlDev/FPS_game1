@@ -110,7 +110,7 @@ public class BodyBuild
     float mouthHalf = 0.025f;
     int jawBone = -1;
     WigStyle wigStyle;
-    bool hasWig; Vector3[] wigV, wigN; int[] wigT;
+    bool hasWig; Vector3[] wigV, wigN; int[] wigT; Vector2[] wigUV; int wigBrowTris;
     readonly List<ClothChainSet> chainSets = new List<ClothChainSet>();
     Matrix4x4[] bindposes;
     int skinBefore;
@@ -390,6 +390,9 @@ public class BodyBuild
                 float dm = (verts[i] - sdf.MouthCentre).magnitude, de = Mathf.Min((verts[i] - sdf.EyeL).magnitude, (verts[i] - sdf.EyeR).magnitude);
                 float da = Mathf.Min((verts[i] - sdf.EarL).magnitude, (verts[i] - sdf.EarR).magnitude);
                 importance[i] = 1f + 10f * Mathf.Exp(-dm * dm / (0.025f * 0.025f)) + 4f * Mathf.Exp(-de * de / (0.02f * 0.02f)) + 4f * Mathf.Exp(-da * da / (0.03f * 0.03f));
+                // (Face Fix Part 8: the back of the head - mostly under hair - is decimated harder than the face.)
+                float front = Vector3.Dot(verts[i] - sdf.Canon.o, sdf.Canon.z) / sdf.Canon.halfD;
+                importance[i] *= Mathf.Lerp(0.35f, 1f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.6f, 0.1f, front)));
             }
             if (covered[i] != 0) importance[i] *= CoveredImportance;   // hidden under clothes: dropped later, spend little on it
         }
@@ -493,7 +496,7 @@ public class BodyBuild
         {
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
-            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT);
+            hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris);
         });
         CurrentStage = Stage.Split;
     }
@@ -596,6 +599,7 @@ public class BodyBuild
         var V2 = new List<Vector3>(head.v); var N2 = new List<Vector3>(head.n); var R2 = new List<Vector2>(head.r); var L2 = new List<Vector2>(head.l);
         var W2 = new List<BoneWeight>(head.w); var C2 = new List<Color>(head.bake.colors); var U0 = new List<Vector2>(head.bake.uv0);
         var U3 = new List<Vector3>(head.bake.uv3); var U4 = new List<Vector3>(head.bake.uv4);
+        var Z = new List<Vector2>(head.bake.zones ?? new Vector2[head.v.Length]);
         var bridge = new HashSet<int>();
         var backs = new List<int>();
         for (int k2 = 0; k2 + 2 < ht.Count; k2 += 3)
@@ -612,7 +616,7 @@ public class BodyBuild
                 {
                     nvx = V2.Count; dup[v] = nvx;
                     V2.Add(V2[v]); N2.Add(N2[v]); R2.Add(R2[v]); L2.Add(L2[v]); W2.Add(W2[v]); C2.Add(C2[v]); U0.Add(U0[v]); U3.Add(U3[v]);
-                    U4.Add(new Vector3(U4[v].x, 0f, 1f));
+                    U4.Add(new Vector3(U4[v].x, 0f, 1f)); Z.Add(Vector2.zero);
                 }
                 ht[k2 + q] = nvx;
             }
@@ -631,7 +635,7 @@ public class BodyBuild
             U3[i] = V2[i];
         }
         head.v = V2.ToArray(); head.n = N2.ToArray(); head.r = R2.ToArray(); head.l = L2.ToArray(); head.w = W2.ToArray();
-        var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); head.bake = hb;
+        var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); hb.zones = Z.ToArray(); head.bake = hb;
         bodyParts = body; headParts = head;
     }
 
@@ -906,9 +910,7 @@ public class BodyBuild
         Asset.jawBone = jawBone; Asset.jawPivot = jawPivot; Asset.mouthCentre = mouthCentre; Asset.wigStyle = wigStyle;
         if (hasWig)
         {
-            var wm = new Mesh { name = "Wig " + sheet, indexFormat = wigV.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
-            wm.vertices = wigV; wm.normals = wigN; wm.triangles = wigT; wm.RecalculateBounds();
-            Asset.wig = wm;
+            Asset.wig = WigMesh("Wig " + sheet, wigV, wigN, wigT, wigUV, wigBrowTris);
         }
         DisposeFields();
         sdf.Dispose(); sdf = null;
@@ -916,6 +918,21 @@ public class BodyBuild
         Asset.wallMs = (float)wall.Elapsed.TotalMilliseconds;
         Asset.mainThreadMs = (float)mainMs;
         CurrentStage = Stage.Done;
+    }
+
+    // The wig's mesh: submesh 0 the hair, submesh 1 the brows (its last browTris triangles, FPS/Brow).
+    public static Mesh WigMesh(string name, Vector3[] v, Vector3[] n, int[] t, Vector2[] uv, int browTris)
+    {
+        var wm = new Mesh { name = name, indexFormat = v.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
+        wm.vertices = v; wm.normals = n;
+        if (uv != null && uv.Length == v.Length) wm.uv = uv;
+        int split = Mathf.Clamp(t.Length - browTris * 3, 0, t.Length);
+        wm.subMeshCount = 2;
+        var hair = new int[split]; System.Array.Copy(t, hair, split);
+        var brows = new int[t.Length - split]; System.Array.Copy(t, split, brows, 0, brows.Length);
+        wm.SetTriangles(hair, 0); wm.SetTriangles(brows, 1);
+        wm.RecalculateBounds();
+        return wm;
     }
 
     void DisposeFields()

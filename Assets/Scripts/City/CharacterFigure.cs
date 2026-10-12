@@ -341,7 +341,10 @@ public class CharacterFigure : MonoBehaviour
             go.layer = layer;
             go.transform.SetParent(sk.Head, false);
             go.AddComponent<MeshFilter>().sharedMesh = a.wig;
-            var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = BodyMaterials.Wig(a.sheet.seed);
+            var r = go.AddComponent<MeshRenderer>();
+            // The hair, and the brows drawn as strands (FPS/Brow).
+            r.sharedMaterials = a.wig.subMeshCount > 1 ? new[] { BodyMaterials.Wig(a.sheet.seed), BodyMaterials.Brow(BodyMaterials.HairColour(a.sheet.seed)) }
+                                                       : new[] { BodyMaterials.Wig(a.sheet.seed) };
             r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
             f.FaceRenderers.Add(r);
             f.Wig = r;
