@@ -37,11 +37,12 @@ public class HairStyle
     [Tooltip("Spring chains for the hair below the nape (long hair).")]
     public bool chains;
 
-    public static HairStyle Short() => new HairStyle { name = "Short" };
+    // (Face Polish Part 6: more, narrower outer cards - wide outer cards showed as flat shards.)
+    public static HairStyle Short() => new HairStyle { name = "Short", roots = 420, outerWidth = 0.009f, outerShare = 0.65f };
     public static HairStyle Long() => new HairStyle
     {
         name = "Long", parting = 0.2f, fringe = 0.1f, top = 0.3f, sides = 0.3f, back = 0.34f, gravity = 0.85f, liftTop = 0.006f, liftSides = 0.006f,
-        forward = -0.6f, nape = -0.55f, roots = 320, segments = 9, innerWidth = 0.026f, outerWidth = 0.016f, outerShare = 0.5f, clump = 0.6f, curl = 0.006f,
+        forward = -0.6f, nape = -0.55f, roots = 420, segments = 9, innerWidth = 0.026f, outerWidth = 0.011f, outerShare = 0.6f, clump = 0.6f, curl = 0.006f,
         chains = true,
     };
 
@@ -51,6 +52,8 @@ public class HairStyle
 
 public static class HairCards
 {
+    static float Hash01(int i) { uint h = (uint)i * 2654435761u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; return (h & 0xffffff) / 16777216f; }
+
     // The light spring preset for strand groups.
     static SkirtDef ChainDef() => new SkirtDef
     {
@@ -110,10 +113,11 @@ public static class HairCards
         var rng = new PcgRandom(seed, "hairCards");
         Vector3 U(Vector3 p) { Vector3 d = p - c.o; return new Vector3(Vector3.Dot(d, c.x) / c.halfW, Vector3.Dot(d, c.y) / c.halfH, Vector3.Dot(d, c.z) / c.halfD); }
         // The scalp inside the hairline (the wigs' face window, the nape line, not the ears).
+        float Window(Vector3 u) => Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y - 0.05f) / 0.72f).magnitude);
         bool Scalp(Vector3 u)
         {
             float ax = Mathf.Abs(u.x);
-            float window = Mathf.Min(u.z - 0.05f, 1f - new Vector2(ax / 0.86f, (u.y - 0.05f) / 0.72f).magnitude);
+            float window = Window(u);
             if (window > -0.03f) return false;                       // the face
             if (u.y < st.nape) return false;
             if (ax > 0.7f && u.y < 0.15f && u.z > -0.6f) return false;     // round and below the ears (no sideburns hanging down)
@@ -201,15 +205,21 @@ public static class HairCards
                 }
                 pts[s] = p;
             }
+            // (Face Polish Part 6: a strand lying on or hanging in front of the face - any point in the face
+            // window below the forehead, or anywhere in front of the face down to the chin - is a stray on the
+            // cheek: dropped. Sideburns are the beard's.)
+            bool onFace = false;
+            for (int s = 1; s <= S && !onFace; s++) { Vector3 us = U(pts[s]); onFace = (Window(us) > -0.02f && us.y < 0.35f) || (us.z > 0f && us.y < 0.1f && us.y > -1.15f && Mathf.Abs(us.x) < 0.95f); }
+            if (onFace) continue;
             strands.Add(pts); layer.Add(outer);
         }
         // Clumps: each strand pulls toward the nearest of every ~5th strand near the tips; a wave per clump.
         var centres = new List<int>();
         for (int i = 0; i < strands.Count; i += 5) centres.Add(i);
-        var clumped = new List<Vector3[]>();
+        var clumped = new List<Vector3[]>(); var clumpOf = new List<int>();
         for (int i = 0; i < strands.Count; i++)
         {
-            int best = centres[0]; float bd = float.MaxValue;
+            int best = centres.Count > 0 ? centres[0] : i; float bd = float.MaxValue;
             foreach (int ci in centres) { float d = (strands[ci][0] - strands[i][0]).sqrMagnitude; if (d < bd) { bd = d; best = ci; } }
             var a = strands[i]; var b = strands[best];
             var o = new Vector3[a.Length];
@@ -225,7 +235,7 @@ public static class HairCards
                     o[s] += perp * Mathf.Sin(t * 9f + phase) * st.curl * t;
                 }
             }
-            clumped.Add(o);
+            clumped.Add(o); clumpOf.Add(best);
         }
         // Cards.
         var V = new List<Vector3>(); var Nn = new List<Vector3>(); var T4 = new List<Vector4>(); var UV = new List<Vector2>(); var UV2 = new List<Vector2>();
@@ -235,7 +245,8 @@ public static class HairCards
         {
             var pts = clumped[i];
             float w0 = (layer[i] ? st.outerWidth : st.innerWidth) * (1f + 0.25f * rng.Signed());
-            float twist = 0.4f * rng.Signed(), rnd = rng.Value();
+            // (Colour jitter: mostly the clump's, a little the card's.)
+            float twist = 0.4f * rng.Signed(), rnd = Mathf.Lerp(Hash01(clumpOf[i]), rng.Value(), 0.35f);
             int baseV = V.Count;
             for (int s = 0; s <= S; s++)
             {
@@ -245,6 +256,10 @@ public static class HairCards
                 Vector3 sideV = Vector3.Cross(tan, outward).normalized;
                 sideV = Quaternion.AngleAxis(twist * t * Mathf.Rad2Deg, tan) * sideV;
                 Vector3 nrm = Vector3.Cross(sideV, tan).normalized;
+                // (Lit as part of the hair's volume: the normal bent out from the head's centre.)
+                Vector3 radial = (pts[s] - hc).normalized;
+                if (Vector3.Dot(nrm, radial) < 0f) nrm = -nrm;
+                nrm = Vector3.Lerp(nrm, radial, 0.6f).normalized;
                 float w = w0 * (1f - 0.7f * t);
                 for (int e = 0; e < 2; e++)
                 {

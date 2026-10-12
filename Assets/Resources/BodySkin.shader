@@ -102,11 +102,12 @@ Shader "FPS/BodySkin"
                 return o;
             }
 
-            // Pores (~1.5 mm) over a finer-than-cm micro relief, in rest-pose metres; 0..1.
+            // Pores (~1 mm, soft and shallow: deep sharp pits read as dirt specks; Face Polish Part 6) over a
+            // finer-than-cm micro relief, in rest-pose metres; 0..1.
             float SkinHeight(float3 r)
             {
-                float pores = 1.0 - smoothstep(0.0, 0.3, VNoise(r * 650.0));
-                return VNoise(r * 170.0) * 0.5 - pores * 0.5 * DetailFade(r, 650.0);
+                float pores = 1.0 - smoothstep(0.0, 0.45, VNoise(r * 950.0));
+                return VNoise(r * 170.0) * 0.5 - pores * 0.25 * DetailFade(r, 1400.0);
             }
 
             // One light: wrapped diffuse with the wrap tinted, plus GGX specular.
@@ -155,11 +156,11 @@ Shader "FPS/BodySkin"
 
                 // Micro relief: height in rest-pose space, bumped with screen derivatives (surface
                 // gradient), so it follows the skin whatever the pose. Fades out with distance.
-                float fade = DetailFade(i.restPos, 170.0);
+                float fade = DetailFade(i.restPos, 320.0);   // (gone sooner with distance)
                 half smoothVar = 1.0h;
                 if (fade > 0.01)
                 {
-                    float h = SkinHeight(i.restPos) * 0.00025 * _PoreStrength * fade * (1.0 - _QualityDetailCut) * (1.0 - mk.y * 0.85);   // metres (lips: smooth)
+                    float h = SkinHeight(i.restPos) * 0.00016 * _PoreStrength * fade * (1.0 - _QualityDetailCut) * (1.0 - mk.y * 0.85);   // metres (lips: smooth)
                     float3 dpdx = ddx(i.positionWS), dpdy = ddy(i.positionWS);
                     float3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
                     float det = dot(dpdx, r1);

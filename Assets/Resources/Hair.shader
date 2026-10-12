@@ -43,8 +43,9 @@ Shader "FPS/Hair"
             float stripe = 1.0 - smoothstep(w * 0.5, w * 0.5 + 0.15, abs(f - 0.5));
             // A strand may end early (ragged tips).
             float len = lerp(0.7, 1.0, H1(id * 3.1 + rnd * 7.0));
-            float tip = 1.0 - smoothstep(len - 0.15, len, uv.y);
-            float edge = smoothstep(0.0, lerp(0.08, 0.18, outer), uv.x) * smoothstep(1.0, lerp(0.92, 0.82, outer), uv.x);
+            float tip = 1.0 - smoothstep(len - 0.3 * outer - 0.15, len, uv.y);
+            // (Edges: the outer cards' strands thin out toward both sides - no hard card outline; Face Polish Part 6.)
+            float edge = smoothstep(0.0, lerp(0.08, 0.32, outer), uv.x) * smoothstep(1.0, lerp(0.92, 0.68, outer), uv.x);
             return float2(stripe * tip * edge, lerp(0.75, 1.15, H1(id + 5.3)));
         }
 
@@ -113,7 +114,7 @@ Shader "FPS/Hair"
                 half3 T = normalize(i.tangentWS);
                 half3 v = GetWorldSpaceNormalizeViewDir(i.positionWS);
                 // Darker at the roots, per-card jitter, per-strand darkness; the inner layer a little darker.
-                half3 albedo = _HairColor.rgb * lerp(0.55h, 1.0h, (half)smoothstep(0.0, 0.5, i.uv.y)) * lerp(0.88h, 1.12h, (half)i.uv2.x) * (half)a.y;
+                half3 albedo = _HairColor.rgb * lerp(0.4h, 1.0h, (half)smoothstep(0.0, 0.55, i.uv.y)) * lerp(0.8h, 1.2h, (half)i.uv2.x) * (half)a.y;
                 albedo *= lerp(0.92h, 1.0h, (half)abs(i.uv2.y));
                 // Face hair (uv2.y = -1: brows, beards; Face Polish Part 4): short tufts lying on the skin - a
                 // little darker, faint highlights (flat-lying cards caught the full sheen and read silver).

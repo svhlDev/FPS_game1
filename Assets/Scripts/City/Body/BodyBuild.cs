@@ -71,7 +71,9 @@ public class BodyBuild
     public static readonly string[] FillShapes = { "fill.bone", "fill.muscle", "fill.fat" };
     Vector3[][] fillDeltas;
 
-    static Vector3[][] FillLevelDeltas(BodySdfKernel k, Vector3[] v, Vector3[] n)
+    // (Face Polish Part 6: the deltas fade to nothing over the last 7 cm above the neck's cut, so the head's
+    // seam ring stays welded to the body - whose neck the levels don't change - at every level.)
+    static Vector3[][] FillLevelDeltas(BodySdfKernel k, Vector3[] v, Vector3[] n, Vector3 cutO, Vector3 cutAxis)
     {
         var res = new Vector3[3][];
         var levels = new[] { (0f, 0f, 0f), (1f, 0f, 0f), (1f, 1f, 0f) };   // (muscle, fat, brain)
@@ -95,6 +97,7 @@ public class BodyBuild
                     p -= g.normalized * Mathf.Clamp(s, -0.008f, 0.008f);
                 }
                 d[i] = p - v[i];
+                if (cutAxis != Vector3.zero) d[i] *= Mathf.SmoothStep(0f, 1f, Vector3.Dot(v[i] - cutO, cutAxis) / 0.07f);
             }
             res[l] = d;
         }
@@ -556,7 +559,7 @@ public class BodyBuild
         {
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
-            if (FillLevels) fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n);
+            if (FillLevels) fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n, weld ? cutO : Vector3.zero, weld ? cutAxis : Vector3.zero);
             // (Under long hair cards the shell is bob length: the cards hang beyond it.)
             var shellStyle = hs != null && wigStyle == WigStyle.Long ? WigStyle.Bob : wigStyle;
             hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, null, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);

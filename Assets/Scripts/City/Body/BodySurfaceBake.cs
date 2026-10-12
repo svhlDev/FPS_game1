@@ -37,6 +37,9 @@ public static class BodySurfaceBake
         public BeardStyle beardStyle;
         // Face Polish Part 4: the brows' centre lines (FaceHair): a soft hair-coloured tint under the tufts.
         public List<Vector3[]> browLines; public HeadCanon canon; public bool female;
+        // Face Polish Part 6: the neck's cut (the head mesh's seam with the body): marks fade out above it,
+        // so the head's edge matches the body's skin there.
+        public Vector3 cutO, cutAxis;
         public static FaceMarks From(BodySDF sdf, WigStyle wig)
         {
             var m = new FaceMarks { skull = sdf.Kernel.skull, stubble = wig != WigStyle.None, earL = sdf.Kernel.earL, earR = sdf.Kernel.earR,
@@ -44,6 +47,7 @@ public static class BodySurfaceBake
             // Most men show a beard shadow (darker with darker hair: the stubble's colour).
             var sheet = sdf.Plan.sheet;
             m.canon = sdf.Canon; m.female = sheet.sex == Sex.Female;
+            if (sdf.HasHeadPiece) { m.cutO = sdf.HeadCutOrigin; m.cutAxis = sdf.HeadCutAxis; }
             if (sdf.EyeRadius > 0f) m.browLines = FaceHair.BrowLines(sdf.Kernel, sdf.Canon, sdf.EyeL, sdf.EyeR, sheet.seed, m.female);
             m.beardStyle = FaceHair.PickBeard(sheet, out m.beard);
             for (int i = 0; i < sdf.FacePrims.Count; i++)
@@ -105,6 +109,15 @@ public static class BodySurfaceBake
                 if (l2 < 1e-10f) continue;
                 sum += Vector3.Dot(n[i] - n[j], d) / l2; c++;
             }
+            k0[i] = c > 0 ? sum / c : 0f;
+        }
+        // (An open skin edge - the head / body seam at the neck - has a one-sided neighbourhood: its curvature
+        // reads as a crease. It takes its inner neighbours' instead; Face Polish Part 6.)
+        for (int i = 0; i < nv; i++)
+        {
+            if (!open[i] || sub[i] != 0) continue;
+            float sum = 0f; int c = 0;
+            foreach (int j in adj[i]) if (!open[j]) { sum += k0[j]; c++; }
             k0[i] = c > 0 ? sum / c : 0f;
         }
         var curv = new float[nv];
@@ -187,6 +200,11 @@ public static class BodySurfaceBake
                 if (face.beard > 0f && face.canon.halfW > 0f)
                     stub = Mathf.Max(stub, FaceHair.Zone(face.canon, v[i]).All * (1f - lipM) * face.beard);
                 if (face.browLines != null) stub = Mathf.Max(stub, 0.5f * FaceHair.BrowTint(face.browLines, face.canon, v[i], face.female));
+                if (face.cutAxis != Vector3.zero)
+                {
+                    float seam = Mathf.SmoothStep(0f, 1f, (Vector3.Dot(v[i] - face.cutO, face.cutAxis) - 0.005f) / 0.03f);
+                    stub *= seam; res.zones[i] *= seam;
+                }
                 res.uv4[i] = new Vector3(stub, lipM, 0f);
             }
         }
