@@ -50,7 +50,7 @@ public struct BodySdfKernel : IDisposable
     }
 
     // A face part (Head spec Part D) in root space: capsule (r.x radius, halfLen along y), ellipsoid or
-    // half-ellipsoid (radii r), sphere (r.x). Union parts are face muscle (under the fat), subtract parts
+    // half-ellipsoid (radii r), sphere (r.x). Union parts are skin ridges, subtract parts
     // cut the skin.
     public struct FacePrim
     {
@@ -612,7 +612,12 @@ public struct BodySdfKernel : IDisposable
         }
         if (nearHead)
             for (int j = 0; j < face.Length; j++)
+            {
+                // Skin features after the fat: grooves cut in, ridges (Union: the philtrum's ridges, the lip
+                // border) added on (Face Polish Part 2).
                 if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
+                else if (face[j].op == (int)FacePartOp.Union) skin = SMin(skin, FaceDist(face[j], p), face[j].blend);
+            }
         if (eyeRadius > 0f)
         {
             // Eye sockets: the eyeball's sphere, and a channel straight out through the face fat (the local
