@@ -190,7 +190,7 @@ public class FaceDef
         // The jaw arcs (the teeth under the lips): the lips sit on them (BodySDF places the lips on the bone with them).
         P("UpperJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0.06f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.17f, 0.16f), 0.004f,
           op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.09f, pushDir: new Vector3(0f, 0f, 1f), strength: true),
-        P("LowerJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.1f, 0.9f), Vector3.zero, new Vector3(0.38f, 0.14f, 0.15f), 0.004f,
+        P("LowerJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.07f, 0.9f), Vector3.zero, new Vector3(0.38f, 0.06f, 0.15f), 0.004f,
           op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.052f, pushDir: new Vector3(0f, 0f, 1f), strength: true),   // (~2 mm behind the upper arc)
         // ---- Bone: carves ----
         P("Temple", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.88f, 0.15f, 0.4f), Vector3.zero, new Vector3(0.22f, 0.18f, 0.12f), 0.006f,
