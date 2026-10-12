@@ -874,6 +874,13 @@ public partial class ScenarioTest : MonoBehaviour
             ("wig Bob", new CharacterSheet(Sex.Female, 10, 10, 12, 3603)), ("wig Long", new CharacterSheet(Sex.Female, 10, 10, 12, 3604)),
             ("wig Ponytail", new CharacterSheet(Sex.Female, 10, 10, 12, 3605)), ("wig Bun", new CharacterSheet(Sex.Female, 10, 10, 12, 3606)),
         });
+        // Face Polish Part 5: stubble and the beard styles (forced through FaceHair.ForceBeard).
+        rows.Add(new List<(string, CharacterSheet)>
+        {
+            ("beard Stubble", new CharacterSheet(Sex.Male, 10, 10, 12, 3701)), ("beard ShortFull", new CharacterSheet(Sex.Male, 10, 10, 12, 3702)),
+            ("beard Goatee", new CharacterSheet(Sex.Male, 10, 10, 12, 3703)), ("beard Moustache", new CharacterSheet(Sex.Male, 10, 10, 12, 3704)),
+            ("beard Long", new CharacterSheet(Sex.Male, 10, 10, 6, 3705)),
+        });
         // Dressed (a coat over a casual outfit), last row.
         rows.Add(new List<(string, CharacterSheet)> { ("dressed F coat", new CharacterSheet(Sex.Female, 10, 10, 12, 3501)), ("dressed M", new CharacterSheet(Sex.Male, 12, 10, 12, 3502)) });
         return rows.ConvertAll(r => r).ToArray();
@@ -929,8 +936,9 @@ public partial class ScenarioTest : MonoBehaviour
                 }
                 string lbl = row[i].label;
                 WigBuilder.Force = lbl.StartsWith("wig ") ? (WigStyle?)System.Enum.Parse(typeof(WigStyle), lbl.Substring(4)) : null;
+                FaceHair.ForceBeard = lbl.StartsWith("beard ") ? (BeardStyle?)System.Enum.Parse(typeof(BeardStyle), lbl.Substring(6)) : null;
                 var f = CharacterFigure.BuildGenerated(go.transform, row[i].sheet, CharacterFigure.Role.Civilian, true, false, null, null, outfit);
-                WigBuilder.Force = null;
+                WigBuilder.Force = null; FaceHair.ForceBeard = null;
                 totalMs += (float)sw.Elapsed.TotalMilliseconds; built++;
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
@@ -965,6 +973,10 @@ public partial class ScenarioTest : MonoBehaviour
                 var hidden = new List<Renderer>();
                 foreach (var other in Object.FindObjectsByType<CharacterFigure>())
                     if (other != f) foreach (var rr in other.GetComponentsInChildren<Renderer>()) if (rr.enabled) { rr.enabled = false; hidden.Add(rr); }
+                // (Their hair LODs would turn their hair / face-hair cards back on.)
+                var hiddenLods = new List<HairLOD>();
+                foreach (var other in Object.FindObjectsByType<CharacterFigure>())
+                    if (other != f) foreach (var hl in other.GetComponentsInChildren<HairLOD>()) if (hl.enabled) { hl.enabled = false; hiddenLods.Add(hl); }
                 // front / side with the canon (orthographic, so the lines and the head share one scale), the
                 // three-quarter, back and body views without.
                 foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("canon", c + fwd * 0.45f), ("side", c + right * 0.45f),
@@ -987,6 +999,7 @@ public partial class ScenarioTest : MonoBehaviour
                 cam.orthographic = false;
                 if (ov != null) ov.Show(HeadCanonOverlay.View.Off);
                 foreach (var rr in hidden) if (rr != null) rr.enabled = true;
+                foreach (var hl in hiddenLods) if (hl != null) hl.enabled = true;
             }
         }
         // Anatomy Rework R8: the layer view - a few heads at bone only, + muscle, + fat, and finished.

@@ -543,7 +543,7 @@ public class BodyBuild
         int ng = fields.Count;
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
         // (Face Polish Part 4: the brows are hair cards now - FaceHair - not the wig's strand ridge.)
-        var browLines = faceMarks.browLines; bool female = sheet.sex == Sex.Female;
+        var browLines = faceMarks.browLines; bool female = sheet.sex == Sex.Female; var beard = faceMarks.beardStyle;
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
@@ -564,6 +564,7 @@ public class BodyBuild
             // Face hair: the brows' tufts (appended to the hair cards).
             var face = new FaceHair.Cards();
             FaceHair.Brows(kernelCopy, canon, browLines, sheet.seed, female, headBone, face);
+            FaceHair.Beard(kernelCopy, canon, beard, sheet.seed, headParts.v, headParts.n, headParts.w, headParts.subs[0].ToArray(), face);
             if (face.tri.Count > 0)
             {
                 if (!hasCards) { cardV = null; cardN = null; cardT = null; cardUV = null; cardUV2 = null; cardW = null; cardTri = null; }

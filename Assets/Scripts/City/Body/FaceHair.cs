@@ -11,6 +11,12 @@ using UnityEngine;
 //   tail  near the outer eye corner, a little higher than the head (outward and slightly down)
 // Male: flatter, lower, thicker; female: a higher arch, a thinner tail. Seed varies the points.
 // Thickness (the band's height) and density taper from the head and body to a thin tail.
+// Beards (Part 5): a beard zone map in the canon's frame (moustache, chin, jaw and lower cheeks below the
+// cheek line, under the jaw to the Adam's apple, sideburns); stubble is the skin shader's (a blue-grey
+// shadow with follicle dots, strength 0..1 in the bake's stubble channel); beards are short tufts rooted
+// in the zone, by style.
+public enum BeardStyle { None, Stubble, ShortFull, Goatee, Moustache, Long }
+
 public static class FaceHair
 {
     // Output buffers in HairCards' layout.
@@ -171,6 +177,145 @@ public static class FaceHair
                 Vector3 side = Vector3.Cross(nrm, dir).normalized;
                 outCards.Add(card, side, nrm, width, rng.Value(), bw);
             }
+        }
+    }
+
+    // ---------------- Face Polish Part 5: stubble and beards ----------------
+
+    public static BeardStyle? ForceBeard;   // test hook: every male beard this style
+
+    // Seed choice: NPC men mostly stubble or nothing, some short beards, few long ones; women none.
+    // stubble: the shader's shadow strength in the beard zone (0..1).
+    public static BeardStyle PickBeard(CharacterSheet sheet, out float stubble)
+    {
+        stubble = 0f;
+        if (sheet.sex != Sex.Male) return BeardStyle.None;
+        var r = new PcgRandom(sheet.seed, "beardStyle");
+        float v = r.Value();
+        var s = ForceBeard ?? (v < 0.38f ? BeardStyle.None : v < 0.76f ? BeardStyle.Stubble : v < 0.87f ? BeardStyle.ShortFull
+                             : v < 0.92f ? BeardStyle.Goatee : v < 0.97f ? BeardStyle.Moustache : BeardStyle.Long);
+        stubble = s == BeardStyle.None ? (r.Value() < 0.5f ? r.Range(0.1f, 0.25f) : 0f)   // (a clean shave: a faint shadow at most)
+                : s == BeardStyle.Stubble ? r.Range(0.5f, 0.95f) : 0.45f;                     // (under a beard: shaved-short hair)
+        return s;
+    }
+
+    // The beard zone in the canon's frame, by part (0..1 each, soft edges). Never the nose, lips, upper
+    // cheeks, eyes or forehead.
+    public struct BeardZone
+    {
+        public float moustache, chin, jaw, neck, sideburn;
+        public float All => Mathf.Max(Mathf.Max(moustache, chin), Mathf.Max(Mathf.Max(jaw, neck), sideburn));
+    }
+
+    static float Sm(float a, float b, float x) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, x));
+
+    public static BeardZone Zone(HeadCanon c, Vector3 p)
+    {
+        Vector3 d = p - c.o;
+        float x = Vector3.Dot(d, c.x) / c.halfW, ax = Mathf.Abs(x);
+        float y = Vector3.Dot(d, c.y), z = Vector3.Dot(d, c.z);
+        float zf = z / c.halfD;
+        var b = new BeardZone();
+        float front = Sm(0.15f, 0.35f, zf);
+        // The lips (never): the mouth's band, a little wider than the mouth.
+        float lipX = c.mouthHalfWidth / c.halfW * 1.08f;
+        float lips = (1f - Sm(lipX - 0.04f, lipX + 0.04f, ax)) * Sm(c.mouth - 0.013f, c.mouth - 0.009f, y) * (1f - Sm(c.mouth + 0.006f, c.mouth + 0.009f, y)) * front;
+        // Moustache: the upper lip, below the nose.
+        b.moustache = (1f - Sm(0.42f, 0.5f, ax)) * Sm(c.mouth + 0.004f, c.mouth + 0.008f, y) * (1f - Sm(c.noseBase - 0.007f, c.noseBase - 0.003f, y)) * front;
+        // Chin: below the lower lip to the chin's underside.
+        b.chin = (1f - Sm(0.36f, 0.46f, ax)) * (1f - Sm(c.mouth - 0.016f, c.mouth - 0.011f, y)) * Sm(c.chin - 0.02f, c.chin - 0.008f, y) * Sm(0.0f, 0.2f, zf);
+        // The cheek line: from the sideburn (high, at the ear) down to the mouth's corner.
+        float line = Mathf.Lerp(c.mouth + 0.006f, c.noseBase * 0.45f, Sm(0.38f, 0.9f, ax));
+        b.jaw = Sm(0.3f, 0.42f, ax) * (1f - Sm(line - 0.006f, line + 0.002f, y)) * Sm(c.chin - 0.03f, c.chin - 0.012f, y) * Sm(c.earZ + 0.006f, c.earZ + 0.016f, z);
+        // Under the jaw and the neck's front, down to the Adam's apple.
+        b.neck = (1f - Sm(c.chin + 0.004f, c.chin + 0.012f, y)) * Sm(c.chin - 0.065f, c.chin - 0.05f, y) * Sm(c.earZ + 0.0f, c.earZ + 0.02f, z) * (1f - Sm(0.75f, 0.9f, ax));
+        // Sideburns: in front of the ear, from the cheek line up to the eye line (meeting the hairline).
+        b.sideburn = Sm(0.78f, 0.86f, ax) * Sm(line - 0.004f, line + 0.004f, y) * (1f - Sm(-0.004f, 0.004f, y))
+                     * Sm(c.earZ + 0.004f, c.earZ + 0.01f, z) * (1f - Sm(c.earZ + 0.03f, c.earZ + 0.04f, z));
+        float keep = 1f - lips;
+        b.moustache *= keep; b.chin *= keep; b.jaw *= keep;
+        return b;
+    }
+
+    // How much of the zone a style covers.
+    static float Covered(BeardStyle s, BeardZone z, HeadCanon c, Vector3 p)
+    {
+        switch (s)
+        {
+            case BeardStyle.ShortFull: case BeardStyle.Long: return z.All;
+            case BeardStyle.Goatee:
+            {
+                float ax = Mathf.Abs(Vector3.Dot(p - c.o, c.x)) / c.halfW;
+                return Mathf.Max(z.moustache, z.chin * (1f - Sm(0.26f, 0.32f, ax)));
+            }
+            case BeardStyle.Moustache: return z.moustache;
+            default: return 0f;
+        }
+    }
+
+    // Beard tufts, rooted on the head mesh's skin (v, n, w, tris: root space) in the style's zone. Short
+    // tufts lie close to the skin; the direction field runs mostly down - down and forward on the chin,
+    // outward on the jaw and the moustache. A long beard's tufts fall from the chin and jaw (pushed out of
+    // the body). Each tuft takes its skin's bone weights (the jaw's for the chin).
+    public static void Beard(BodySdfKernel k, HeadCanon c, BeardStyle style, int seed, Vector3[] v, Vector3[] n, BoneWeight[] w, int[] tris, Cards outCards)
+    {
+        if (style == BeardStyle.None || style == BeardStyle.Stubble || v == null || tris == null) return;
+        k.cutMode = 0;
+        var rng = new PcgRandom(seed, "beardHair");
+        int nt = tris.Length / 3;
+        var cum = new float[nt];
+        float total = 0f;
+        for (int t = 0; t < nt; t++)
+        {
+            Vector3 a = v[tris[t * 3]], b = v[tris[t * 3 + 1]], cc = v[tris[t * 3 + 2]];
+            Vector3 ctr = (a + b + cc) / 3f;
+            float cov = Covered(style, Zone(c, ctr), c, ctr);
+            total += cov > 0.05f ? Vector3.Cross(b - a, cc - a).magnitude * 0.5f * cov : 0f;
+            cum[t] = total;
+        }
+        if (total <= 0f) return;
+        bool longB = style == BeardStyle.Long;
+        // Tufts per square metre of zone (a full short beard ~ 1500).
+        int count = Mathf.Clamp(Mathf.RoundToInt(total * (longB ? 30000f : 80000f)), 60, longB ? 900 : 2000);
+        for (int i = 0; i < count; i++)
+        {
+            float r = rng.Value() * total;
+            int lo = 0, hi = nt - 1;
+            while (lo < hi) { int mid = (lo + hi) / 2; if (cum[mid] < r) lo = mid + 1; else hi = mid; }
+            int i0 = tris[lo * 3], i1 = tris[lo * 3 + 1], i2 = tris[lo * 3 + 2];
+            float u1 = rng.Value(), u2 = rng.Value();
+            if (u1 + u2 > 1f) { u1 = 1f - u1; u2 = 1f - u2; }
+            Vector3 root = v[i0] + (v[i1] - v[i0]) * u1 + (v[i2] - v[i0]) * u2;
+            Vector3 nrm = (n[i0] * (1f - u1 - u2) + n[i1] * u1 + n[i2] * u2).normalized;
+            var bw = w[(1f - u1 - u2) >= Mathf.Max(u1, u2) ? i0 : u1 >= u2 ? i1 : i2];
+            var z = Zone(c, root);
+            float sx = Mathf.Sign(Vector3.Dot(root - c.o, c.x) + 1e-6f);
+            // Direction: down; down and forward on the chin; outward on the jaw; out and down on the moustache.
+            Vector3 dir = -c.y + c.z * (0.6f * z.chin) + c.x * sx * (0.35f * z.jaw + 0.9f * z.moustache);
+            dir = Vector3.ProjectOnPlane(dir.normalized, nrm).normalized;
+            if (dir.sqrMagnitude < 0.5f) dir = Vector3.ProjectOnPlane(-c.y + c.z, nrm).normalized;
+            bool chinJaw = z.chin + z.jaw + z.neck > z.moustache + z.sideburn;
+            float len = style == BeardStyle.Moustache ? 0.010f : style == BeardStyle.Goatee ? 0.010f : 0.0065f;
+            if (longB) len = chinJaw ? Mathf.Lerp(0.03f, 0.075f, Mathf.Max(z.chin, z.neck)) : 0.013f;
+            len *= 1f + 0.25f * rng.Signed();
+            float width = longB && chinJaw ? 0.005f : 0.0034f;
+            int S = longB && chinJaw ? 4 : 2;
+            float lift = 0.0004f;
+            var pts = new Vector3[S + 1];
+            Vector3 p = root + nrm * lift;
+            pts[0] = p;
+            Vector3 d0 = (dir + nrm * (longB && chinJaw ? 0.3f : 0.15f)).normalized;
+            for (int s = 1; s <= S; s++)
+            {
+                float t = s / (float)S;
+                Vector3 dd = longB && chinJaw ? Vector3.Lerp(d0, -c.y, 0.75f * t).normalized : (d0 - nrm * 0.5f * t).normalized;
+                p += dd * (len / S);
+                // (Out of the skin: the jaw, the neck, the chest.)
+                for (int it = 0; it < 3; it++) { float sd = k.Skin(p); if (sd >= lift) break; p += k.Normal(p, 0.002f) * (lift - sd); }
+                pts[s] = p;
+            }
+            Vector3 side = Vector3.Cross(nrm, d0).normalized;
+            outCards.Add(pts, side, nrm, width, rng.Value(), bw);
         }
     }
 }

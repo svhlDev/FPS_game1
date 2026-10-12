@@ -33,7 +33,8 @@ public static class BodySurfaceBake
         // Face Fix Part 8: colour zones and the beard shadow.
         public readonly List<BodySdfKernel.FacePrim> cheeks = new List<BodySdfKernel.FacePrim>(), nose = new List<BodySdfKernel.FacePrim>();
         public Vector3 eyeL, eyeR; public float eyeRadius;
-        public float beard;             // beard shadow strength (0: none)
+        public float beard;             // stubble strength in the beard zone (0: none; Face Polish Part 5)
+        public BeardStyle beardStyle;
         // Face Polish Part 4: the brows' centre lines (FaceHair): a soft hair-coloured tint under the tufts.
         public List<Vector3[]> browLines; public HeadCanon canon; public bool female;
         public static FaceMarks From(BodySDF sdf, WigStyle wig)
@@ -44,8 +45,7 @@ public static class BodySurfaceBake
             var sheet = sdf.Plan.sheet;
             m.canon = sdf.Canon; m.female = sheet.sex == Sex.Female;
             if (sdf.EyeRadius > 0f) m.browLines = FaceHair.BrowLines(sdf.Kernel, sdf.Canon, sdf.EyeL, sdf.EyeR, sheet.seed, m.female);
-            var br = new PcgRandom(sheet.seed, "beard");
-            if (sheet.sex == Sex.Male && br.Value() < 0.65f) m.beard = br.Range(0.25f, 0.45f);
+            m.beardStyle = FaceHair.PickBeard(sheet, out m.beard);
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {
                 string n = sdf.FacePartNames[i];
@@ -183,16 +183,9 @@ public static class BodySurfaceBake
                 float eyeD = Mathf.Min((v[i] - face.eyeL).magnitude, (v[i] - face.eyeR).magnitude) - face.eyeRadius;
                 float dark = 0.7f * Mathf.Clamp01(1f - Mathf.Max(0f, eyeD) / 0.012f);
                 res.zones[i] = new Vector2(red, dark);
-                // The beard shadow: the lower face and under the jaw (not the lips), in the stubble channel.
-                if (face.beard > 0f)
-                {
-                    var sk = face.skull;
-                    Vector3 l = sk.ToLocal(v[i]);
-                    Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
-                    float S(float a, float b, float x) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, x));
-                    float beard = S(-0.36f, -0.46f, u.y) * S(-0.15f, 0.1f, u.z) * S(-1.45f, -1.25f, u.y) * (1f - lipM) * face.beard;
-                    stub = Mathf.Max(stub, beard);
-                }
+                // Stubble: the beard zone (Face Polish Part 5; not the lips), in the stubble channel.
+                if (face.beard > 0f && face.canon.halfW > 0f)
+                    stub = Mathf.Max(stub, FaceHair.Zone(face.canon, v[i]).All * (1f - lipM) * face.beard);
                 if (face.browLines != null) stub = Mathf.Max(stub, 0.5f * FaceHair.BrowTint(face.browLines, face.canon, v[i], face.female));
                 res.uv4[i] = new Vector3(stub, lipM, 0f);
             }

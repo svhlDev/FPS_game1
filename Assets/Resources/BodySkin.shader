@@ -142,8 +142,14 @@ Shader "FPS/BodySkin"
                 albedo *= 1.0h - i.zones.y * 0.22h;
                 // Scalp stubble (short hair in the hair colour, speckled), lips (rosier), the mouth's inside (dark red).
                 half3 mk = saturate(i.marks);
-                float stubbleFine = lerp(0.5, VNoise(i.restPos * 1100.0), DetailFade(i.restPos, 1100.0));
-                albedo = lerp(albedo, _HairColor.rgb * lerp(0.75h, 1.15h, (half)stubbleFine), mk.x * lerp(0.55h, 0.9h, (half)stubbleFine));
+                // Stubble (scalp, beard zone, under the brows; Face Polish Part 5): a blue-grey shadow (hair under
+                // the skin, a little of the hair's colour), plus fine follicle dots in the hair colour that fade
+                // into the shadow with distance.
+                half3 shade = albedo * lerp(half3(0.5h, 0.55h, 0.65h), saturate(_HairColor.rgb * 3.0h), 0.25h);
+                albedo = lerp(albedo, shade, mk.x * 0.9h);
+                float stubFade = DetailFade(i.restPos, 1600.0);
+                float dots = smoothstep(0.58, 0.78, VNoise(i.restPos * 1600.0));
+                albedo = lerp(albedo, _HairColor.rgb, (half)(lerp(0.28, dots, stubFade) * mk.x * 0.9));
                 albedo = lerp(albedo, albedo * half3(1.08h, 0.66h, 0.66h), mk.y * 0.75h);
                 albedo = lerp(albedo, half3(0.09h, 0.02h, 0.02h), mk.z);
 
