@@ -71,6 +71,14 @@ public struct BodySdfKernel : IDisposable
         public int on;
     }
 
+    // Face Fix Part 3: an eye's socket and lids. Frame: x lateral (toward the outer corner), y up, z forward.
+    public struct EyeLid
+    {
+        public Vector3 c, x, y, z;
+        public float r;                     // the eyeball's radius (the socket's size)
+        public EyeShape s;
+    }
+
     public struct Sample
     {
         public float skin;      // signed distance to the skin
@@ -96,6 +104,7 @@ public struct BodySdfKernel : IDisposable
     public int headIndex;
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
+    public EyeLid lidL, lidR;           // Face Fix Part 3 (lids: r > 0)
     public float muscleBlend, fatBlendPerMetre, fatBlendMin, breastBlend, featureBlend, eyeCarveBlend;
     public float socketClearance;   // eye sockets cut through the face fat in front of the eye, plus this
     public float faceReach;         // face parts are evaluated within this distance of the skull's centre (covers every part + blend + fat)
@@ -465,6 +474,14 @@ public struct BodySdfKernel : IDisposable
                     soft = SMax(soft, v, face[j].blend);
                 }
         }
+        // Eye sockets (Face Fix Part 3): a hollow in the bone layer round each eyeball, deeper than wide,
+        // inside the rim of the brow ridge, cheekbone and nose bridge; the fat follows it.
+        if (lidL.r > 0f && nearHead)
+        {
+            float sk = Mathf.Min(Socket(lidL, p), Socket(lidR, p));
+            muscle = SMax(muscle, -sk, 0.004f);
+            soft = SMax(soft, -sk, 0.004f);
+        }
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
         if (nearHead)
@@ -475,12 +492,67 @@ public struct BodySdfKernel : IDisposable
             // Eye sockets: the eyeball's sphere, and a channel straight out through the face fat (the local
             // fat, plus a clearance) so a fat face never buries the eyes.
             Vector3 outDir = skull.z * (fat + eyeRadius + socketClearance);
-            float rr = eyeRadius * 0.92f;
-            skin = SMax(skin, -Mathf.Min((p - eyeL).magnitude - eyeRadius, SegmentDist(p, eyeL, eyeL + outDir) - rr), eyeCarveBlend);
-            skin = SMax(skin, -Mathf.Min((p - eyeR).magnitude - eyeRadius, SegmentDist(p, eyeR, eyeR + outDir) - rr), eyeCarveBlend);
+            if (lidL.r > 0f)
+            {
+                // Face Fix Part 3: a narrower channel (the lids close round it), then the lids and their opening.
+                float rr = eyeRadius * 0.7f;
+                skin = SMax(skin, -Mathf.Min(SegmentDist(p, eyeL, eyeL + outDir), SegmentDist(p, eyeR, eyeR + outDir)) + rr, eyeCarveBlend);
+                skin = Lids(lidL, p, skin);
+                skin = Lids(lidR, p, skin);
+            }
+            else
+            {
+                float rr = eyeRadius * 0.92f;
+                skin = SMax(skin, -Mathf.Min((p - eyeL).magnitude - eyeRadius, SegmentDist(p, eyeL, eyeL + outDir) - rr), eyeCarveBlend);
+                skin = SMax(skin, -Mathf.Min((p - eyeR).magnitude - eyeRadius, SegmentDist(p, eyeR, eyeR + outDir) - rr), eyeCarveBlend);
+            }
         }
         if (cutMode > 0) skin = Cut(p, skin);
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
+    }
+
+    static Vector3 EyeLocal(in EyeLid e, Vector3 p) { p -= e.c; return new Vector3(Vector3.Dot(p, e.x), Vector3.Dot(p, e.y), Vector3.Dot(p, e.z)); }
+
+    // The socket: an ellipsoid round the eyeball (a little behind its centre), 1.3 x its radius wide,
+    // 1.2 tall, 1.4 deep.
+    static float Socket(in EyeLid e, Vector3 p)
+    {
+        Vector3 l = EyeLocal(e, p) + new Vector3(0f, 0f, e.r * 0.15f);
+        return EllipsoidDist(l, new Vector3(e.r * 1.3f, e.r * 1.2f, e.r * 1.4f));
+    }
+
+    // The lids: a skin shell round the eyeball (upper thickU, lower thickL), blended into the socket's
+    // skin; the opening cut through it down to the eyeball, OpeningMargin wider than the almond all round
+    // (the head's grid can't resolve the almond's points: the lid meshes on the eye, FaceAnimator.LidMesh,
+    // make the exact opening and tuck under this skin); the crease above the upper lid (a groove,
+    // shallower with face fat).
+    public const float OpeningMargin = 0.003f;
+    static float Lids(in EyeLid e, Vector3 p, float skin)
+    {
+        Vector3 l = EyeLocal(e, p);
+        float R = l.magnitude;
+        if (R > e.r * 3f) return skin;
+        Vector3 d = R > 1e-6f ? l / R : Vector3.forward;
+        float up = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.2f, 0.2f, d.y));
+        float thick = Mathf.Lerp(e.s.thickL, e.s.thickU, up);
+        skin = SMin(skin, R - (e.r + thick), 0.006f);
+        // The opening: inside the (widened) almond, between the eyeball and just outside the lids.
+        float ang = EyeShape.Opening(e.s, d) * R - OpeningMargin;
+        float carve = Mathf.Max(ang, Mathf.Max(e.r * 0.8f - R, R - (e.r + thick + 0.004f)));
+        skin = SMax(skin, -carve, 0.0007f);
+        if (e.s.creaseDepth > 0f && d.z > 0f)
+        {
+            float phi = Mathf.Atan2(d.x, d.z), theta = Mathf.Asin(Mathf.Clamp(d.y, -1f, 1f));
+            float t = EyeShape.T(e.s, phi);
+            if (Mathf.Abs(t) < 1.2f)
+            {
+                float fade = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.8f, 1.2f, Mathf.Abs(t)));
+                float along = (theta - (EyeShape.Upper(e.s, t) + e.s.crease)) * R - OpeningMargin;
+                float groove = new Vector2(along, R - (e.r + e.s.thickU)).magnitude - e.s.creaseDepth * fade;
+                skin = SMax(skin, -groove, 0.001f);
+            }
+        }
+        return skin;
     }
 
     // The meshing cuts (see the top). s = distance along the hand from the wrist. Each cut may carry its

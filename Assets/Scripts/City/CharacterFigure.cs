@@ -285,32 +285,26 @@ public class CharacterFigure : MonoBehaviour
         f.HeadRenderer = headR;
         f.FaceRenderers.Add(headR);
 
-        // Eyeballs in the carved sockets, on the head joint (they turn with the head; EyeLook aims them).
+        // Eyeballs in the sockets, on the head joint (they turn with the head; EyeLook aims them): one sphere
+        // each, shaded by FPS/Eye (iris, pupil, limbal ring, the lids' shadow; INT glow).
         var rules = BodyRules.Default;
         float er = a.eyeRadius * rules.eyeballScale;
         var irisCol = BodyMaterials.IrisColors[new PcgRandom(a.sheet.seed, "iris").Range(0, BodyMaterials.IrisColors.Length)];
-        var irisMat = BodyMaterials.Iris(irisCol, plan.dna != null ? plan.dna.eyeGlow : 0f);
+        var eyeMat = BodyMaterials.Eye(irisCol, plan.dna != null ? plan.dna.eyeGlow : 0f);
         Transform Eye(string name, Vector3 c)
         {
             var e = new GameObject(name).transform;
             e.SetParent(sk.Head, false);
-            e.localPosition = c - headStart - Vector3.forward * a.eyeRadius * 0.15f;
+            e.localPosition = c - headStart;
             e.gameObject.layer = layer;
-            Renderer Ball(string n, Vector3 lp, Vector3 scale, Material m)
-            {
-                var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Destroy(go.GetComponent<Collider>());
-                go.name = n; go.layer = layer;
-                go.transform.SetParent(e, false);
-                go.transform.localPosition = lp;
-                go.transform.localScale = scale;
-                var r = go.GetComponent<Renderer>(); r.sharedMaterial = m;
-                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                f.FaceRenderers.Add(r);
-                return r;
-            }
-            Ball("Sclera", Vector3.zero, Vector3.one * er * 2f, BodyMaterials.Sclera());
-            Ball("Iris", Vector3.forward * er * 0.82f, new Vector3(er * 1.05f, er * 1.05f, er * 0.4f), irisMat);
+            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            Destroy(go.GetComponent<Collider>());
+            go.name = "Eyeball"; go.layer = layer;
+            go.transform.SetParent(e, false);
+            go.transform.localScale = Vector3.one * er * 2f;
+            var r = go.GetComponent<Renderer>(); r.sharedMaterial = eyeMat;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            f.FaceRenderers.Add(r);
             return e;
         }
         f.EyeL = Eye("EyeL", a.eyeL);
@@ -318,29 +312,28 @@ public class CharacterFigure : MonoBehaviour
         var look = root.gameObject.AddComponent<EyeLook>();
         look.eyeL = f.EyeL; look.eyeR = f.EyeR;
 
-        // Eyelids (skin caps just outside the eyeball; FaceAnimator blinks them) and the wig.
+        // Lids (Face Fix Part 3): the head mesh carries the lid skin round a slightly wide opening; a cap per
+        // lid makes the exact almond and its margin (FaceAnimator rolls the upper one to blink).
         var face = root.gameObject.AddComponent<FaceAnimator>();
         face.Jaw = f.Jaw;
+        face.lidClosed = (a.eye.upper + a.eye.lower) * Mathf.Rad2Deg + 3f;
         foreach (var eye in new[] { f.EyeL, f.EyeR })
         {
-            // The socket: at the eyeball, rolled so the outer corner sits a little higher (almond tilt).
-            var socket = new GameObject(eye.name + "Lids").transform;
-            socket.SetParent(sk.Head, false);
-            socket.localPosition = eye.localPosition;
-            socket.localRotation = Quaternion.Euler(0f, 0f, eye == f.EyeL ? -7f : 7f);
-            Transform Lid(string n, bool upper)
+            Transform Lid(bool upper)
             {
-                var go = new GameObject(n);
+                var go = new GameObject(eye.name + (upper ? "UpperLid" : "LowerLid"));
                 go.layer = layer;
-                go.transform.SetParent(socket, false);
-                go.AddComponent<MeshFilter>().sharedMesh = FaceAnimator.LidMesh(er * 1.14f, upper);
+                go.transform.SetParent(sk.Head, false);
+                go.transform.localPosition = eye.localPosition;
+                float thick = upper ? a.eye.thickU : a.eye.thickL;
+                go.AddComponent<MeshFilter>().sharedMesh = FaceAnimator.LidMesh(a.eyeRadius + thick - 0.0006f, er + 0.0003f, a.eye, eye == f.EyeL, upper);
                 var r = go.AddComponent<MeshRenderer>(); r.sharedMaterial = skin;
                 r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 f.FaceRenderers.Add(r);
                 return go.transform;
             }
-            face.UpperLids.Add(Lid(eye.name + "UpperLid", true));
-            face.LowerLids.Add(Lid(eye.name + "LowerLid", false));
+            face.UpperLids.Add(Lid(true));
+            face.LowerLids.Add(Lid(false));
         }
         if (a.wig != null)
         {

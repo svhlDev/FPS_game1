@@ -55,6 +55,8 @@ public class BodySDF : IDisposable
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
     public HeadCanon Canon;                        // Face Fix Part 1: the proportions the face is built on
+    public EyeShape Eye;                           // Face Fix Part 3: the eye opening and lids
+    BodySdfKernel.EyeLid LidL, LidR;
     public Bounds bounds;
     readonly float[] jointK;
     readonly int headIndex;
@@ -225,7 +227,7 @@ public class BodySDF : IDisposable
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
-            headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius,
+            headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius, lidL = LidL, lidR = LidR,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
             fatBlendMax = fatBlendMax, muscleReach = muscleReach,
@@ -516,6 +518,12 @@ public class BodySDF : IDisposable
         float ex = Canon.eyeSpacing / rx;
         EyeL = FacePoint(new Vector3(-ex, 0f, faceDef.eyeDepth));
         EyeR = FacePoint(new Vector3(ex, 0f, faceDef.eyeDepth));
+        // Lids (Face Fix Part 3): the crease is shallower the more fat the face carries.
+        Eye = EyeShape.For(plan.sheet, EyeRadius);
+        float faceFat = Mathf.Max(b.fat.x, Mathf.Max(b.fat.y, b.fat.z));
+        Eye.creaseDepth *= 1f - Mathf.SmoothStep(0f, 1f, faceFat / 0.02f);
+        LidL = new BodySdfKernel.EyeLid { c = EyeL, x = -f.x, y = f.y, z = f.z, r = EyeRadius, s = Eye };
+        LidR = new BodySdfKernel.EyeLid { c = EyeR, x = f.x, y = f.y, z = f.z, r = EyeRadius, s = Eye };
         // The jaw hinges in front of the ears, a little above the nose base; the mouth line from its part.
         JawPivot = FacePoint(new Vector3(0f, Anchor(FaceLine.NoseBase) + 0.12f, -0.15f));
         MouthCentre = FacePoint(new Vector3(0f, Anchor(FaceLine.Mouth), 1.0f));

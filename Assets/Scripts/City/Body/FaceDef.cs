@@ -73,14 +73,25 @@ public class FaceDef
     [Tooltip("The head is this many eye-widths wide.")]
     public float eyesAcross = 5f;
     [Tooltip("Eyeball diameter, visible opening width and height, x W.")]
-    public float eyeballDiameter = 0.135f, openingWidth = 0.15f, openingHeight = 0.045f;
+    public float eyeballDiameter = 0.15f, openingWidth = 0.15f, openingHeight = 0.06f;
     public float femaleEyeScale = 1.04f;
     [Tooltip("The ear's centre sits this x the half depth behind the eye line's centre.")]
     public float earBehind = 0.12f;
     [Tooltip("Seed variation (+-, fraction) of each third, the eye spacing and size.")]
     public float canonVariation = 0.03f;
     [Tooltip("How far forward the eye centres sit (x the half depth).")]
-    public float eyeDepth = 0.8f;
+    public float eyeDepth = 0.74f;
+
+    [Header("Lids (Face Fix Part 3): degrees on the eyeball; thickness, crease depth in metres")]
+    [Tooltip("The upper curve's rise and the lower one's drop at mid-eye (relaxed: the upper lid over the iris's top, the lower touching its bottom).")]
+    public float lidUpper = 24f, lidLower = 27f;
+    [Tooltip("The inner and outer corners' azimuth from forward.")]
+    public float lidInner = 64f, lidOuter = 78f;
+    [Tooltip("The outer corner's lift (almond tilt).")]
+    public float lidTilt = 4f;
+    public Vector2 lidThickness = new Vector2(0.0025f, 0.0016f);
+    [Tooltip("The crease: degrees above the upper lid's edge; depth on a lean face (none on a fat one).")]
+    public float lidCrease = 14f, lidCreaseDepth = 0.0012f;
     [Tooltip("The face sits this x the half depth in front of the head joint (the neck attaches behind the jaw).")]
     public float faceForward = 0.25f;
 

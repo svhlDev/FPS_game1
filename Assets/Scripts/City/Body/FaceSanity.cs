@@ -69,7 +69,9 @@ public static class FaceSanity
                 Vector3 q = p - (neckA + ab * t); q.y = 0f;
                 float tube = q.magnitude - (neckR * 1.35f + 0.012f);
                 float underChin = Mathf.Max(c.chin - d.y - (0.03f + headFat), -d.z);
-                Over("below the chin, off the neck", Mathf.Min(tube, underChin));
+                // (Body surface the head's grid reaches - the trapezius, the collar - is the body's, not the face's.)
+                bool body = k.bones[k.Eval(p).nearest].kind != (int)BoneKind.Head;
+                if (!body) Over("below the chin, off the neck", Mathf.Min(tube, underChin));
             }
             // Far from every shape: blend inflation. The skin sits the local fat out from the muscle surface,
             // plus at most one smooth-min push (a quarter of the fat blend radius) in a concave corner.

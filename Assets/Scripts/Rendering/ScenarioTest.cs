@@ -895,6 +895,7 @@ public partial class ScenarioTest : MonoBehaviour
                 // three-quarter, back and body views without.
                 foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("canon", c + fwd * 0.45f), ("side", c + right * 0.45f),
                                                      ("34", c + fwd * 0.36f + right * 0.3f + Vector3.up * 0.03f),
+                                                     ("eye", c + fwd * 0.2f + right * 0.05f + Vector3.up * 0.01f),
                                                      ("back", c - fwd * 0.5f + right * 0.2f - Vector3.up * 0.06f),
                                                      ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
@@ -929,6 +930,8 @@ public partial class ScenarioTest : MonoBehaviour
             cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(hc.position - Vector3.up * 0.03f - from));
             yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_open_{name.Replace(' ', '_')}.png"));
+            var fan = go.GetComponent<FaceAnimator>();
+            if (fan != null) Log($"  {name} rig: jaw {(fan.Jaw != null ? fan.Jaw.localEulerAngles.x : -1f):0} deg, upper lid {(fan.UpperLids.Count > 0 ? fan.UpperLids[0].localEulerAngles.x : -1f):0} deg (closed {fan.lidClosed:0}), enabled {fan.isActiveAndEnabled}, blink {fan.BlinkOverride}");
             yield return null; yield return null;
         }
         foreach (var fa in anims) { fa.MouthOverride = -1f; fa.BlinkOverride = -1f; }
@@ -1783,12 +1786,13 @@ public partial class ScenarioTest : MonoBehaviour
         var sb = new StringBuilder("eyes: ");
         foreach (var f in figs)
         {
-            var iris = f.EyeL.Find("Iris").GetComponent<Renderer>().sharedMaterial;
+            var iris = f.EyeL.Find("Eyeball").GetComponent<Renderer>().sharedMaterial;
             sb.Append($"{f.name} glow {f.Plan.dna.eyeGlow:0.00} iris '{iris.name}' ({iris.shader.name}); ");
         }
         Log(sb.ToString());
         Log($"skin: {figs[0].Renderers[0].sharedMaterial.name} on {figs[0].Renderers[0].sharedMaterial.shader.name}, tones {string.Join(", ", figs.ConvertAll(f => f.Renderers[0].sharedMaterial.name))}");
-        bool glowOk = figs[0].Plan.dna.eyeGlow == 0f && figs[2].Plan.dna.eyeGlow == 1f && figs[2].EyeL.Find("Iris").GetComponent<Renderer>().sharedMaterial.shader.name.Contains("Unlit");
+        var glowMat = figs[2].EyeL.Find("Eyeball").GetComponent<Renderer>().sharedMaterial;
+        bool glowOk = figs[0].Plan.dna.eyeGlow == 0f && figs[2].Plan.dna.eyeGlow == 1f && glowMat.HasProperty("_Glow") && glowMat.GetColor("_Glow").maxColorComponent > 1f;
         Log(glowOk ? "PASS INT 20 eyes glow (HDR), INT 10 don't" : "FAIL eye glow");
 
         // Eyes follow a target to the side (within reach).

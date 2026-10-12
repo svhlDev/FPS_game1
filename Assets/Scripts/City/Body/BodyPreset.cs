@@ -17,7 +17,7 @@ using UnityEngine.Rendering;
 // warning to re-bake (the bodies are valid, just not what the current rules would make).
 public static class BodyPreset
 {
-    public const int Version = 4;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble
+    public const int Version = 5;   // 2: quantized vertices; 3: face masks (uv4), the jaw, the wig; 4: hair brows, scalp stubble; 5: the eye shape
     public const string ResourceName = "BodyPoolPreset";
 
     [Serializable] class ChainList { public List<ClothChainSet> chains = new List<ClothChainSet>(); }
@@ -50,7 +50,7 @@ public static class BodyPreset
         public Vector3 eyeL, eyeR; public float eyeRadius, height, width;
         public int triangles, skinTriangles, skinBefore; public int[] garmentTriangles;
         public MeshData body, head;
-        public WigStyle wigStyle; public Vector3 jawPivot, mouthCentre; public int jawBone;
+        public WigStyle wigStyle; public Vector3 jawPivot, mouthCentre; public int jawBone; public EyeShape eye;
         public Vector3[] wigV, wigN; public int[] wigT;
 
         public BodyAsset ToAsset()
@@ -62,7 +62,7 @@ public static class BodyPreset
                 triangles = triangles, skinTriangles = skinTriangles, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = garmentTriangles,
             };
             if (chains != null) a.chains.AddRange(chains);
-            a.wigStyle = wigStyle; a.jawPivot = jawPivot; a.mouthCentre = mouthCentre; a.jawBone = jawBone;
+            a.wigStyle = wigStyle; a.jawPivot = jawPivot; a.mouthCentre = mouthCentre; a.jawBone = jawBone; a.eye = eye;
             if (wigV != null && wigV.Length > 0)
             {
                 var wm = new Mesh { name = "Wig", indexFormat = wigV.Length > 65000 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
@@ -99,6 +99,8 @@ public static class BodyPreset
                 var gt = a.garmentTriangles ?? new int[0];
                 w.Write(gt.Length); foreach (int t in gt) w.Write(t);
                 w.Write((int)a.wigStyle); W(w, a.jawPivot); W(w, a.mouthCentre); w.Write(a.jawBone);
+                var es = a.eye;
+                foreach (float f in new[] { es.upper, es.lower, es.inner, es.outer, es.tilt, es.thickU, es.thickL, es.crease, es.creaseDepth }) w.Write(f);
                 WriteMesh(w, a.body); WriteMesh(w, a.head);
                 var wv = a.wig != null ? a.wig.vertices : new Vector3[0];
                 var wn = a.wig != null ? a.wig.normals : new Vector3[0];
@@ -174,6 +176,8 @@ public static class BodyPreset
             e.garmentTriangles = new int[r.ReadInt32()];
             for (int i = 0; i < e.garmentTriangles.Length; i++) e.garmentTriangles[i] = r.ReadInt32();
             e.wigStyle = (WigStyle)r.ReadInt32(); e.jawPivot = V3(r); e.mouthCentre = V3(r); e.jawBone = r.ReadInt32();
+            e.eye = new EyeShape { upper = r.ReadSingle(), lower = r.ReadSingle(), inner = r.ReadSingle(), outer = r.ReadSingle(), tilt = r.ReadSingle(),
+                                   thickU = r.ReadSingle(), thickL = r.ReadSingle(), crease = r.ReadSingle(), creaseDepth = r.ReadSingle() };
             e.body = ReadMesh(r); e.head = ReadMesh(r);
             int wn = r.ReadInt32();
             e.wigV = new Vector3[wn]; e.wigN = new Vector3[wn];

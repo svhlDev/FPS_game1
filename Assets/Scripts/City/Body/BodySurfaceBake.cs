@@ -34,7 +34,7 @@ public static class BodySurfaceBake
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {
                 string n = sdf.FacePartNames[i];
-                byte k = n.StartsWith("Brow") ? (byte)1 : n.StartsWith("Lip") ? (byte)2 : n == "MouthLine" ? (byte)3 : (byte)0;
+                byte k = n.StartsWith("Brow.") ? (byte)1 : n.StartsWith("Lip") ? (byte)2 : n == "MouthLine" ? (byte)3 : (byte)0;
                 if (k == 0) continue;
                 m.prims.Add(sdf.FacePrims[i]); m.kinds.Add(k);
             }

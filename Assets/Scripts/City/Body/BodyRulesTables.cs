@@ -126,8 +126,8 @@ public class MeshRules
     [Tooltip("Decimation keeps more detail where this is higher.")]
     public float headImportance = 6f, handImportance = 4f, footImportance = 2f, neckImportance = 2f;
     [Tooltip("The head is meshed on its own finer grid (face parts are ~1 cm), cut from the body a little down the neck.")]
-    public float headCell = 0.005f;
-    public int headTriangles = 4500;
+    public float headCell = 0.0035f;
+    public int headTriangles = 6000;
     [Tooltip("The head cut sits this far down the neck from the head joint (m), so the chin and jaw are in the head's grid.")]
     public float headCutBelow = 0.04f;
 }

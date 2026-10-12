@@ -122,6 +122,23 @@ public static class BodyMaterials
         return HairColours[i];
     }
 
+    // The eyeball (Face Fix Part 3): FPS/Eye, per iris colour and INT glow (8 steps, shared).
+    static readonly Dictionary<(Color, int), Material> eyes = new Dictionary<(Color, int), Material>();
+    static Shader eyeShader;
+    public static Material Eye(Color iris, float glow)
+    {
+        int step = Mathf.RoundToInt(Mathf.Clamp01(glow) * 8f);
+        if (eyes.TryGetValue((iris, step), out var m) && m != null) return m;
+        if (eyeShader == null) eyeShader = Shader.Find("FPS/Eye");
+        if (eyeShader == null) return Iris(iris, glow);
+        var rules = BodyRules.Default;
+        m = new Material(eyeShader) { name = $"Eye {ColorUtility.ToHtmlStringRGB(iris)} glow {step}", enableInstancing = true };
+        m.SetColor("_IrisColor", iris);
+        m.SetColor("_Glow", rules.eyeGlowColor * rules.eyeGlowIntensity * (step / 8f));
+        eyes[(iris, step)] = m;
+        return m;
+    }
+
     public static Material Sclera()
     {
         if (sclera != null) return sclera;

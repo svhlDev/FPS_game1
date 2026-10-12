@@ -28,6 +28,7 @@ public class BodyAsset
     public Vector3 jawPivot;             // root space, rest
     public Vector3 mouthCentre;          // root space, rest (the mouth cavity sits behind it)
     public int jawBone = -1;             // renderer bone index of the jaw (after the chain bones)
+    public EyeShape eye;                 // the eye opening (Face Fix Part 3: the blink cap and the eye's lid shadow follow it)
 }
 
 // Phase 8: generating a body without stalling the frame. A staged state machine, advanced by Step()
@@ -475,7 +476,7 @@ public class BodyBuild
         wigStyle = WigBuilder.Pick(sheet);
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
         var browPrims = new List<BodySdfKernel.FacePrim>();
-        for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow")) browPrims.Add(sdf.FacePrims[j]);
+        for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow.")) browPrims.Add(sdf.FacePrims[j]);
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre;
         var kernelCopy = sdf.Kernel;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
@@ -713,7 +714,7 @@ public class BodyBuild
         {
             sheet = sheet, plan = plan, outfit = outfit,
             body = Build("Body " + sheet, bodyParts), head = Build("Head " + sheet, headParts),
-            eyeL = sdf.EyeL, eyeR = sdf.EyeR, eyeRadius = sdf.EyeRadius,
+            eyeL = sdf.EyeL, eyeR = sdf.EyeR, eyeRadius = sdf.EyeRadius, eye = sdf.Eye,
             height = plan.height, width = width, triangles = triCount,
             skinTriangles = bodyParts.subs[0].Count / 3, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = gt,
         };
