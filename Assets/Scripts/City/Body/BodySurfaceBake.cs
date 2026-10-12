@@ -164,12 +164,20 @@ public static class BodySurfaceBake
     }
 
     // Applies a bake to a mesh (main thread).
+    // The face marks also ride in uv3.w, packed (stubble and lip 8 bits each, the mouth's inside 1 bit):
+    // skinned meshes don't reliably hand UV channel 4 to the shader (Face Fix Part 4: the face read lip
+    // everywhere, bodies without the channel read garbage); channel 3 works. FPS/BodySkin decodes it per vertex.
+    public static float PackMarks(Vector3 m) =>
+        Mathf.Round(Mathf.Clamp01(m.x) * 255f) + Mathf.Round(Mathf.Clamp01(m.y) * 255f) * 256f + (m.z > 0.5f ? 65536f : 0f);
+
     public static void Apply(Mesh m, Result r)
     {
         if (r.colors == null) return;
         m.colors = r.colors;
         m.SetUVs(0, r.uv0);
-        m.SetUVs(3, r.uv3);
+        var u3 = new Vector4[r.uv3.Length];
+        for (int i = 0; i < u3.Length; i++) { var p = r.uv3[i]; u3[i] = new Vector4(p.x, p.y, p.z, r.uv4 != null && i < r.uv4.Length ? PackMarks(r.uv4[i]) : 0f); }
+        m.SetUVs(3, u3);
         if (r.uv4 != null) m.SetUVs(4, r.uv4);
     }
 

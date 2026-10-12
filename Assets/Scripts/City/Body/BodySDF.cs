@@ -45,6 +45,7 @@ public class BodySDF : IDisposable
     readonly List<BodySdfKernel.FacePrim> faceParts = new List<BodySdfKernel.FacePrim>();
     public readonly List<string> FacePartNames = new List<string>();
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
+    readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();   // snapped face parts: their offset from the skin (m)
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;                                 // the face's frame / profile egg (fat mask, wig, bake)
@@ -190,6 +191,37 @@ public class BodySDF : IDisposable
             HeadBounds = new Bounds(headCutC, Vector3.one * headCutR * 2f);
         }
         kernel = BuildKernel(Allocator.Persistent);
+        SnapFaceParts();
+    }
+
+    // Face Fix Part 4: grooves snapped onto the skin. Each snapped part is placed where the skin is along
+    // the head's forward axis at its x / y (found with every snapped part switched off), then moved
+    // its offset (metres) along that axis.
+    void SnapFaceParts()
+    {
+        if (headIndex < 0 || snapOffsets.Count == 0) return;
+        var f = frames[headIndex];
+        var face = kernel.face;
+        var ops = new int[face.Length];
+        for (int j = 0; j < face.Length; j++) { ops[j] = face[j].op; if (snapOffsets.ContainsKey(j)) { var fp = face[j]; fp.op = (int)FacePartOp.Marker; face[j] = fp; } }
+        float far = Canon.halfD * 2f;
+        foreach (var kv in snapOffsets)
+        {
+            var fp = face[kv.Key];
+            Vector3 o = fp.o - f.z * Vector3.Dot(fp.o - Canon.o, f.z);   // on the eye line's plane, at its x / y
+            Vector3 p = o + f.z * far;
+            float prev = kernel.Eval(p).skin;
+            for (int it = 0; it < 400 && prev > 0f; it++)
+            {
+                float step = Mathf.Clamp(prev * 0.8f, 0.0003f, 0.004f);
+                p -= f.z * step;
+                prev = kernel.Eval(p).skin;
+            }
+            fp.o = p + f.z * kv.Value;
+            faceParts[kv.Key] = fp;
+        }
+        for (int j = 0; j < face.Length; j++) { var fp = faceParts[j]; fp.op = ops[j]; faceParts[j] = fp; face[j] = fp; }
+        for (int j = 0; j < FacePartNames.Count; j++) if (FacePartNames[j] == "MouthLine") MouthCentre = faceParts[j].o;
     }
 
     public void Dispose() => kernel.Dispose();
@@ -503,6 +535,7 @@ public class BodySDF : IDisposable
                     }
                 if (side < 0) { pos.x = -pos.x; rot.y = -rot.y; rot.z = -rot.z; }
                 var q = Quaternion.Euler(rot);
+                if (part.snap) { snapOffsets[faceParts.Count] = pos.z; pos.z = 1f; }
                 Vector3 r = part.shape == FacePartShape.Capsule || part.shape == FacePartShape.Sphere
                     ? new Vector3(size.x * rx, size.x * rx, size.x * rx) : new Vector3(size.x * rx, size.y * hy, size.z * rz);
                 faceParts.Add(new BodySdfKernel.FacePrim

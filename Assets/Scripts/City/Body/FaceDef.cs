@@ -40,6 +40,8 @@ public class FacePart
     public bool mirrored;
     [Tooltip("The canon line position.y is measured from (half-head-heights).")]
     public FaceLine anchor;
+    [Tooltip("Snapped onto the skin (grooves): placed where the skin is at its x / y, position.z = metres from it (inward negative).")]
+    public bool snap;
     [Tooltip("Smooth-union (or subtract) radius, m.")]
     public float blend = 0.008f;
     [Tooltip("Which DNA face scale multiplies the size.")]
@@ -114,8 +116,9 @@ public class FaceDef
 
     static FacePart P(string name, FaceLine anchor, FacePartShape shape, Vector3 pos, Vector3 rot, Vector3 size, float blend, FacePartScale scale = FacePartScale.None,
                       bool mirrored = false, Vector3 femaleSize = default, Vector3 femaleOffset = default, FacePartOp op = FacePartOp.Union,
-                      Vector3 posVar = default, Vector3 rotVar = default, Vector3 sizeVar = default) => new FacePart
+                      Vector3 posVar = default, Vector3 rotVar = default, Vector3 sizeVar = default, bool snap = false) => new FacePart
     {
+        snap = snap,
         name = name, anchor = anchor, shape = shape, op = op, position = pos, rotationEuler = rot, size = size, blend = blend, scaleBy = scale, mirrored = mirrored,
         femaleSize = femaleSize == default ? Vector3.one : femaleSize, femaleOffset = femaleOffset,
         positionVar = posVar, rotationVar = rotVar, sizeVar = sizeVar,
@@ -146,31 +149,54 @@ public class FaceDef
         P("Brow", FaceLine.Brow, FacePartShape.Capsule, new Vector3(0.33f, 0.03f, 0.943f), new Vector3(0f, 12f, -83f), new Vector3(0.09f, 0.21f, 0f), 0.008f, FacePartScale.Brow,
           mirrored: true, femaleSize: new Vector3(0.7f, 0.92f, 1f), femaleOffset: new Vector3(0f, 0.02f, 0f), op: FacePartOp.Marker,
           posVar: new Vector3(0.02f, 0.02f, 0.01f), rotVar: new Vector3(0f, 4f, 6f), sizeVar: new Vector3(0.2f, 0.12f, 0f)),
-        // Nose: the bridge from between the eyes down and forward to the tip; the underside back into the face; nostrils.
-        P("NoseBridge", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.24f, 0.962f), new Vector3(-30f, 0f, 0f), new Vector3(0.09f, 0.25f, 0f), 0.007f, FacePartScale.Nose,
+        // ---- Nose (Face Fix Part 4) ----
+        // The bridge: from between the eyes (at the sockets' inner edge, the nasion) down and forward to the tip.
+        P("NoseBridge", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.266f, 0.96f), new Vector3(-30.5f, 0f, 0f), new Vector3(0.08f, 0.202f, 0f), 0.008f, FacePartScale.Nose,
           femaleSize: new Vector3(0.82f, 0.94f, 1f), posVar: new Vector3(0f, 0.02f, 0.02f), rotVar: new Vector3(5f, 0f, 0f), sizeVar: new Vector3(0.15f, 0.1f, 0f)),
-        P("NoseUnder", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.01f, 0.944f), new Vector3(75f, 0f, 0f), new Vector3(0.11f, 0.1f, 0f), 0.007f, FacePartScale.Nose,
-          femaleSize: new Vector3(0.82f, 0.9f, 1f), sizeVar: new Vector3(0.12f, 0.1f, 0f)),
-        P("Nostril", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0.101f, 0f, 0.877f), new Vector3(70f, 0f, -35f), new Vector3(0.08f, 0.07f, 0f), 0.005f, FacePartScale.Nose,
-          mirrored: true, femaleSize: new Vector3(0.8f, 0.85f, 1f), sizeVar: new Vector3(0.12f, 0.1f, 0f)),
-        // Mouth area: an oval muzzle split into upper and lower halves meeting at the mouth line.
-        P("MuzzleUpper", FaceLine.Mouth, FacePartShape.HalfEllipsoidUpper, new Vector3(0f, 0.013f, 0.649f), Vector3.zero, new Vector3(0.4f, 0.2f, 0.24f), 0.012f,
+        P("NoseTip", FaceLine.NoseBase, FacePartShape.Sphere, new Vector3(0f, 0.06f, 1.06f), Vector3.zero, new Vector3(0.11f, 0f, 0f), 0.006f, FacePartScale.Nose,
+          femaleSize: new Vector3(0.85f, 1f, 1f), posVar: new Vector3(0f, 0.015f, 0.03f), sizeVar: new Vector3(0.15f, 0f, 0f)),
+        // The nostril wings (alae): rounded lumps either side of the tip, their bases on the nose base line.
+        P("Ala", FaceLine.NoseBase, FacePartShape.Ellipsoid, new Vector3(0.15f, 0.06f, 0.9f), Vector3.zero, new Vector3(0.09f, 0.07f, 0.09f), 0.004f, FacePartScale.Nose,
+          mirrored: true, femaleSize: new Vector3(0.85f, 0.9f, 0.9f), sizeVar: new Vector3(0.12f, 0.1f, 0.1f)),
+        // The columella: from the tip back to the base, between the nostrils.
+        P("NoseUnder", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.005f, 0.95f), new Vector3(76f, 0f, 0f), new Vector3(0.05f, 0.062f, 0f), 0.004f, FacePartScale.Nose,
+          femaleSize: new Vector3(0.85f, 0.9f, 1f), sizeVar: new Vector3(0.12f, 0.1f, 0f)),
+        // The nostrils: small openings cut into the underside (after the fat).
+        P("Nostril", FaceLine.NoseBase, FacePartShape.Ellipsoid, new Vector3(0.075f, -0.005f, 0.97f), new Vector3(0f, 20f, 0f), new Vector3(0.035f, 0.02f, 0.045f), 0.002f, FacePartScale.Nose,
+          mirrored: true, op: FacePartOp.Subtract, femaleSize: new Vector3(0.85f, 0.9f, 0.9f)),
+        // ---- Mouth ----
+        // The muzzle: upper and lower half-ovals meeting at the mouth line, curving round the front (an arc in top view).
+        P("MuzzleUpper", FaceLine.Mouth, FacePartShape.HalfEllipsoidUpper, new Vector3(0f, 0.013f, 0.62f), Vector3.zero, new Vector3(0.45f, 0.2f, 0.28f), 0.012f,
           sizeVar: new Vector3(0.06f, 0.06f, 0.06f)),
-        P("MuzzleLower", FaceLine.Mouth, FacePartShape.HalfEllipsoidLower, new Vector3(0f, 0.013f, 0.649f), Vector3.zero, new Vector3(0.36f, 0.22f, 0.22f), 0.012f,
+        P("MuzzleLower", FaceLine.Mouth, FacePartShape.HalfEllipsoidLower, new Vector3(0f, 0.013f, 0.62f), Vector3.zero, new Vector3(0.42f, 0.22f, 0.26f), 0.012f,
           sizeVar: new Vector3(0.06f, 0.06f, 0.06f)),
-        // Lips: each from two capsules meeting at the centre with a small angle (crisp blends).
-        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.069f, 0.033f, 0.88f), new Vector3(0f, 14f, -84f), new Vector3(0.05f, 0.1f, 0f), 0.003f,
-          mirrored: true, femaleSize: new Vector3(1.35f, 1.05f, 1f), sizeVar: new Vector3(0.15f, 0.08f, 0f)),
-        P("LipLower", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.06f, -0.032f, 0.853f), new Vector3(0f, 14f, -96f), new Vector3(0.058f, 0.09f, 0f), 0.003f,
-          mirrored: true, femaleSize: new Vector3(1.35f, 1.05f, 1f), sizeVar: new Vector3(0.15f, 0.08f, 0f)),
-        // The mouth line: a thin groove between the lips, cut after the fat.
-        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, 0.906f), new Vector3(0f, 0f, -90f), new Vector3(0.03f, 0.18f, 0f), 0.002f,
-          op: FacePartOp.Subtract),
+        // The upper lip: an M-shaped bow, two capsules from the centre to the corners (meeting with a small
+        // dip), wrapping back round the muzzle, a little in front of the lower lip.
+        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.1875f, 0.02f, 0.8125f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.055f, 0.145f, 0f), 0.003f,
+          mirrored: true, femaleSize: new Vector3(1.3f, 1.02f, 1f), sizeVar: new Vector3(0.15f, 0.06f, 0f)),
+        // The lower lip: fuller, one rounded oval, slightly behind the upper.
+        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.045f, 0.8f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.1f), 0.004f,
+          femaleSize: new Vector3(1.05f, 1.3f, 1.15f), sizeVar: new Vector3(0.08f, 0.15f, 0.1f)),
+        // Grooves, cut after the fat and snapped onto the skin (position.z = metres from it, inward negative):
+        // the philtrum (nose base to the upper lip), the mouth line (deepening into the tucked-in corners),
+        // the nasolabial folds (the nostril wing to beyond the mouth corner), the chin's groove under the lower lip.
+        P("Philtrum", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0.11f, -0.0008f), Vector3.zero, new Vector3(0.025f, 0.06f, 0f), 0.002f,
+          op: FacePartOp.Subtract, snap: true),
+        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, -0.0005f), new Vector3(0f, 0f, -90f), new Vector3(0.02f, 0.12f, 0f), 0.0015f,
+          op: FacePartOp.Subtract, snap: true),
+        P("MouthLineSide", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.24f, -0.003f, -0.0006f), new Vector3(0f, 33.6f, -91f), new Vector3(0.022f, 0.09f, 0f), 0.0015f,
+          mirrored: true, op: FacePartOp.Subtract, snap: true),
+        P("MouthCorner", FaceLine.Mouth, FacePartShape.Sphere, new Vector3(0.37f, -0.004f, -0.0022f), Vector3.zero, new Vector3(0.045f, 0f, 0f), 0.002f,
+          mirrored: true, op: FacePartOp.Subtract, snap: true),
+        P("Nasolabial", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.345f, 0.04f, -0.0006f), new Vector3(0f, 0f, -153.3f), new Vector3(0.03f, 0.163f, 0f), 0.002f,
+          mirrored: true, op: FacePartOp.Subtract, snap: true),
+        P("ChinGroove", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, -0.14f, -0.0012f), new Vector3(0f, 0f, -90f), new Vector3(0.05f, 0.12f, 0f), 0.003f,
+          op: FacePartOp.Subtract, snap: true),
         // Cheek fat pad: a soft oval below the eye on the front of the cheekbone, sloping down and in toward
         // the mouth corner (its lower inner edge is the nasolabial fold).
         P("Cheek", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.42f, -0.3f, 0.74f), new Vector3(0f, 10f, -20f), new Vector3(0.17f, 0.22f, 0.13f), 0.012f,
           mirrored: true, sizeVar: new Vector3(0.12f, 0.1f, 0.12f), posVar: new Vector3(0.02f, 0.02f, 0f)),
-        // Chin: on the front of the jaw's U.
+        // Chin: on the front of the jaw's U (its groove above it: ChinGroove).
         P("Chin", FaceLine.Chin, FacePartShape.Ellipsoid, new Vector3(0f, 0.29f, 0.717f), Vector3.zero, new Vector3(0.34f, 0.19f, 0.2f), 0.014f, FacePartScale.Chin,
           femaleSize: new Vector3(0.8f, 0.9f, 0.9f), femaleOffset: new Vector3(0f, 0.03f, -0.02f), posVar: new Vector3(0f, 0.02f, 0.02f), sizeVar: new Vector3(0.1f, 0.08f, 0.08f)),
     };

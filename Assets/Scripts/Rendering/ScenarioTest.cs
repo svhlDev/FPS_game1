@@ -896,10 +896,11 @@ public partial class ScenarioTest : MonoBehaviour
                 foreach (var (view, from) in new[] { ("front", c + fwd * 0.62f + Vector3.up * 0.02f), ("canon", c + fwd * 0.45f), ("side", c + right * 0.45f),
                                                      ("34", c + fwd * 0.36f + right * 0.3f + Vector3.up * 0.03f),
                                                      ("eye", c + fwd * 0.2f + right * 0.05f + Vector3.up * 0.01f),
+                                                     ("mouth", c + fwd * 0.24f + right * 0.08f - Vector3.up * 0.045f),
                                                      ("back", c - fwd * 0.5f + right * 0.2f - Vector3.up * 0.06f),
                                                      ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
-                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : c;
+                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : view == "mouth" ? c - Vector3.up * 0.055f : c;
                     bool ortho = view == "canon" || view == "side";
                     cam.orthographic = ortho; cam.orthographicSize = 0.17f;
                     if (ov != null) ov.Show(view == "canon" ? HeadCanonOverlay.View.Front : view == "side" ? HeadCanonOverlay.View.Side : HeadCanonOverlay.View.Off);
@@ -926,10 +927,56 @@ public partial class ScenarioTest : MonoBehaviour
             Transform hc = null;
             foreach (var t in go.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
             if (hc == null) continue;
-            Vector3 from = hc.position + go.transform.forward * 0.55f + go.transform.right * 0.15f;
-            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(hc.position - Vector3.up * 0.03f - from));
+            // Straight at the mouth, from its height.
+            var fgo = go.GetComponent<CharacterFigure>();
+            Vector3 mouthW = fgo != null && fgo.HeadJoint != null ? fgo.HeadJoint.TransformPoint(fgo.Asset.mouthCentre - fgo.Plan.JointPos(fgo.Plan.Index("Head"))) : hc.position - Vector3.up * 0.06f;
+            Vector3 from = mouthW + go.transform.forward * 0.3f + Vector3.up * 0.02f;
+            cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(mouthW + Vector3.up * 0.01f - from));
             yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
             ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_open_{name.Replace(' ', '_')}.png"));
+            if (name == "M DEX10" && fgo != null && fgo.HeadRenderer is SkinnedMeshRenderer hsm)
+            {
+                // Posed (mouth open): the triangles that stretched most, their marks and jaw weights.
+                var baked = new Mesh(); hsm.BakeMesh(baked, true);
+                var bv = baked.vertices; var rv = hsm.sharedMesh.vertices; var tri = hsm.sharedMesh.triangles;
+                var mk4 = new List<Vector3>(); hsm.sharedMesh.GetUVs(4, mk4); var bw4 = hsm.sharedMesh.boneWeights;
+                var grow = new List<(float, int)>();
+                for (int q = 0; q < tri.Length; q += 3)
+                {
+                    float ra = Vector3.Cross(rv[tri[q + 1]] - rv[tri[q]], rv[tri[q + 2]] - rv[tri[q]]).magnitude;
+                    float ba = Vector3.Cross(bv[tri[q + 1]] - bv[tri[q]], bv[tri[q + 2]] - bv[tri[q]]).magnitude;
+                    grow.Add((ba - ra, q));
+                }
+                float JW(BoneWeight bw) => (bw.boneIndex0 == fgo.Asset.jawBone ? bw.weight0 : 0f) + (bw.boneIndex1 == fgo.Asset.jawBone ? bw.weight1 : 0f) + (bw.boneIndex2 == fgo.Asset.jawBone ? bw.weight2 : 0f);
+                // What the camera sees where the dark triangles are: a ray at each one's centre (posed).
+                var mcGo = new GameObject("MouthProbe"); mcGo.transform.SetPositionAndRotation(hsm.transform.position, hsm.transform.rotation);
+                var bakedW = new Mesh(); hsm.BakeMesh(bakedW, true);
+                var col = mcGo.AddComponent<MeshCollider>(); col.sharedMesh = bakedW;
+                Physics.SyncTransforms();
+                var bvv = bakedW.vertices; var sbr = new System.Text.StringBuilder(); int shown = 0, hidden = 0;
+                for (int q = 0; q < tri.Length && shown + hidden < 12; q += 3)
+                {
+                    if (!(mk4[tri[q]].z > 0.5f && mk4[tri[q + 1]].z > 0.5f && mk4[tri[q + 2]].z > 0.5f)) continue;
+                    Vector3 cen = mcGo.transform.TransformPoint((bvv[tri[q]] + bvv[tri[q + 1]] + bvv[tri[q + 2]]) / 3f);
+                    Vector3 eyeP = cam.transform.position;
+                    if (Physics.Raycast(eyeP, (cen - eyeP).normalized, out var hit, 2f) && hit.collider == col)
+                    {
+                        int ht = hit.triangleIndex * 3;
+                        bool same = ht == q;
+                        if (same) shown++; else { hidden++; sbr.Append($"[hit tri inside {mk4[tri[ht]].z:0}/{mk4[tri[ht + 1]].z:0}/{mk4[tri[ht + 2]].z:0} jaw {JW(bw4[tri[ht]]):0.0}/{JW(bw4[tri[ht + 1]]):0.0}/{JW(bw4[tri[ht + 2]]):0.0} {(hit.point - cen).magnitude * 1000f:0} mm before, normal.cam {Vector3.Dot(hit.normal, -(cen - eyeP).normalized):0.00}] "); }
+                    }
+                }
+                Log($"  dark triangles seen {shown}, hidden {hidden}: {sbr}");
+                Object.Destroy(mcGo);
+            }
+            // ... and in profile.
+            {
+                Vector3 side = mouthW + go.transform.right * 0.3f + go.transform.forward * 0.05f;
+                cam.transform.SetPositionAndRotation(side, Quaternion.LookRotation(mouthW + go.transform.forward * 0.02f - side));
+                yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+                ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_openside_{name.Replace(' ', '_')}.png"));
+                yield return null; yield return null;
+            }
             var fan = go.GetComponent<FaceAnimator>();
             if (fan != null) Log($"  {name} rig: jaw {(fan.Jaw != null ? fan.Jaw.localEulerAngles.x : -1f):0} deg, upper lid {(fan.UpperLids.Count > 0 ? fan.UpperLids[0].localEulerAngles.x : -1f):0} deg (closed {fan.lidClosed:0}), enabled {fan.isActiveAndEnabled}, blink {fan.BlinkOverride}");
             yield return null; yield return null;
@@ -946,6 +993,44 @@ public partial class ScenarioTest : MonoBehaviour
                 foreach (var m in mk) { if (m.x > 0.5f) brow++; if (m.y > 0.5f) lip++; if (m.z > 0.5f) inside++; }
                 foreach (var bw in hm.boneWeights) if (bw.boneIndex0 == fg0.Asset.jawBone || bw.boneIndex1 == fg0.Asset.jawBone) jaw++;
                 Log($"face masks on M DEX10: {mk.Count} verts, brow {brow}, lip {lip}, mouth inside {inside}; {jaw} verts on the jaw (bone {fg0.Asset.jawBone})");
+                // The mouth's bridging triangles (dark inside) and where they sit round the mouth centre (rest, mm).
+                var tv = hm.vertices; var tt = hm.triangles; int bridgeTris = 0; float bxMin = 1f, bxMax = -1f, byMin = 1f, byMax = -1f;
+                Vector3 mc = fg0.Asset.mouthCentre;
+                for (int q = 0; q < tt.Length; q += 3)
+                    if (mk[tt[q]].z > 0.5f && mk[tt[q + 1]].z > 0.5f && mk[tt[q + 2]].z > 0.5f)
+                    {
+                        bridgeTris++;
+                        for (int e = 0; e < 3; e++) { var d = tv[tt[q + e]] - mc; bxMin = Mathf.Min(bxMin, d.x); bxMax = Mathf.Max(bxMax, d.x); byMin = Mathf.Min(byMin, d.y); byMax = Mathf.Max(byMax, d.y); }
+                    }
+                // Jaw weight of the head's vertices within 1 cm above / below the mouth centre, inside the mouth's width.
+                int[] hist = new int[5]; var bws = hm.boneWeights;
+                for (int q = 0; q < tv.Length; q++)
+                {
+                    var d = tv[q] - mc;
+                    if (Mathf.Abs(d.x) > 0.02f || Mathf.Abs(d.y) > 0.01f || d.z < -0.02f) continue;
+                    var bw = bws[q]; float w = (bw.boneIndex0 == fg0.Asset.jawBone ? bw.weight0 : 0f) + (bw.boneIndex1 == fg0.Asset.jawBone ? bw.weight1 : 0f) + (bw.boneIndex2 == fg0.Asset.jawBone ? bw.weight2 : 0f);
+                    hist[Mathf.Clamp((int)(w * 4.999f), 0, 4)]++;
+                }
+                {
+                    // Which mesh carries the face: body-mesh vertices in front of the face, and the face's top bones.
+                    var plan0 = fg0.Plan; int hiB = plan0.Index("Head");
+                    var cn = HeadCanon.From(plan0, hiB, plan0.JointPos(hiB), Vector3.right, Vector3.up, Vector3.forward);
+                    var bodyM = fg0.Renderers[0] is SkinnedMeshRenderer bsm ? bsm.sharedMesh : null;
+                    int bodyFace = 0;
+                    if (bodyM != null) foreach (var bvx in bodyM.vertices) { var d = bvx - cn.o; if (d.z > cn.halfD * 0.5f && d.y > cn.chin && d.y < cn.brow && Mathf.Abs(d.x) < cn.halfW * 0.6f) bodyFace++; }
+                    var tops = new Dictionary<string, int>();
+                    for (int q = 0; q < tv.Length; q++)
+                    {
+                        var d = tv[q] - cn.o;
+                        if (d.z < cn.halfD * 0.5f || d.y < cn.chin || d.y > cn.brow) continue;
+                        int bi = hm.boneWeights[q].boneIndex0;
+                        string bn = bi == fg0.Asset.jawBone ? "Jaw" : bi < plan0.bones.Count ? plan0.bones[bi].name : "chain" + bi;
+                        tops.TryGetValue(bn, out int c0); tops[bn] = c0 + 1;
+                    }
+                    var tsb = new System.Text.StringBuilder(); foreach (var kv in tops) tsb.Append($"{kv.Key} {kv.Value} ");
+                    Log($"face front: {bodyFace} body-mesh vertices in front of the face; head-mesh face vertices by top bone: {tsb}");
+                }
+                Log($"mouth: {bridgeTris} bridging triangles, x {bxMin * 1000f:0}..{bxMax * 1000f:0} mm, y {byMin * 1000f:0}..{byMax * 1000f:0} mm round the mouth centre; jaw weights near it (0-.2/../.8-1): {string.Join(" ", hist)}");
             }
         }
         Log(rigs == anims.Count && rigs > 0 ? "PASS every face has a jaw and eyelids" : "FAIL face rig");

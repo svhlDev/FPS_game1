@@ -63,8 +63,7 @@ Shader "FPS/BodySkin"
             struct Attributes
             {
                 float4 positionOS : POSITION; float3 normalOS : NORMAL;
-                float3 restPos : TEXCOORD3; half4 color : COLOR;
-                float3 marks : TEXCOORD4;   // brow, lip, mouth-interior masks (BodySurfaceBake)
+                float4 restPos : TEXCOORD3; half4 color : COLOR;   // w: the face marks, packed (BodySurfaceBake.PackMarks)
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
             struct Varyings
@@ -89,9 +88,14 @@ Shader "FPS/BodySkin"
                 o.positionWS = p.positionWS;
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
                 o.fogFactor = ComputeFogFactor(p.positionCS.z);
-                o.restPos = v.restPos;
+                o.restPos = v.restPos.xyz;
                 o.color = v.color;
-                o.marks = v.marks;
+                // Scalp stubble, lips, the mouth's inside (decoded per vertex, then interpolated).
+                float w = v.restPos.w;
+                float inside = floor(w / 65536.0);
+                float rest = w - inside * 65536.0;
+                float lip = floor(rest / 256.0);
+                o.marks = half3((rest - lip * 256.0) / 255.0, lip / 255.0, inside);
                 return o;
             }
 
@@ -143,7 +147,7 @@ Shader "FPS/BodySkin"
                 half smoothVar = 1.0h;
                 if (fade > 0.01)
                 {
-                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade * (1.0 - _QualityDetailCut);   // metres
+                    float h = SkinHeight(i.restPos) * 0.0004 * _PoreStrength * fade * (1.0 - _QualityDetailCut) * (1.0 - mk.y * 0.85);   // metres (lips: smooth)
                     float3 dpdx = ddx(i.positionWS), dpdy = ddy(i.positionWS);
                     float3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
                     float det = dot(dpdx, r1);

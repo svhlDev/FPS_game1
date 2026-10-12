@@ -104,6 +104,7 @@ public class BodyBuild
     BodySurfaceBake.FaceMarks faceMarks;
     BodySdfKernel.Ellipsoid skullCopy;
     Vector3 jawPivot, mouthCentre;
+    float mouthHalf = 0.025f;
     int jawBone = -1;
     WigStyle wigStyle;
     bool hasWig; Vector3[] wigV, wigN; int[] wigT;
@@ -477,7 +478,7 @@ public class BodyBuild
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
         var browPrims = new List<BodySdfKernel.FacePrim>();
         for (int j = 0; j < sdf.FacePrims.Count; j++) if (sdf.FacePartNames[j].StartsWith("Brow.")) browPrims.Add(sdf.FacePrims[j]);
-        skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre;
+        skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
         task = Task.Run(() =>
@@ -564,13 +565,17 @@ public class BodyBuild
         {
             Vector3 d = head.v[i] - mouthCentre;
             float dx = Mathf.Abs(Vector3.Dot(d, skullCopy.x)), dy = Vector3.Dot(d, skullCopy.y), dz = Vector3.Dot(d, skullCopy.z);
-            float inMouth = (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.02f, 0.028f, dx))) * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.035f, -0.015f, dz));
+            // The mouth's width from the canon (the pupils' distance); its corners wrap back round the muzzle.
+            float inMouth = (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(mouthHalf - 0.004f, mouthHalf + 0.003f, dx))) * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(-0.045f, -0.025f, dz));
             float wj = JawWeight(head.v[i], skullCopy, mouthCentre, jawPivot);
-            if (inMouth > 0.5f) wj = dy < -0.0015f ? Mathf.Max(wj, 1f) : 0f;
+            // Inside the mouth the split is sharp; the lower lip follows the jaw fully at the middle, less toward
+            // the corners (they barely move): a lens-shaped opening, not a box.
+            float across = Mathf.Clamp01(dx / Mathf.Max(0.005f, mouthHalf));
+            if (inMouth > 0.5f) wj = dy < -0.0015f ? Mathf.Lerp(0.3f, 1f, 1f - across * across) : 0f;
             wjs[i] = wj; inM[i] = inMouth;
             if (wj > 0.001f) head.w[i] = BlendIn(head.w[i], jawBone, wj);
             float G(float x) => Mathf.Exp(-x * x);
-            float lip = (G((dy - 0.005f) / 0.004f) + G((dy + 0.008f) / 0.005f)) * inMouth;
+            float lip = (G((dy - 0.004f) / 0.004f) + G((dy + 0.0045f) / 0.005f)) * inMouth;
             var mk = head.bake.uv4[i];
             head.bake.uv4[i] = new Vector3(mk.x, Mathf.Max(mk.y, Mathf.Clamp01(lip)), mk.z);
         }
@@ -583,6 +588,7 @@ public class BodyBuild
         var W2 = new List<BoneWeight>(head.w); var C2 = new List<Color>(head.bake.colors); var U0 = new List<Vector2>(head.bake.uv0);
         var U3 = new List<Vector3>(head.bake.uv3); var U4 = new List<Vector3>(head.bake.uv4);
         var bridge = new HashSet<int>();
+        var backs = new List<int>();
         for (int k2 = 0; k2 + 2 < ht.Count; k2 += 3)
         {
             int a = ht[k2], b = ht[k2 + 1], c = ht[k2 + 2];
@@ -601,7 +607,11 @@ public class BodyBuild
                 }
                 ht[k2 + q] = nvx;
             }
+            backs.Add(ht[k2]); backs.Add(ht[k2 + 2]); backs.Add(ht[k2 + 1]);
         }
+        // The inside of the mouth shows from both sides: opened, a bridging triangle can face away (the lips'
+        // groove folds them), and a culled one would show the head's inside through the mouth.
+        ht.AddRange(backs);
         foreach (int v in new List<int>(bridge)) U4[v] = new Vector3(U4[v].x, U4[v].y, 0f);   // the originals: lip, not inside
         foreach (int v in dup.Values) bridge.Add(v);
         for (int i = 0; i < V2.Count; i++)
