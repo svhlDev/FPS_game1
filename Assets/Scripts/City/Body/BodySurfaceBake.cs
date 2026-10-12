@@ -143,6 +143,8 @@ public static class BodySurfaceBake
                     Vector3 u = new Vector3(l.x / sk.r.x, l.y / sk.r.y, l.z / sk.r.z);
                     float window = Mathf.Min(u.z - 0.05f, 1f - new Vector2(Mathf.Abs(u.x) / 0.86f, (u.y + 0.2f) / 0.78f).magnitude);
                     stub = Mathf.Clamp01(-window / 0.06f) * Mathf.Clamp01((u.y + 0.62f) / 0.1f);
+                    // Only the scalp: behind the ears below their tops (never under the jaw or on the neck's front).
+                    stub *= Mathf.Clamp01(Mathf.Max((u.y + 0.1f) / 0.15f, (-0.05f - u.z) / 0.15f));
                     if (face.earL.on != 0)
                     {
                         // Not on the ears (nor right where they join the head).

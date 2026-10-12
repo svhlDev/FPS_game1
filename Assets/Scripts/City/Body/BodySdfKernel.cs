@@ -38,7 +38,8 @@ public struct BodySdfKernel : IDisposable
         public Vector3 centre;          // a sphere round the hand that bounds the cut
         public float radius;
         public int hand;
-        public float cutBody, cutHand, shrink;   // per cut (the head's overlap is longer); 0 = the kernel's
+        public float cutBody, cutHand, shrink;   // per cut when `own` (the head's: one plane, no overlap); else the kernel's
+        public int own;
     }
 
     public struct Ellipsoid
@@ -617,7 +618,7 @@ public struct BodySdfKernel : IDisposable
                 var c = cuts[h];
                 float sphere = (p - c.centre).magnitude - c.radius;
                 if (sphere > 0.02f) continue;
-                float cb = c.shrink > 0f ? c.cutBody : cutBody, ch = c.shrink > 0f ? c.cutHand : cutHand, sh = c.shrink > 0f ? c.shrink : cutShrink;
+                float cb = c.own != 0 ? c.cutBody : cutBody, ch = c.own != 0 ? c.cutHand : cutHand, sh = c.own != 0 ? c.shrink : cutShrink;
                 float span = Mathf.Max(1e-4f, cb - ch);
                 float s = Vector3.Dot(p - c.o, c.axis);
                 // Shrinks under the hand's skin toward the cut, removed past it (inside the sphere).
@@ -627,7 +628,7 @@ public struct BodySdfKernel : IDisposable
             return skin;
         }
         var k = cuts[cutMode - 2];
-        float kb = k.shrink > 0f ? k.cutBody : cutBody, kh = k.shrink > 0f ? k.cutHand : cutHand, ks = k.shrink > 0f ? k.shrink : cutShrink;
+        float kb = k.own != 0 ? k.cutBody : cutBody, kh = k.own != 0 ? k.cutHand : cutHand, ks = k.own != 0 ? k.shrink : cutShrink;
         float kspan = Mathf.Max(1e-4f, kb - kh);
         float sk = Vector3.Dot(p - k.o, k.axis);
         skin += ks * Mathf.Clamp01((kb - sk) / kspan);

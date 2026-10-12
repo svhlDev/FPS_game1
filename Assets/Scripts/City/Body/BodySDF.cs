@@ -74,6 +74,9 @@ public class BodySDF : IDisposable
     public bool HasHeadPiece => HeadBounds.size.x > 0f;
     public int HeadMode => 2 + HandCount;
     Vector3 headCutO, headCutAxis, headCutC; float headCutR;
+    public Vector3 HeadCutOrigin => headCutO;
+    public Vector3 HeadCutAxis => headCutAxis;
+    public float HeadCutRadius => headCutR;
 
     public BodyPlan Plan => plan;
     public BodySdfKernel Kernel => kernel;
@@ -339,10 +342,10 @@ public class BodySDF : IDisposable
                 var (c, r) = HandSphere(i);
                 cutList.Add(new BodySdfKernel.HandCut { o = start[i], axis = frames[i].y, centre = c, radius = r, hand = i });
             }
-        // The head's cut goes last (cut mode 2 + HandCount).
-        // Its overlap is longer (4.5 cm) and its tuck deeper: the body's 1.5 cm grid edge is ragged.
+        // The head's cut goes last (cut mode 2 + HandCount): one plane for both pieces, no overlap - BodyBuild
+        // welds the two neck rings into one surface (Face Fix Part 7).
         if (HasHeadPiece) cutList.Add(new BodySdfKernel.HandCut { o = headCutO, axis = headCutAxis, centre = headCutC, radius = headCutR, hand = headIndex,
-                                                                  cutBody = 0.01f, cutHand = -0.035f, shrink = 0.012f });
+                                                                  cutBody = 0f, cutHand = 0f, shrink = 0f, own = 1 });
         k.cuts = new NativeArray<BodySdfKernel.HandCut>(cutList.ToArray(), alloc);
         if (plan.dna != null)
         {

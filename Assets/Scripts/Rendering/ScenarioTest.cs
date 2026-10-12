@@ -873,7 +873,7 @@ public partial class ScenarioTest : MonoBehaviour
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
                 HeadCanonOverlay.Attach(f);
-                Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges");
+                Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);
                 yield return null;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Unity.Collections;
 using Unity.Jobs;
@@ -28,6 +29,7 @@ public class BodyAsset
     public Vector3 jawPivot;             // root space, rest
     public Vector3 mouthCentre;          // root space, rest (the mouth cavity sits behind it)
     public int jawBone = -1;             // renderer bone index of the jaw (after the chain bones)
+    public string neckWeld = "";         // how the head and body were joined (Face Fix Part 7; not in presets)
     public EyeShape eye;                 // the eye opening (Face Fix Part 3: the blink cap and the eye's lid shadow follow it)
 }
 
@@ -57,6 +59,7 @@ public class BodyBuild
     public readonly float[] StageMainMs = new float[9];
     // Wall-clock milliseconds each stage took (start of the stage to the step that finished it).
     public readonly float[] StageWallMs = new float[9];
+    public string NeckReport { get; private set; } = "";
     double stageStart;
 
     readonly CharacterSheet sheet;
@@ -482,8 +485,13 @@ public class BodyBuild
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
+        bool weld = sdf.HasHeadPiece;
+        Vector3 cutO = sdf.HeadCutOrigin, cutAxis = sdf.HeadCutAxis; float cutR = sdf.HeadCutRadius;
+        int headMode = sdf.HeadMode; float headCell = BodyRules.Default.mesh.headCell, bodyCell = ms.cell;
+        var VP = vertPiece;
         task = Task.Run(() =>
         {
+            if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
             hasWig = WigBuilder.Build(kernelCopy, wigStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT);
         });
@@ -627,6 +635,170 @@ public class BodyBuild
         bodyParts = body; headParts = head;
     }
 
+    // Face Fix Part 7: one surface at the neck. The body and the head piece are cut at the same plane
+    // (no overlap): each closes with a flat cap there. The caps go; both open rings are moved onto the
+    // skin's cross-section in that plane (the uncut body's surface, radially from the neck's axis), get
+    // the uncut body's normals, and are stitched together with a strip of triangles - shared vertices,
+    // one mesh surface, no gap or step. Returns the new triangle list.
+    static int[] WeldNeck(Vector3[] V, Vector3[] N, int[] T, byte[] piece, int headMode, BodySdfKernel k, Vector3 o, Vector3 axis, float radius,
+                          float bodyCell, float headCell, out string report)
+    {
+        report = "no neck weld";
+        k.cutMode = 0;
+        float S(Vector3 p) => Vector3.Dot(p - o, axis);
+        bool Near(int i, float cell) => Mathf.Abs(S(V[i])) < 0.0015f && (V[i] - o - axis * S(V[i])).magnitude < radius;
+        // The caps: triangles lying in the plane, facing out of their piece through it.
+        var keep = new List<int>(T.Length);
+        int capB = 0, capH = 0;
+        for (int t = 0; t + 2 < T.Length; t += 3)
+        {
+            int a = T[t], b = T[t + 1], c = T[t + 2];
+            bool head = piece[a] == headMode, body = piece[a] == 1;
+            if ((head || body) && piece[b] == piece[a] && piece[c] == piece[a])
+            {
+                float cell = head ? headCell : bodyCell;
+                // (All three on the plane: the projection puts the cap's vertices on it to well under a mm.)
+                if (Near(a, cell) && Near(b, cell) && Near(c, cell)) { if (head) capH++; else capB++; continue; }
+            }
+            keep.Add(a); keep.Add(b); keep.Add(c);
+        }
+        if (capH == 0 || capB == 0) { report = $"no neck caps (head {capH}, body {capB})"; return T; }
+        // The open rings: edges used once, near the plane, per piece; walked into ordered loops (the longest
+        // per piece: the neck), so any cross-section shape (a double chin) zips in order.
+        var use = new Dictionary<long, int>();
+        for (int t = 0; t + 2 < keep.Count; t += 3)
+            for (int e = 0; e < 3; e++)
+            {
+                int a = keep[t + e], b = keep[t + (e + 1) % 3];
+                long key = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                use.TryGetValue(key, out int n); use[key] = n + 1;
+            }
+        var adjH = new Dictionary<int, List<int>>(); var adjB = new Dictionary<int, List<int>>();
+        foreach (var kv in use)
+        {
+            if (kv.Value != 1) continue;
+            int a = (int)(kv.Key >> 32), b = (int)(kv.Key & 0xffffffff);
+            if (piece[a] != piece[b]) continue;
+            float cell = piece[a] == headMode ? headCell : bodyCell;
+            if (Mathf.Abs(S(V[a])) > cell || Mathf.Abs(S(V[b])) > cell) continue;
+            var adj = piece[a] == headMode ? adjH : piece[a] == 1 ? adjB : null;
+            if (adj == null) continue;
+            if (!adj.TryGetValue(a, out var la)) adj[a] = la = new List<int>(2);
+            if (!adj.TryGetValue(b, out var lb)) adj[b] = lb = new List<int>(2);
+            la.Add(b); lb.Add(a);
+        }
+        int loops = 0;
+        var extra = new List<List<int>>();   // the other (small) loops: cap leftovers, filled below
+        List<int> Loop(Dictionary<int, List<int>> adj)
+        {
+            var seen = new HashSet<int>(); List<int> best = null; float bestLen = 0f; loops = 0;
+            foreach (int s0 in adj.Keys)
+            {
+                if (seen.Contains(s0)) continue;
+                var loop = new List<int> { s0 }; seen.Add(s0);
+                int prev = -1, cur = s0; float len = 0f;
+                while (true)
+                {
+                    int next = -1;
+                    foreach (int nb in adj[cur]) if (nb != prev && !seen.Contains(nb)) { next = nb; break; }
+                    if (next < 0) break;
+                    len += (V[next] - V[cur]).magnitude;
+                    seen.Add(next); loop.Add(next); prev = cur; cur = next;
+                }
+                if (loop.Count >= 3) { loops++; extra.Add(loop); }
+                if (loop.Count >= 3 && len > bestLen) { bestLen = len; best = loop; }
+            }
+            if (best != null) extra.Remove(best);
+            return best;
+        }
+        var h = Loop(adjH); int loopsH = loops; var bl = Loop(adjB); int loopsB = loops;
+        if (h == null || bl == null) { report = $"neck rings not found (head {adjH.Count}, body {adjB.Count} boundary vertices)"; return T; }
+        // Onto the plane, then onto the uncut skin within it (gradient steps); normals from the uncut body.
+        Vector3 refX = Vector3.Cross(axis, Vector3.forward).sqrMagnitude > 1e-6f ? Vector3.Cross(axis, Vector3.forward).normalized : Vector3.right;
+        Vector3 refZ = Vector3.Cross(refX, axis).normalized;
+        foreach (var ring in new[] { h, bl })
+            foreach (int i in ring)
+            {
+                Vector3 p = V[i] - axis * S(V[i]);
+                for (int it = 0; it < 12; it++)
+                {
+                    float d = k.Skin(p);
+                    if (Mathf.Abs(d) < 2e-5f) break;
+                    Vector3 g = k.Normal(p, 0.001f); g -= axis * Vector3.Dot(g, axis);
+                    if (g.sqrMagnitude < 1e-8f) break;
+                    p -= g.normalized * Mathf.Clamp(d, -0.01f, 0.01f);
+                }
+                V[i] = p;
+                N[i] = k.Normal(p, 0.002f);
+            }
+        // Same direction round (signed area in the plane), the body loop starting nearest the head's start.
+        float Area(List<int> l)
+        {
+            float A = 0f;
+            for (int q = 0; q < l.Count; q++)
+            {
+                Vector3 p0 = V[l[q]] - o, p1 = V[l[(q + 1) % l.Count]] - o;
+                A += Vector3.Dot(p0, refX) * Vector3.Dot(p1, refZ) - Vector3.Dot(p1, refX) * Vector3.Dot(p0, refZ);
+            }
+            return A;
+        }
+        if (Area(h) < 0f) h.Reverse();
+        if (Area(bl) < 0f) bl.Reverse();
+        int start = 0; float bestD = float.MaxValue;
+        for (int q = 0; q < bl.Count; q++) { float d = (V[bl[q]] - V[h[0]]).sqrMagnitude; if (d < bestD) { bestD = d; start = q; } }
+        bl = bl.GetRange(start, bl.Count - start).Concat(bl.GetRange(0, start)).ToList();
+        // Arc-length parameters round each loop.
+        float[] Param(List<int> l)
+        {
+            var t = new float[l.Count + 1]; float total = 0f;
+            for (int q = 0; q < l.Count; q++) { t[q] = total; total += (V[l[(q + 1) % l.Count]] - V[l[q]]).magnitude; }
+            for (int q = 0; q < l.Count; q++) t[q] /= Mathf.Max(total, 1e-6f);
+            t[l.Count] = 1f;
+            return t;
+        }
+        var th = Param(h); var tb = Param(bl);
+        // Zip: walk both loops round, always advancing the one whose next vertex comes first.
+        var seam = new List<int>();
+        int i0 = 0, j0 = 0, nH = h.Count, nB = bl.Count;
+        while (i0 < nH || j0 < nB)
+        {
+            bool advH = j0 >= nB || (i0 < nH && th[i0 + 1] <= tb[j0 + 1]);
+            int a = h[i0 % nH], b = bl[j0 % nB];
+            int c = advH ? h[(i0 + 1) % nH] : bl[(j0 + 1) % nB];
+            // Outward: along the skin's normals.
+            Vector3 fn = Vector3.Cross(V[b] - V[a], V[c] - V[a]);
+            if (Vector3.Dot(fn, N[a] + N[b] + N[c]) < 0f) { seam.Add(a); seam.Add(c); seam.Add(b); } else { seam.Add(a); seam.Add(b); seam.Add(c); }
+            if (advH) i0++; else j0++;
+        }
+        keep.AddRange(seam);
+        // Leftover little loops (a cap fragment the plane test missed): fan-filled, facing out with the skin.
+        foreach (var lp in extra)
+            for (int q = 1; q + 1 < lp.Count; q++)
+            {
+                int a = lp[0], b = lp[q], c = lp[q + 1];
+                Vector3 fn = Vector3.Cross(V[b] - V[a], V[c] - V[a]);
+                if (Vector3.Dot(fn, N[a] + N[b] + N[c]) < 0f) { keep.Add(a); keep.Add(c); keep.Add(b); } else { keep.Add(a); keep.Add(b); keep.Add(c); }
+            }
+        // Watertight check: edges used once within 2 cm of the plane (should be none).
+        var use2 = new Dictionary<long, int>();
+        for (int t = 0; t + 2 < keep.Count; t += 3)
+            for (int e = 0; e < 3; e++)
+            {
+                int a = keep[t + e], b = keep[t + (e + 1) % 3];
+                long key = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                use2.TryGetValue(key, out int n); use2[key] = n + 1;
+            }
+        int open = 0, over = 0;
+        foreach (var kv in use2)
+        {
+            int a = (int)(kv.Key >> 32), b = (int)(kv.Key & 0xffffffff);
+            if (Mathf.Abs(S(V[a])) > 0.02f || Mathf.Abs(S(V[b])) > 0.02f || (piece[a] != 1 && piece[a] != headMode)) continue;
+            if (kv.Value == 1) open++; else if (kv.Value > 2) over++;
+        }
+        report = $"neck welded: caps {capH} head / {capB} body triangles dropped, rings {nH} head / {nB} body vertices, {seam.Count / 3} seam triangles, loops {loopsH} / {loopsB}, {open} open / {over} non-manifold edges left near it";
+        return keep.ToArray();
+    }
+
     // How much a head vertex follows the jaw (0..1).
     public static float JawWeight(Vector3 v, BodySdfKernel.Ellipsoid sk, Vector3 mouth, Vector3 pivot)
     {
@@ -730,6 +902,7 @@ public class BodyBuild
             skinTriangles = bodyParts.subs[0].Count / 3, skinTrianglesBeforeRemoval = skinBefore, garmentTriangles = gt,
         };
         Asset.chains.AddRange(chainSets);
+        Asset.neckWeld = NeckReport;
         Asset.jawBone = jawBone; Asset.jawPivot = jawPivot; Asset.mouthCentre = mouthCentre; Asset.wigStyle = wigStyle;
         if (hasWig)
         {

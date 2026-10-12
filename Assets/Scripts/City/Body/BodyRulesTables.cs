@@ -129,7 +129,7 @@ public class MeshRules
     public float headCell = 0.0035f;
     public int headTriangles = 6000;
     [Tooltip("The head cut sits this far down the neck from the head joint (m), so the chin and jaw are in the head's grid.")]
-    public float headCutBelow = 0.04f;
+    public float headCutBelow = 0.06f;
 }
 
 [Serializable]
