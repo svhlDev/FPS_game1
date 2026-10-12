@@ -57,6 +57,7 @@ public struct BodySdfKernel : IDisposable
         public Vector3 o, x, y, z, r;
         public float halfLen, blend;
         public int shape, op;
+        public float press;             // pressed shapes: how far they stand out of the layer below (m)
     }
 
     // Face Fix Part 2: the lower jaw. Top view (x, z in the head frame): a trapezoid from the chin (front,
@@ -112,10 +113,18 @@ public struct BodySdfKernel : IDisposable
     public float cutBody, cutHand, cutShrink;  // cut positions along the hand (m from the wrist), shrink (m)
     public Ellipsoid skull;             // the face's frame and profile egg (face space, fat mask, wig, bake)
     public Vector3 faceO, faceR;        // the canon's eye-line centre and half width / height / depth (Face Fix Part 6: the face fat regions)
+    // Anatomy Rework Part 1: the head in layers (bone, muscle, fat), one field. skullBase: the egg without INT's
+    // growth (the brain layer scales between); eggShear: the egg's lower half leans forward (the face).
+    public Ellipsoid skullBase;
+    public float eggShear;
+    public float headMuscle;            // the face's muscle thickness map x this (STR)
+    public float headBlend;             // pieces onto the bone / muscle layers (one small blend)
+    public float neckBlend;             // the head onto the body at the neck
+    // Fill levels (Anatomy Rework R8): each layer's share, 0..1 (1 = the finished body).
+    public float muscleScale, fatScale, brainScale;
     public float eggTop, eggBottom;     // the egg head: horizontal radii x eggBottom at the jaw .. x eggTop at the crown
-    public Ellipsoid cranium;           // Face Fix Part 2: the braincase (an egg, big end up and back) ...
-    public float craniumBottom, craniumTop;
-    public Mandible jaw;                // ... and the lower jaw, smooth-unioned: the head's core
+    // (The kernel is copied into every garment kernel and passed to jobs by value: Mono caps that at
+    // ~10 KB for a dressed body - keep it lean.)
     public int headIndex;
     public Vector3 eyeL, eyeR;
     public float eyeRadius;
@@ -242,11 +251,80 @@ public struct BodySdfKernel : IDisposable
         return Mathf.Max(SMax(d2, below, m.angle), above);
     }
 
-    // The head's core: the cranium smooth-unioned with the lower jaw.
-    public float HeadCore(Vector3 p)
+    // Anatomy Rework Part 1: the egg (crown to chin; its lower half leaning forward), between its size
+    // without INT's growth and with it (the brain layer).
+    public float HeadEgg(Vector3 p)
     {
-        float c = EggDist(cranium.ToLocal(p), cranium.r, craniumBottom, craniumTop);
-        return jaw.on != 0 ? SMin(c, MandibleDist(jaw, p), jaw.blend) : c;
+        float s = brainScale;
+        Vector3 o = Vector3.Lerp(skullBase.o, skull.o, s), r = Vector3.Lerp(skullBase.r, skull.r, s);
+        Vector3 d = p - o;
+        Vector3 l = new Vector3(Vector3.Dot(d, skull.x), Vector3.Dot(d, skull.y), Vector3.Dot(d, skull.z));
+        if (l.y < 0f) l.z += eggShear * l.y;          // (the lower slices' centres move forward)
+        return EggDist(l, r, eggBottom, eggTop) / Mathf.Sqrt(1f + eggShear * eggShear);
+    }
+
+    // The bone layer's base: the egg, flattened by its planes (forehead, face sides, under the jaw) where
+    // their masks reach. (Presses and carves are placed on this.)
+    public float HeadBase(Vector3 p)
+    {
+        float A = HeadEgg(p);
+        for (int j = 0; j < face.Length; j++)
+        {
+            var f = face[j];
+            if (f.op != (int)FacePartOp.Plane) continue;
+            Vector3 d = p - f.o;
+            float pd = Vector3.Dot(d, f.y);
+            Vector3 l = new Vector3(Vector3.Dot(d, f.x) / f.r.x, Vector3.Dot(d, f.y) / f.r.y, Vector3.Dot(d, f.z) / f.r.z);
+            float w = Mathf.Clamp01(1f - l.sqrMagnitude);
+            w = w * w * (3f - 2f * w);
+            if (w > 0f) A = Mathf.Lerp(A, SMax(A, pd, f.blend), w);
+        }
+        return A;
+    }
+
+    // The face's muscle thickness (m): thin everywhere, a little more over the cheeks and the temples; none
+    // on the nose and the ears.
+    float HeadMuscleMap(Vector3 p)
+    {
+        Vector3 d = p - faceO;
+        Vector3 u = new Vector3(Vector3.Dot(d, skull.x) / faceR.x, Vector3.Dot(d, skull.y) / faceR.y, Vector3.Dot(d, skull.z) / faceR.z);
+        float ax = Mathf.Abs(u.x);
+        float G(float x) => Mathf.Exp(-x * x);
+        float m = 0.0008f + 0.0014f * G((ax - 0.5f) / 0.25f) * G((u.y + 0.35f) / 0.25f) + 0.0012f * G((ax - 0.85f) / 0.15f) * G((u.y - 0.15f) / 0.25f);
+        m *= 1f - G(ax / 0.18f) * G((u.y + 0.2f) / 0.3f) * Mathf.Clamp01(u.z * 2f - 1f);   // not the nose
+        return m * headMuscle;
+    }
+
+    // The head in layers (Anatomy Rework Part 1). bone: the base (egg, planes, carves, the sockets) with the
+    // pressed landmarks and the overhanging pieces (nose, brow bar, lips, ears) - one small blend; muscle: the
+    // bone offset by the muscle map, plus the pressed muscles; skin: the muscle offset by the fat map, base and
+    // pieces joined once with a radius that grows with the fat (lean faces crisp, fat ones round).
+    public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin)
+    {
+        float A = HeadBase(p);
+        float P = float.MaxValue, M = float.MaxValue;
+        for (int j = 0; j < face.Length; j++)
+        {
+            var f = face[j];
+            int op = f.op;
+            if (op == (int)FacePartOp.Carve) A = SMax(A, -FaceDist(f, p), f.blend);
+            else if (op == (int)FacePartOp.Press || op == (int)FacePartOp.Piece) P = Mathf.Min(P, FaceDist(f, p));
+            else if (op == (int)FacePartOp.Muscle) M = Mathf.Min(M, FaceDist(f, p) + (1f - muscleScale) * f.press);
+        }
+        if (lidL.r > 0f) A = SMax(A, -Mathf.Min(Socket(lidL, p), Socket(lidR, p)), 0.004f);
+        float ears = earL.on != 0 ? Mathf.Min(EarDist(earL, p), EarDist(earR, p)) : float.MaxValue;
+        bone = SMin(A, Mathf.Min(P, ears), headBlend);
+        float m = HeadMuscleMap(p) * muscleScale;
+        float on = Mathf.Min(P - m, M);
+        muscle = SMin(A - m, on, headBlend);
+        float f0 = fatThick * fatScale;
+        skin = SMin(A - m - f0, on - f0, headBlend + Mathf.Min(faceFatBlendMax, f0 * 1.2f));
+        // Ears: cartilage under a trace of fat (they never swell with the face).
+        if (ears < float.MaxValue)
+        {
+            muscle = SMin(muscle, ears, headBlend);
+            skin = SMin(skin, ears - f0 * 0.08f, headBlend + 0.001f);
+        }
     }
 
     public static float FaceDist(FacePrim f, Vector3 p)
@@ -259,6 +337,13 @@ public struct BodySdfKernel : IDisposable
             case (int)FacePartShape.Sphere: return l.magnitude - f.r.x;
             case (int)FacePartShape.HalfEllipsoidUpper: return Mathf.Max(EllipsoidDist(l, f.r), -l.y);
             case (int)FacePartShape.HalfEllipsoidLower: return Mathf.Max(EllipsoidDist(l, f.r), l.y);
+            case (int)FacePartShape.RoundCone:
+            {
+                // From -halfLen (radius r.x) to +halfLen (radius r.y) along y (Inigo Quilez's round cone).
+                Vector3 q = l + new Vector3(0f, f.halfLen, 0f);
+                return RoundCone(q, f.r.x, f.r.y, f.halfLen * 2f);
+            }
+            case (int)FacePartShape.Plane: return l.y;
             default: return EllipsoidDist(l, f.r);
         }
     }
@@ -359,7 +444,7 @@ public struct BodySdfKernel : IDisposable
         // The head: nothing more than 3 cm under its joint (the chin line). The egg's distance is a loose lower
         // bound far away: without this a big chest / breasts read as nearer the head than the chest, and
         // their skin would be labelled, split and weighted as head (Face Fix Part 0).
-        if (b.kind == KHead) return Mathf.Max(HeadCore(p), Vector3.Dot(b.o - p, b.y) - 0.03f);
+        if (b.kind == KHead) return Mathf.Max(HeadEgg(p), Vector3.Dot(b.o - p, b.y) - 0.03f);
 
         float dr = b.depthRatio;
         Vector3 s = new Vector3(q.x, q.y, q.z / dr);
@@ -427,18 +512,18 @@ public struct BodySdfKernel : IDisposable
         float wSum = 0f, fSum = 0f;
         for (int i = 0; i < n; i++)
         {
+            if (i == headIndex) continue;   // (the head's fat is its own layer: HeadLayers)
             float w = Mathf.Exp(-(d[i] - best) / fatBlendFalloff);
             if (w < 0.01f) continue;
             wSum += w; fSum += w * FatAt(p, i);
         }
         float fat = wSum > 0f ? fSum / wSum : 0f;
-        // The face carries the head's own fat (DEX), not the neck's and chest's blended in: over the head
-        // (closer to it than to its parent, the neck) the fat fades to the head's profile.
+        // Over the head (closer to it than to the neck) the body's fat fades out: the head has its own layers.
         if (headIndex >= 0)
         {
             int neck = bones[headIndex].parent;
             float m = neck >= 0 ? Mathf.Clamp01((d[neck] - d[headIndex]) / 0.03f + 0.5f) : 1f;
-            if (m > 0f) fat = Mathf.Lerp(fat, FatAt(p, headIndex) * FaceFatMask(p), m);
+            fat *= 1f - m;
         }
         // Hands carry their fat in the palm and finger sizes: a fat offset (and its wide blend) past the
         // wrist would fuse the fingers into a mitten.
@@ -456,6 +541,7 @@ public struct BodySdfKernel : IDisposable
         float core = float.MaxValue, soft = float.MaxValue;
         for (int i = 0; i < n; i++)
         {
+            if (i == headIndex) continue;   // (the head joins the body as a whole, below)
             int pa = bones[i].parent;
             if (pa < 0) { core = Mathf.Min(core, d[i]); soft = Mathf.Min(soft, d[i]); continue; }
             float k = bones[i].jointK;
@@ -473,48 +559,19 @@ public struct BodySdfKernel : IDisposable
             muscle = SMin(muscle, v, muscleBlend);
             soft = SMin(soft, v, kFat);
         }
-        // Face (Head spec Part D): the parts are face muscle on the egg (each with its own small blend), so
-        // the face fat rounds over them like the body's blobs.
-        // (Face Fix Part 0) Every part is evaluated wherever it could matter: within faceReach of the head
-        // (its extent + blend + the thickest face fat), no hard cut-off closer in.
         bool nearHead = headIndex >= 0 && (p - skull.o).sqrMagnitude < faceReach * faceReach;
-        if (nearHead)
-        {
-            // Each part blends onto the body's surface with its own small radius, never chained part onto
-            // part (chained smooth mins add their bulges up: a snout where a dozen parts overlap). The fat
-            // layer gets the parts' hard union once, with a capped blend.
-            float muscleBase = muscle, faceHard = float.MaxValue;
-            for (int j = 0; j < face.Length; j++)
-            {
-                int op = face[j].op;
-                if (op == (int)FacePartOp.Union)
-                {
-                    float v = FaceDist(face[j], p);
-                    muscle = Mathf.Min(muscle, SMin(muscleBase, v, face[j].blend));
-                    faceHard = Mathf.Min(faceHard, v);
-                }
-            }
-            // (Lean faces blend the parts in sharply: the cheekbones, the jaw angle, the temples show.)
-            if (faceHard < float.MaxValue) soft = SMin(soft, faceHard, Mathf.Min(Mathf.Min(kFat * 0.5f, faceFatBlendMax), 0.002f + fat * 1.2f));
-            for (int j = 0; j < face.Length; j++)
-                if (face[j].op == (int)FacePartOp.Carve)
-                {
-                    // Hollows in the bone and muscle (temples): the fat fills them.
-                    float v = -FaceDist(face[j], p);
-                    muscle = SMax(muscle, v, face[j].blend);
-                    soft = SMax(soft, v, face[j].blend);
-                }
-        }
-        // Eye sockets (Face Fix Part 3): a hollow in the bone layer round each eyeball, deeper than wide,
-        // inside the rim of the brow ridge, cheekbone and nose bridge; the fat follows it.
-        if (lidL.r > 0f && nearHead)
-        {
-            float sk = Mathf.Min(Socket(lidL, p), Socket(lidR, p));
-            muscle = SMax(muscle, -sk, 0.004f);
-            soft = SMax(soft, -sk, 0.004f);
-        }
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
+        // The head (Anatomy Rework Part 1): its own layers, joined to the body at the neck.
+        if (nearHead)
+        {
+            float headFat = FatAt(p, headIndex) * FaceFatMask(p);
+            HeadLayers(p, headFat, out float hb, out float hm, out float hs);
+            if (hs < skin) fat = headFat * fatScale;
+            core = Mathf.Min(core, hb);
+            muscle = SMin(muscle, hm, neckBlend);
+            skin = SMin(skin, hs, neckBlend);
+        }
         if (nearHead)
             for (int j = 0; j < face.Length; j++)
                 if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);
@@ -538,8 +595,6 @@ public struct BodySdfKernel : IDisposable
                 skin = SMax(skin, -Mathf.Min((p - eyeR).magnitude - eyeRadius, SegmentDist(p, eyeR, eyeR + outDir) - rr), eyeCarveBlend);
             }
         }
-        // Ears (after the fat: they stay thin on any face), blended onto the side of the head.
-        if (earL.on != 0 && nearHead) skin = SMin(skin, Mathf.Min(EarDist(earL, p), EarDist(earR, p)), 0.004f);
         if (cutMode > 0) skin = Cut(p, skin);
         return new Sample { skin = skin, muscle = muscle, core = core, fat = fat, nearest = nearest };
     }

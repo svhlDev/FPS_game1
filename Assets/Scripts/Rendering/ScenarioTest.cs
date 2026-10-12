@@ -792,6 +792,7 @@ public partial class ScenarioTest : MonoBehaviour
         {
             new List<(string, CharacterSheet)> { ("M DEX1", new CharacterSheet(Sex.Male, 10, 10, 1, 3101)), ("M DEX10", new CharacterSheet(Sex.Male, 10, 10, 10, 3102)), ("M DEX20", new CharacterSheet(Sex.Male, 10, 10, 20, 3103)) },
             new List<(string, CharacterSheet)> { ("F DEX1", new CharacterSheet(Sex.Female, 10, 10, 1, 3201)), ("F DEX10", new CharacterSheet(Sex.Female, 10, 10, 10, 3202)), ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) },
+            new List<(string, CharacterSheet)> { ("M STR1", new CharacterSheet(Sex.Male, 1, 10, 10, 3311)), ("M STR20", new CharacterSheet(Sex.Male, 20, 10, 10, 3312)), ("F STR1", new CharacterSheet(Sex.Female, 1, 10, 10, 3313)), ("F STR20", new CharacterSheet(Sex.Female, 20, 10, 10, 3314)) },
             new List<(string, CharacterSheet)> { ("M INT1", new CharacterSheet(Sex.Male, 10, 1, 10, 3301)), ("M INT20", new CharacterSheet(Sex.Male, 10, 20, 10, 3302)), ("F INT1", new CharacterSheet(Sex.Female, 10, 1, 10, 3303)), ("F INT20", new CharacterSheet(Sex.Female, 10, 20, 10, 3304)) },
         };
         // Part D: one part exaggerated per head through the per-character overrides (move, rotate, scale).
@@ -801,10 +802,10 @@ public partial class ScenarioTest : MonoBehaviour
         {
             ("base", Ov()),
             ("brow up+big", Ov(O("Brow", new Vector3(0f, 0.06f, 0f), new Vector3(0f, 0f, 15f), new Vector3(1.6f, 1.3f, 1f)))),
-            ("nose big", Ov(O("NoseBridge", scale: new Vector3(1.5f, 1.4f, 1f)), O("NoseUnder", scale: new Vector3(1.5f, 1.3f, 1f)), O("Nostril", scale: new Vector3(1.6f, 1.4f, 1f)))),
+            ("nose big", Ov(O("Nose", scale: new Vector3(1.4f, 1.4f, 1.4f)), O("NoseUnder", scale: new Vector3(1.5f, 1.3f, 1f)), O("Nostril", scale: new Vector3(1.6f, 1.4f, 1f)))),
             ("lips full", Ov(O("LipUpper", scale: new Vector3(1.9f, 1.2f, 1f)), O("LipLower", scale: new Vector3(1.9f, 1.2f, 1f)))),
-            ("cheeks", Ov(O("Cheek", new Vector3(0.05f, 0.05f, 0.05f), scale: new Vector3(1.5f, 1.4f, 1.6f)))),
-            ("chin out", Ov(O("Chin", new Vector3(0f, -0.05f, 0.15f), scale: new Vector3(1.4f, 1f, 1f)), O("Jaw", scale: new Vector3(1.2f, 1.1f, 1.1f)))),
+            ("cheeks", Ov(O("Cheekbone", scale: new Vector3(1.3f, 1.3f, 1.6f)), O("CheekboneFront", scale: new Vector3(1.3f, 1.3f, 1.6f)))),
+            ("chin out", Ov(O("Chin", new Vector3(0f, -0.05f, 0.15f), scale: new Vector3(1.4f, 1f, 1f)), O("JawAngle", scale: new Vector3(1.3f, 1.3f, 1.3f)))),
         });
         // Every wig style (forced through WigBuilder.Force), then the dressed row last.
         rows.Add(new List<(string, CharacterSheet)>
@@ -846,6 +847,7 @@ public partial class ScenarioTest : MonoBehaviour
         fill.transform.rotation = Quaternion.LookRotation(new Vector3(-0.6f, -0.1f, 1f));
         var tod = TimeOfDay.Instance; if (tod != null) { tod.freeze = true; tod.SetHour(12f); }
         var rows = customRows ?? HeadRows();
+        BodyBuild.FillLevels = true;   // (Anatomy Rework R8: the layer views below)
         int wigsChecked = 0, wigsOpen = 0;
         float totalMs = 0f; int built = 0, headTris = 0;
         for (int r = 0; r < rows.Length; r++)
@@ -873,6 +875,17 @@ public partial class ScenarioTest : MonoBehaviour
                 var a = go.AddComponent<FigureAnimator>(); a.Grounded = true; a.LookYaw = 180f;
                 foreach (var mf in go.GetComponentsInChildren<SkinnedMeshRenderer>()) if (mf.name.StartsWith("HeadMesh")) headTris += mf.sharedMesh.triangles.Length / 3;
                 HeadCanonOverlay.Attach(f);
+                if (lbl == "F DEX10" || lbl == "M DEX10")
+                    using (var dsdf = new BodySDF(f.Plan))
+                    {
+                        var sbp = new System.Text.StringBuilder();
+                        for (int q = 0; q < dsdf.FacePrims.Count; q++)
+                        {
+                            var fp = dsdf.FacePrims[q]; var dd = fp.o - dsdf.Canon.o;
+                            sbp.Append($"{dsdf.FacePartNames[q]}({dd.x * 100f:0.0},{dd.y * 100f:0.0},{dd.z * 100f:0.0} r {fp.r.x * 100f:0.0}/{fp.r.y * 100f:0.0}/{fp.r.z * 100f:0.0}) ");
+                        }
+                        Log($"  {lbl} parts (cm from the eye line's centre): {sbp}");
+                    }
                 Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; hair cards {(f.Asset.hairCards != null ? f.Asset.hairCards.triangles.Length / 3 : 0)} triangles; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }
                 figs.Add(f);
@@ -915,6 +928,43 @@ public partial class ScenarioTest : MonoBehaviour
                 foreach (var rr in hidden) if (rr != null) rr.enabled = true;
             }
         }
+        // Anatomy Rework R8: the layer view - a few heads at bone only, + muscle, + fat, and finished.
+        foreach (var name in new[] { "M DEX10", "F DEX1", "M DEX20", "F INT20" })
+        {
+            var go = GameObject.Find(name);
+            var fg = go != null ? go.GetComponent<CharacterFigure>() : null;
+            if (fg == null) continue;
+            var fl = go.GetComponent<FillLevelDebug>() ?? go.AddComponent<FillLevelDebug>();
+            Transform hc = null;
+            foreach (var t in go.GetComponentsInChildren<Transform>()) if (t.name == "HeadCentre") { hc = t; break; }
+            if (hc == null) continue;
+            var hidden = new List<Renderer>();
+            foreach (var other in Object.FindObjectsByType<CharacterFigure>())
+                if (other != fg) foreach (var rr in other.GetComponentsInChildren<Renderer>()) if (rr.enabled) { rr.enabled = false; hidden.Add(rr); }
+            if (fg.Wig != null) fg.Wig.enabled = false;
+            if (fg.HairCards != null) fg.HairCards.enabled = false;
+            var lods = Object.FindObjectsByType<HairLOD>(); foreach (var hl in lods) hl.enabled = false;
+            for (int lvl = 0; lvl < 4; lvl++)
+            {
+                fl.Show(lvl);
+                foreach (var (view, from) in new[] { ("front", hc.position + go.transform.forward * 0.45f), ("side", hc.position + go.transform.right * 0.45f) })
+                {
+                    cam.orthographic = true; cam.orthographicSize = 0.17f;
+                    cam.transform.SetPositionAndRotation(from, Quaternion.LookRotation(hc.position - from));
+                    yield return new WaitForEndOfFrame(); yield return new WaitForEndOfFrame();
+                    ScreenCapture.CaptureScreenshot(Path.Combine(dir, $"heads_layers_{name.Replace(' ', '_')}_{lvl}_{view}.png"));
+                    yield return null; yield return null;
+                }
+            }
+            fl.Show(3); cam.orthographic = false;
+            if (fg.Wig != null) fg.Wig.enabled = true;
+            if (fg.HairCards != null) fg.HairCards.enabled = true;
+            foreach (var hl in lods) if (hl != null) hl.enabled = true;
+            foreach (var rr in hidden) if (rr != null) rr.enabled = true;
+            var hm0 = fg.HeadRenderer is SkinnedMeshRenderer hs0 ? hs0.sharedMesh : null;
+            Log($"layers {name}: {(hm0 != null ? hm0.blendShapeCount : 0)} fill-level blend shapes on the head");
+        }
+        BodyBuild.FillLevels = false;
         // Long hair cards swing on their chains: turn the long-haired head's figure sharply, the tips lag.
         {
             var lh = GameObject.Find("wig Long");

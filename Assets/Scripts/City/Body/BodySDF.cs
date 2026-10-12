@@ -46,9 +46,12 @@ public class BodySDF : IDisposable
     public readonly List<string> FacePartNames = new List<string>();
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
     readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();   // snapped face parts: their offset from the skin (m)
+    // Anatomy Rework Part 1: parts placed on the base (index, target, axis or tip, size (m), press (m), offset, root offset).
+    readonly List<(int i, Vector3 target, Vector3 axis, Vector3 size, float press, float offset, float rootOffset)> pressed = new List<(int, Vector3, Vector3, Vector3, float, float, float)>();
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;                                 // the face's frame / profile egg (fat mask, wig, bake)
+    Feature skullBase;                             // the egg without INT's growth (the brain layer scales between)
     Feature cranium;                               // Face Fix Part 2: the braincase ...
     BodySdfKernel.Mandible mandible;               // ... and the lower jaw (the head's core)
     float craniumBottom, craniumTop;
@@ -197,14 +200,14 @@ public class BodySDF : IDisposable
             var nb0 = plan.bones[plan.bones[headIndex].parent];
             float rN = Mathf.Max(nb0.Outer.x, Mathf.Max(nb0.Outer.y, nb0.Outer.z)) + Mathf.Max(nb0.fat.x, Mathf.Max(nb0.fat.y, nb0.fat.z)) + 0.025f;
             float dPlane = Vector3.Dot(headCutC - headCutO, headCutAxis);
-            float big = Mathf.Max(cranium.r.x, Mathf.Max(cranium.r.y, cranium.r.z)) * 1.15f + 0.03f;
+            float big = (skull.f.o - headCutC).magnitude + Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.2f + 0.03f;   // the whole egg (with INT's growth)
             headCutR = Mathf.Max(Mathf.Sqrt(dPlane * dPlane + rN * rN), big);
             // The head's grid: just the head above the cut (cranium, face, ears, the neck down to the cut, fat),
             // not the cut sphere's whole cube - a third of the cells at the head's fine spacing.
             var hb0 = plan.bones[headIndex];
             float fat = Mathf.Max(hb0.fat.x, Mathf.Max(hb0.fat.y, hb0.fat.z)) * 1.7f + 0.02f;
-            float top = Mathf.Max(cranium.f.o.y + cranium.r.y, Canon.o.y + Canon.crown);
-            float back = Mathf.Min(cranium.f.o.z - cranium.r.z, start[headIndex].z - Canon.halfD);
+            float top = Mathf.Max(skull.f.o.y + skull.r.y * 1.05f, Canon.o.y + Canon.crown);
+            float back = Mathf.Min(skull.f.o.z - skull.r.z * 1.1f, start[headIndex].z - Canon.halfD);
             // The sphere's width a little above the plane, where the body (a heavy neck's back, the trapezius)
             // still reaches into it: all of that must be in the grid too.
             float up = Mathf.Min(dPlane, 0.06f);
@@ -214,6 +217,7 @@ public class BodySDF : IDisposable
             HeadBounds = new Bounds((lo + hi) * 0.5f, hi - lo);
         }
         kernel = BuildKernel(Allocator.Persistent);
+        PressParts();
         SnapFaceParts();
         BuildEars();
     }
@@ -260,6 +264,84 @@ public class BodySDF : IDisposable
         EarLeft = Make(-1f);
         EarRight = Make(1f);
         kernel.earL = EarLeft; kernel.earR = EarRight;
+    }
+
+    // Anatomy Rework Part 1: presses, carves, muscles and pieces placed on the base (the egg and its
+    // planes): each target snapped onto it along the line from the egg's centre, then
+    //   press / muscle: a flattened ellipsoid, long axis along the surface, sunk so `press` stands out;
+    //   carve: the same, sunk the other way (`press` deep);
+    //   piece: centred `offset` metres out along the surface's normal; the nose (a round cone) from its
+    //   snapped root to its snapped tip, `press` metres out.
+    // Then the nostrils under the nose's tip.
+    void PressParts()
+    {
+        if (headIndex < 0 || pressed.Count == 0) return;
+        var face = kernel.face;
+        var k = kernel;
+        Vector3 c0 = skull.f.o;
+        (Vector3 p, Vector3 n) Snap(Vector3 target)
+        {
+            Vector3 dir = (target - c0).normalized;
+            Vector3 p = c0 + dir * 0.3f;
+            for (int it = 0; it < 200; it++)
+            {
+                float d = k.HeadBase(p);
+                if (Mathf.Abs(d) < 1e-4f) break;
+                p -= dir * Mathf.Clamp(d * 0.9f, -0.02f, 0.02f);
+            }
+            const float h = 0.001f;
+            Vector3 g = new Vector3(k.HeadBase(p + Vector3.right * h) - k.HeadBase(p - Vector3.right * h), k.HeadBase(p + Vector3.up * h) - k.HeadBase(p - Vector3.up * h),
+                                    k.HeadBase(p + Vector3.forward * h) - k.HeadBase(p - Vector3.forward * h));
+            return (p, g.sqrMagnitude > 1e-12f ? g.normalized : dir);
+        }
+        Vector3 noseTip = Vector3.zero, noseUp = Vector3.up, noseN = Vector3.forward; float noseR = 0f; bool nose = false;
+        foreach (var e in pressed)
+        {
+            var fp = face[e.i];
+            if (fp.op == (int)FacePartOp.Piece)
+            {
+                if (fp.shape == (int)FacePartShape.RoundCone)
+                {
+                    var (pr, nr) = Snap(e.target); var (pt, nt) = Snap(e.axis);
+                    Vector3 a = pr + nr * e.rootOffset, b = pt + nt * e.press;
+                    fp.o = (a + b) * 0.5f; fp.y = (b - a).normalized; fp.halfLen = (b - a).magnitude * 0.5f;
+                    fp.x = Vector3.Cross(fp.y, nt).normalized; fp.z = Vector3.Cross(fp.x, fp.y).normalized;
+                    fp.r = new Vector3(e.size.x, e.size.y, e.size.y);
+                    noseTip = b; noseUp = fp.y; noseN = nt; noseR = e.size.y; nose = true;
+                }
+                else
+                {
+                    var (ps, ns) = Snap(e.target);
+                    fp.o = ps + ns * e.offset;
+                }
+            }
+            else
+            {
+                var (ps, ns) = Snap(e.target);
+                Vector3 x = Vector3.ProjectOnPlane(e.axis, ns);
+                if (x.sqrMagnitude < 1e-8f) x = Vector3.ProjectOnPlane(skull.f.x, ns);
+                x.Normalize();
+                fp.z = ns; fp.x = x; fp.y = Vector3.Cross(ns, x).normalized;
+                fp.r = e.size;
+                float c = e.size.z, hgt = Mathf.Min(e.press, c * 0.95f);
+                fp.o = fp.op == (int)FacePartOp.Carve ? ps + ns * (c - hgt) : ps - ns * (c - hgt);
+                fp.press = hgt;
+            }
+            face[e.i] = fp; faceParts[e.i] = fp;
+        }
+        // The nostrils: under the tip, either side of the middle, sunk a little.
+        if (nose)
+            for (int j = 0; j < FacePartNames.Count; j++)
+            {
+                if (!FacePartNames[j].StartsWith("Nostril.")) continue;
+                float s = FacePartNames[j].EndsWith(".L") ? -1f : 1f;
+                var fp = face[j];
+                Vector3 side = Vector3.Cross(noseUp, noseN).normalized;
+                if (Vector3.Dot(side, skull.f.x) < 0f) side = -side;
+                fp.o = noseTip + noseUp * (noseR * 0.15f) - noseN * (noseR * 0.75f) + side * (s * noseR * 0.55f) - Vector3.Cross(side, noseUp).normalized * 0f;
+                fp.o -= noseUp * noseR * 0.9f;
+                face[j] = fp; faceParts[j] = fp;
+            }
     }
 
     // Face Fix Part 4: grooves snapped onto the skin. Each snapped part is placed where the skin is along
@@ -326,8 +408,10 @@ public class BodySDF : IDisposable
             socketClearance = BodyRules.Default.face.socketClearance, faceReach = FaceReach(), faceFatBlendMax = BodyRules.Default.face.faceFatBlendMax,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
-            cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
             faceO = Canon.o, faceR = new Vector3(Canon.halfW, Canon.halfH, Canon.halfD),
+            skullBase = E(skullBase.f, skullBase.r, headIndex, 0), eggShear = BodyRules.Default.face.eggShear,
+            headMuscle = 1f + 0.3f * plan.sheet.S, headBlend = BodyRules.Default.face.headBlend, neckBlend = BodyRules.Default.face.neckBlend,
+            muscleScale = 1f, fatScale = 1f, brainScale = 1f,
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius, lidL = LidL, lidR = LidR, earL = EarLeft, earR = EarRight,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
@@ -416,12 +500,16 @@ public class BodySDF : IDisposable
             reach = Mathf.Max(reach, (fp.o - skull.f.o).magnitude + ext + fp.blend);
         }
         float fat = headIndex >= 0 ? Mathf.Max(plan.bones[headIndex].fat.x, Mathf.Max(plan.bones[headIndex].fat.y, plan.bones[headIndex].fat.z)) * 1.7f : 0f;
+        reach = Mathf.Max(reach, Mathf.Max(skull.r.x, Mathf.Max(skull.r.y, skull.r.z)) * 1.25f + (skull.f.o - Canon.o).magnitude);   // the whole egg
         return reach + BodyRules.Default.face.faceFatBlendMax + fat + 0.01f;
     }
 
     // The highest point the cranium reaches (root space y) and its centre: for sanity checks.
     public Vector3 CraniumCentre => cranium.f.o;
     public Vector3 CraniumRadii => cranium.r;
+    // The head's egg (Anatomy Rework Part 1: the bone layer's base, with INT's growth).
+    public Vector3 SkullCentre => skull.f.o;
+    public Vector3 SkullRadii => skull.r;
 
     static BodySdfKernel.Ellipsoid E(Frame f, Vector3 r, int bone, int group) =>
         new BodySdfKernel.Ellipsoid { o = f.o, x = f.x, y = f.y, z = f.z, r = r, bone = bone, group = group };
@@ -533,6 +621,7 @@ public class BodySDF : IDisposable
         // The profile egg (the face's frame: fat mask, wig, bake): bottom on the chin line.
         Vector3 c = Canon.o + f.y * (ry * (1f + el * 0.3f) - hy) - f.z * rz * el * 0.5f;
         skull = new Feature { f = new Frame { o = c, x = f.x, y = f.y, z = f.z }, r = new Vector3(rx, ry * (1f + el * 0.3f), rz * (1f + el * 0.6f)) };
+        skullBase = new Feature { f = new Frame { o = Canon.o, x = f.x, y = f.y, z = f.z }, r = new Vector3(rx, hy, rz) };
         // Egg: seed variation on both ends.
         var eggRng = new PcgRandom(plan.sheet.seed, "egg");
         EggTop = SR.eggTop + SR.eggVariation * eggRng.Signed();
@@ -607,11 +696,32 @@ public class BodySDF : IDisposable
                 if (part.snap) { snapOffsets[faceParts.Count] = pos.z; pos.z = 1f; }
                 Vector3 r = part.shape == FacePartShape.Capsule || part.shape == FacePartShape.Sphere
                     ? new Vector3(size.x * rx, size.x * rx, size.x * rx) : new Vector3(size.x * rx, size.y * hy, size.z * rz);
-                faceParts.Add(new BodySdfKernel.FacePrim
+                var prim = new BodySdfKernel.FacePrim
                 {
                     o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
                     halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
-                });
+                };
+                // Anatomy Rework Part 1: pressed shapes, planes and pieces are placed on the base once it exists.
+                var op = part.op;
+                float strF = part.name == "Masseter" ? 1f + 0.4f * plan.sheet.S : 1f;
+                if (op == FacePartOp.Plane)
+                {
+                    Vector3 nrm = W(new Vector3(side < 0 ? -part.axis.x : part.axis.x, part.axis.y, part.axis.z)).normalized;
+                    Vector3 t1 = Vector3.Cross(nrm, f.y).sqrMagnitude > 1e-6f ? Vector3.Cross(nrm, f.y).normalized : f.x;
+                    prim.y = nrm; prim.x = t1; prim.z = Vector3.Cross(t1, nrm).normalized;
+                    prim.r = size * rx;
+                }
+                else if (op == FacePartOp.Press || op == FacePartOp.Carve || op == FacePartOp.Muscle || op == FacePartOp.Piece)
+                {
+                    Vector3 ax = new Vector3(side < 0 ? -part.axis.x : part.axis.x, part.axis.y, part.axis.z);
+                    if (part.shape == FacePartShape.RoundCone) ax.y += Anchor(part.anchor);
+                    // (Snapped along the line from the egg's centre through the target: presses aim with their own
+                    // depth, pieces - the nose, lips, brow bar - from the front.)
+                    float aimZ = op == FacePartOp.Piece ? 0.9f : pos.z;
+                    pressed.Add((faceParts.Count, FacePoint(new Vector3(pos.x, pos.y, aimZ)), op == FacePartOp.Piece && part.shape == FacePartShape.RoundCone ? FacePoint(new Vector3(ax.x, ax.y, 0.9f)) : W(ax),
+                                 size * rx, part.press * (op == FacePartOp.Piece ? 1f : rx) * strF, pos.z, part.shape == FacePartShape.RoundCone ? size.z : 0f));
+                }
+                faceParts.Add(prim);
                 FacePartNames.Add(inst);
             }
         }

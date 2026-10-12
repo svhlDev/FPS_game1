@@ -46,7 +46,7 @@ public static class BodySurfaceBake
             {
                 string n = sdf.FacePartNames[i];
                 if (n.StartsWith("Cheek.")) m.cheeks.Add(sdf.FacePrims[i]);
-                else if (n == "NoseTip" || n.StartsWith("Ala.")) m.nose.Add(sdf.FacePrims[i]);
+                else if (n == "Nose" || n.StartsWith("Ala.")) m.nose.Add(sdf.FacePrims[i]);
             }
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {

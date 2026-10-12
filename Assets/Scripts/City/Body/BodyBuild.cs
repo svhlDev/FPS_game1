@@ -61,6 +61,45 @@ public class BodyBuild
     // Wall-clock milliseconds each stage took (start of the stage to the step that finished it).
     public readonly float[] StageWallMs = new float[9];
     public string NeckReport { get; private set; } = "";
+
+    // Anatomy Rework R8: fill levels. When set, each head vertex also gets its position at bone only, + muscle,
+    // + fat (the finished head is + brain): the field evaluated with the later layers scaled to 0, the vertex
+    // projected along its normal onto that surface. Stored as blend shapes "fill.bone", "fill.muscle",
+    // "fill.fat" (deltas from the finished head). Off for the crowd (it costs ~0.5 s a body); tests and the
+    // player turn it on.
+    public static bool FillLevels;
+    public static readonly string[] FillShapes = { "fill.bone", "fill.muscle", "fill.fat" };
+    Vector3[][] fillDeltas;
+
+    static Vector3[][] FillLevelDeltas(BodySdfKernel k, Vector3[] v, Vector3[] n)
+    {
+        var res = new Vector3[3][];
+        var levels = new[] { (0f, 0f, 0f), (1f, 0f, 0f), (1f, 1f, 0f) };   // (muscle, fat, brain)
+        k.cutMode = 0;
+        for (int l = 0; l < 3; l++)
+        {
+            k.muscleScale = levels[l].Item1; k.fatScale = levels[l].Item2; k.brainScale = levels[l].Item3;
+            var d = new Vector3[v.Length];
+            for (int i = 0; i < v.Length; i++)
+            {
+                // Along the target field's own gradient (forward differences): onto the nearest point of that
+                // surface (stepping along the vertex normal shoots through thin parts: the nose, the ears).
+                Vector3 p = v[i];
+                const float h = 0.0015f;
+                for (int it = 0; it < 12; it++)
+                {
+                    float s = k.Skin(p);
+                    if (Mathf.Abs(s) < 1e-4f) break;
+                    Vector3 g = new Vector3(k.Skin(p + new Vector3(h, 0f, 0f)) - s, k.Skin(p + new Vector3(0f, h, 0f)) - s, k.Skin(p + new Vector3(0f, 0f, h)) - s);
+                    if (g.sqrMagnitude < 1e-14f) break;
+                    p -= g.normalized * Mathf.Clamp(s, -0.008f, 0.008f);
+                }
+                d[i] = p - v[i];
+            }
+            res[l] = d;
+        }
+        return res;
+    }
     double stageStart;
 
     readonly CharacterSheet sheet;
@@ -183,8 +222,8 @@ public class BodyBuild
         {
             Error = e;
             CurrentStage = Stage.Failed;
-            Cleanup();
-            Debug.LogException(e);
+            Debug.LogException(e);   // (first: cleaning up after a failed job can throw too)
+            try { Cleanup(); } catch (Exception ce) { Debug.LogException(ce); }
         }
         if (CurrentStage != stageAtStart)
         {
@@ -517,6 +556,7 @@ public class BodyBuild
         {
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone);
+            if (FillLevels) fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n);
             // (Under long hair cards the shell is bob length: the cards hang beyond it.)
             var shellStyle = hs != null && wigStyle == WigStyle.Long ? WigStyle.Bob : wigStyle;
             hasWig = WigBuilder.Build(kernelCopy, shellStyle, sheet.seed, headJoint, browPrims, out wigV, out wigN, out wigT, out wigUV, out wigBrowTris, hs != null);
@@ -931,6 +971,8 @@ public class BodyBuild
         };
         Asset.chains.AddRange(chainSets);
         Asset.neckWeld = NeckReport;
+        if (fillDeltas != null && Asset.head.vertexCount == fillDeltas[0].Length)
+            for (int l = 0; l < 3; l++) Asset.head.AddBlendShapeFrame(FillShapes[l], 100f, fillDeltas[l], null, null);
         Asset.jawBone = jawBone; Asset.jawPivot = jawPivot; Asset.mouthCentre = mouthCentre; Asset.wigStyle = wigStyle;
         if (hasWig)
         {

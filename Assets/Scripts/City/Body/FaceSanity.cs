@@ -46,8 +46,8 @@ public static class FaceSanity
         float neckR = Mathf.Max(nb.Outer.x, Mathf.Max(nb.Outer.y, nb.Outer.z));
         var hb = plan.bones[hi];
         float headFat = Mathf.Max(hb.fat.x, Mathf.Max(hb.fat.y, hb.fat.z)) * 1.7f;
-        Vector3 cc = sdf.CraniumCentre, cr = sdf.CraniumRadii;
-        float top = cc.y + cr.y + 0.02f, back = cc.z - cr.z - 0.02f;
+        Vector3 cc = sdf.SkullCentre, cr = sdf.SkullRadii;   // the head's egg (with INT's growth)
+        float top = cc.y + cr.y + 0.02f + headFat * 0.5f, back = cc.z - cr.z * 1.1f - 0.02f - headFat * 0.5f;
         var v = a.head.vertices;
         int bad = 0, offSurface = 0; float worst = 0f; Vector3 worstP = default; string worstWhy = "";
         foreach (var p in v)
@@ -56,7 +56,7 @@ public static class FaceSanity
             string why = null; float excess = 0f;
             void Over(string w, float e) { if (e > excess) { excess = e; why = w; } }
             // Wide: the head's width (+ the neck's fat below the mouth: jowls and a heavy neck may be wider).
-            Over("wide", Mathf.Abs(d.x) - (c.halfW * 1.3f + 0.01f + (d.y < c.mouth ? headFat : 0f)));
+            Over("wide", Mathf.Abs(d.x) - (c.halfW * 1.3f + 0.01f + (d.y < c.mouth ? headFat : headFat * 0.4f)));
             Over("above the cranium", p.y - top);
             // Behind: the cranium's back (below the skull's middle the neck and a heavy nape may reach further).
             Over("behind the cranium", back - p.z - (p.y < cc.y ? 0.02f + headFat : 0f));
@@ -110,6 +110,7 @@ public static class FaceSanity
         foreach (var cs in Cases(randomSeeds))
         {
             if (only != null && !cs.label.Contains(only)) continue;
+            Debug.Log($"face sanity: building {cs.label}");
             var a = new BodyBuild(cs.sheet).RunSync();
             int bad = Check(a, out string detail);
             n++;

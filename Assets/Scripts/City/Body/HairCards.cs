@@ -116,7 +116,7 @@ public static class HairCards
             float window = Mathf.Min(u.z - 0.05f, 1f - new Vector2(ax / 0.86f, (u.y - 0.05f) / 0.72f).magnitude);
             if (window > -0.03f) return false;                       // the face
             if (u.y < st.nape) return false;
-            if (ax > 0.75f && u.y < 0.12f && u.z > -0.55f) return false;   // round the ears
+            if (ax > 0.7f && u.y < 0.15f && u.z > -0.6f) return false;     // round and below the ears (no sideburns hanging down)
             return true;
         }
         // Roots: Fibonacci directions onto the skin, then dart throwing to the target count.
