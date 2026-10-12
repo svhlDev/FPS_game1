@@ -268,6 +268,7 @@ public class BodyBuild
     Parts bodyParts, headParts;
     // The face: marks for the bake, the jaw (bone, hinge, weights), the wig.
     BodySurfaceBake.FaceMarks faceMarks;
+    BodySdfKernel? splitKernel;          // the field, for the split's fold repair (Face Metrics)
     BodySdfKernel.Ellipsoid skullCopy;
     Vector3 jawPivot, mouthCentre;
     float mouthHalf = 0.025f;
@@ -669,6 +670,7 @@ public class BodyBuild
         var browLines = faceMarks.browLines; bool female = sheet.sex == Sex.Female; var beard = faceMarks.beardStyle;
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
+        splitKernel = kernelCopy;
         Vector3 headJoint = plan.JointPos(plan.Index("Head"));
         bool weld = sdf.HasHeadPiece;
         Vector3 cutO = sdf.HeadCutOrigin, cutAxis = sdf.HeadCutAxis; float cutR = sdf.HeadCutRadius;
@@ -839,7 +841,8 @@ public class BodyBuild
         head.v = V2.ToArray(); head.n = N2.ToArray(); head.r = R2.ToArray(); head.l = L2.ToArray(); head.w = W2.ToArray();
         var hb = head.bake; hb.colors = C2.ToArray(); hb.uv0 = U0.ToArray(); hb.uv3 = U3.ToArray(); hb.uv4 = U4.ToArray(); hb.zones = Z.ToArray(); head.bake = hb;
         // Folds (thin parts under the grid's spacing): inverted triangles are culled and read as holes - flip them.
-        FlipRepairs = RepairFolds(head.v, head.n, head.subs[0]) + RepairFolds(body.v, body.n, body.subs[0]);
+        FlipRepairs = RepairFolds(head.v, head.n, head.subs[0], splitKernel) + RepairFolds(body.v, body.n, body.subs[0], null);
+        DroppedIslands = DropIslands(head.v, head.subs[0], 40);
         bodyParts = body; headParts = head;
     }
 
@@ -1019,12 +1022,64 @@ public class BodyBuild
     // Flips triangles facing against their vertices' normals (folds where thin parts - ears, lips, nostrils -
     // fall under the grid's spacing: culled, they read as holes). Vertices stay put (some have twins at the
     // same place - across the head / body split, the mouth's inside - that must not part). Returns the count.
-    static int RepairFolds(Vector3[] V, Vector3[] N, List<int> T)
+    // (Face Metrics: with the field at hand - the head - a triangle's facing is judged by the field's gradient at
+    // its centre, not by its vertices' normals: those are smoothed and point wrong in creases (under the jaw),
+    // which flipped good triangles. Triangles off the surface - the mouth's inside - are left alone.)
+    static int RepairFolds(Vector3[] V, Vector3[] N, List<int> T, BodySdfKernel? field)
     {
         int found = 0;
         for (int t = 0; t + 2 < T.Count; t += 3)
-            if (Inverted(V, N, T[t], T[t + 1], T[t + 2])) { found++; int tmp = T[t + 1]; T[t + 1] = T[t + 2]; T[t + 2] = tmp; }
+        {
+            bool inv;
+            if (field.HasValue)
+            {
+                var k = field.Value;
+                Vector3 a = V[T[t]], b = V[T[t + 1]], c = V[T[t + 2]];
+                Vector3 fn = Vector3.Cross(b - a, c - a);
+                if (fn.sqrMagnitude < 1e-14f) continue;
+                Vector3 ctr = (a + b + c) / 3f;
+                float s0 = k.Skin(ctr);
+                if (Mathf.Abs(s0) > 0.002f) { inv = Inverted(V, N, T[t], T[t + 1], T[t + 2]); }
+                else
+                {
+                    const float h = 0.0005f;
+                    Vector3 g = new Vector3(k.Skin(ctr + new Vector3(h, 0, 0)) - s0, k.Skin(ctr + new Vector3(0, h, 0)) - s0, k.Skin(ctr + new Vector3(0, 0, h)) - s0);
+                    inv = g.sqrMagnitude > 1e-14f && Vector3.Dot(fn.normalized, g.normalized) < -0.2f;
+                }
+            }
+            else inv = Inverted(V, N, T[t], T[t + 1], T[t + 2]);
+            if (inv) { found++; int tmp = T[t + 1]; T[t + 1] = T[t + 2]; T[t + 2] = tmp; }
+        }
         return found;
+    }
+
+    public int DroppedIslands { get; private set; }
+
+    // Face Metrics: tiny pieces of the head mesh cut off from the rest (slivers under a nostril or a lid, thinner
+    // than the grid): their triangles are dropped. Pieces under minVerts (welded) vertices. Returns the count.
+    static int DropIslands(Vector3[] V, List<int> T, int minVerts)
+    {
+        var ids = new Dictionary<Vector3Int, int>(); var map = new int[V.Length];
+        for (int i = 0; i < V.Length; i++)
+        {
+            var key = new Vector3Int(Mathf.RoundToInt(V[i].x * 5000f), Mathf.RoundToInt(V[i].y * 5000f), Mathf.RoundToInt(V[i].z * 5000f));
+            if (!ids.TryGetValue(key, out int id)) { id = ids.Count; ids[key] = id; }
+            map[i] = id;
+        }
+        var parent = new int[ids.Count]; for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        for (int t = 0; t + 2 < T.Count; t += 3) { int r = Find(map[T[t]]); parent[Find(map[T[t + 1]])] = r; parent[Find(map[T[t + 2]])] = r; }
+        var size = new Dictionary<int, HashSet<int>>();
+        foreach (int i in T) { int r = Find(map[i]); if (!size.TryGetValue(r, out var hs)) size[r] = hs = new HashSet<int>(); hs.Add(map[i]); }
+        int dropped = 0;
+        var keep = new List<int>(T.Count);
+        for (int t = 0; t + 2 < T.Count; t += 3)
+        {
+            if (size[Find(map[T[t]])].Count < minVerts) { dropped++; continue; }
+            keep.Add(T[t]); keep.Add(T[t + 1]); keep.Add(T[t + 2]);
+        }
+        T.Clear(); T.AddRange(keep);
+        return dropped;
     }
 
     // How much a head vertex follows the jaw (0..1).

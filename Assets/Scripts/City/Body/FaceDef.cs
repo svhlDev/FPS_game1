@@ -172,7 +172,7 @@ public class FaceDef
         P("CheekboneFront", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.22f, 0.85f), Vector3.zero, new Vector3(0.17f, 0.13f, 0.1f), 0.004f,
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(1f, -0.4f, 0f), press: 0.05f),
         P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, 0f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
-          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.07f, femaleSize: new Vector3(0.85f, 0.85f, 1f)),
+          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.1f, femaleSize: new Vector3(0.85f, 0.85f, 1f)),
         P("JawBody", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.85f, 0.4f), Vector3.zero, new Vector3(0.38f, 0.1f, 0.12f), 0.004f,
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.05f),
         P("Chin", FaceLine.Chin, FacePartShape.Ellipsoid, new Vector3(0f, 0.1f, 0.7f), Vector3.zero, new Vector3(0.24f, 0.16f, 0.14f), 0.004f, FacePartScale.Chin,
@@ -188,7 +188,7 @@ public class FaceDef
           mirrored: true, op: FacePartOp.Carve, axis: new Vector3(0f, 1f, 0f), press: 0.035f),
         // ---- Bone / cartilage: overhanging pieces ----
         // Brow ridge: a bar across above the eyes (two halves meeting at the nasal root), slightly overhanging.
-        P("BrowRidge", FaceLine.EyeLine, FacePartShape.Capsule, new Vector3(0.34f, 0.125f, -0.002f), new Vector3(0f, 18.3f, -88.6f), new Vector3(0.09f, 0.206f, 0f), 0.004f,
+        P("BrowRidge", FaceLine.EyeLine, FacePartShape.Capsule, new Vector3(0.34f, 0.125f, -0.002f), new Vector3(0f, 18.3f, -88.6f), new Vector3(0.09f, 0.206f, 0f), 0.012f,
           FacePartScale.Brow, mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(0.65f, 0.95f, 1f), sizeVar: new Vector3(0.15f, 0.05f, 0f)),
         // Nose: one tapered piece from the nasal root to the tip (its length scales the whole piece).
         P("Nose", FaceLine.NoseBase, FacePartShape.RoundCone, new Vector3(0f, 0.42f, 0f), Vector3.zero, new Vector3(0.065f, 0.11f, -0.004f), 0.004f, FacePartScale.Nose,
@@ -209,6 +209,9 @@ public class FaceDef
           mirrored: true, op: FacePartOp.Muscle, axis: new Vector3(0f, 1f, -0.2f), press: 0.025f),
         P("OrbicularisOris", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.24f, 0.18f), 0.004f,
           op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.08f),
+        // Face Metrics Fix 1: the chin's muscle under the lower lip fills the fold between the lip and the chin.
+        P("Mentalis", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.13f, 0.85f), Vector3.zero, new Vector3(0.24f, 0.11f, 0.08f), 0.004f,
+          op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.035f),
         P("Zygomaticus", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.42f, 0.8f), Vector3.zero, new Vector3(0.3f, 0.06f, 0.06f), 0.004f,
           mirrored: true, op: FacePartOp.Muscle, axis: new Vector3(-0.35f, -1f, 0f), press: 0.03f),
         // ---- Markers (no shape) ----
@@ -249,7 +252,7 @@ public class FaceDef
         P("VermilionBorder", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.15f, 0.062f, -0.0003f), new Vector3(0f, 0f, -97f), new Vector3(0.012f, 0.13f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Union, snap: true),
         P("ChinGroove", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, -0.14f, -0.0012f), new Vector3(0f, 0f, -90f), new Vector3(0.05f, 0.12f, 0f), 0.003f,
-          op: FacePartOp.Subtract, snap: true, press: 0.25f),
+          op: FacePartOp.Subtract, snap: true, press: 0.15f),
         // The double chin's crease: under the jaw, only with a lot of fat (it starts as a hairline).
         P("DoubleChinCrease", FaceLine.Chin, FacePartShape.Capsule, new Vector3(0f, -0.12f, -0.004f), new Vector3(0f, 0f, -90f), new Vector3(0.01f, 0.3f, 0f), 0.004f,
           op: FacePartOp.Subtract, snap: true, press: 0.35f),

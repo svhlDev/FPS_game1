@@ -80,6 +80,7 @@ public static class FaceMetrics
     public class HeadResult
     {
         public string label, group; public int dex;
+        public float buildMs; public int headTris, bodyTris;
         public LevelResult[] levels = new LevelResult[4];
         public float browGap, browGapRatio, browTintMid;
         public int rootsScalp, rootsBrow, rootsBeard, cardsOnFace;
@@ -110,7 +111,9 @@ public static class FaceMetrics
             var r = new HeadResult { label = cs.label, group = cs.group, dex = cs.sheet.DEX };
             try
             {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 var a = new BodyBuild(cs.sheet).RunSync();
+                r.buildMs = (float)sw.Elapsed.TotalMilliseconds; r.headTris = a.head.triangles.Length / 3; r.bodyTris = a.body.triangles.Length / 3;
                 Measure(a, r);
                 Free(a.body); Free(a.head); Free(a.wig); Free(a.hairCards);
             }
@@ -181,13 +184,14 @@ public static class FaceMetrics
         void Union(int[] t, int[] map) { for (int i = 0; i + 2 < t.Length; i += 3) { int p0 = Find(map[t[i]]); parent[Find(map[t[i + 1]])] = p0; parent[Find(map[t[i + 2]])] = p0; } }
         Union(ht, hmap); Union(bt, bmap);
         var headPieces = new HashSet<int>();
-        for (int i = 0; i < hv.Length; i++) if (Above(hv[i]) > 0.01f) headPieces.Add(Find(hmap[i]));
+        var usedH = new bool[hv.Length]; foreach (int i in ht) usedH[i] = true;
+        for (int i = 0; i < hv.Length; i++) if (usedH[i] && Above(hv[i]) > 0.01f) headPieces.Add(Find(hmap[i]));
         // (The extra pieces: their vertex count and centre.)
         var pieceAt = new StringBuilder();
         if (headPieces.Count > 1)
         {
             var cnt = new Dictionary<int, int>(); var sum = new Dictionary<int, Vector3>();
-            for (int i = 0; i < hv.Length; i++) { int rt = Find(hmap[i]); if (!headPieces.Contains(rt)) continue; cnt.TryGetValue(rt, out int n0); cnt[rt] = n0 + 1; sum.TryGetValue(rt, out var s0); sum[rt] = s0 + hv[i]; }
+            for (int i = 0; i < hv.Length; i++) { if (!usedH[i]) continue; int rt = Find(hmap[i]); if (!headPieces.Contains(rt)) continue; cnt.TryGetValue(rt, out int n0); cnt[rt] = n0 + 1; sum.TryGetValue(rt, out var s0); sum[rt] = s0 + hv[i]; }
             int big = -1; foreach (var kv in cnt) if (big < 0 || kv.Value > cnt[big]) big = kv.Key;
             foreach (var kv in cnt) if (kv.Key != big) pieceAt.Append($"{kv.Value}v@{Cm(sum[kv.Key] / kv.Value)} ");
         }
@@ -289,10 +293,13 @@ public static class FaceMetrics
             res.wEar = Silhouette(ke, c, earY); res.wCheek = Silhouette(ke, c, cheekY); res.wJaw = Silhouette(ke, c, jawY);
             res.wChin = Silhouette(ke, c, c.chin + 0.01f);
             res.mEar = MeshWidth(v, earMask, c, earY, false); res.mCheek = MeshWidth(v, earMask, c, cheekY, true); res.mJaw = MeshWidth(v, earMask, c, jawY, true);
+            // The jaw's corner: how much the outline turns, the best over the jaw line +- 1 cm (the angle sits
+            // a little higher or lower per head).
+            for (float jy = jawY - 0.01f; jy <= jawY + 0.0101f; jy += 0.005f)
             {
-                float up = Silhouette(ke, c, jawY + 0.015f), dn = Silhouette(ke, c, jawY - 0.015f);
-                float a1 = Mathf.Atan2((up - res.wJaw) * 0.5f, 0.015f) * Mathf.Rad2Deg, a2 = Mathf.Atan2((res.wJaw - dn) * 0.5f, 0.015f) * Mathf.Rad2Deg;
-                res.jawCorner = Mathf.Abs(a2 - a1);
+                float w0 = Silhouette(ke, c, jy), up = Silhouette(ke, c, jy + 0.015f), dn = Silhouette(ke, c, jy - 0.015f);
+                float a1 = Mathf.Atan2((up - w0) * 0.5f, 0.015f) * Mathf.Rad2Deg, a2 = Mathf.Atan2((w0 - dn) * 0.5f, 0.015f) * Mathf.Rad2Deg;
+                res.jawCorner = Mathf.Max(res.jawCorner, a2 - a1);
             }
             // Midline profile.
             res.midline = Midline(ke, c, a.sheet.DEX, fatChin);
@@ -504,6 +511,7 @@ public static class FaceMetrics
             js.Append("{\"head\":\"").Append(r.label).Append("\"");
             if (r.error != null) { sb.AppendLine($"{r.label} | ERROR {r.error}"); js.Append(",\"error\":\"").Append(r.error.Replace("\"", "'")).Append("\"}"); fails++; Count("error"); continue; }
             bool headOk = r.PassHead(out string hwhy);
+            js.Append(",\"buildMs\":").Append(F(r.buildMs, "0")).Append(",\"headTris\":").Append(r.headTris).Append(",\"bodyTris\":").Append(r.bodyTris);
             js.Append(",\"browGapRatio\":").Append(F(r.browGapRatio, "0.000")).Append(",\"browTintMid\":").Append(F(r.browTintMid, "0.000"))
               .Append(",\"rootsScalp\":").Append(r.rootsScalp).Append(",\"rootsBrow\":").Append(r.rootsBrow).Append(",\"rootsBeard\":").Append(r.rootsBeard)
               .Append(",\"cardsOnFace\":").Append(r.cardsOnFace).Append(",\"levels\":[");
@@ -531,6 +539,7 @@ public static class FaceMetrics
                 js.Append("],\"pass\":").Append(ok ? "true" : "false").Append("}");
             }
             js.Append("],\"pass\":").Append(allOk ? "true" : "false").Append("}");
+            sb.AppendLine($"{r.label} | build {F(r.buildMs, "0")} ms, head {r.headTris} / body {r.bodyTris} triangles");
             sb.AppendLine($"{r.label} | heads | brow gap {F(r.browGapRatio, "0.00")} eye widths, tint on midline {F(r.browTintMid, "0.00")} | roots outside masks scalp {r.rootsScalp} brow {r.rootsBrow} beard {r.rootsBeard}, head-hair cards over the face {r.cardsOnFace} | {(headOk ? "ok" : "FAIL " + hwhy)}");
             if (!headOk) Count(hwhy);
             if (!allOk) fails++;

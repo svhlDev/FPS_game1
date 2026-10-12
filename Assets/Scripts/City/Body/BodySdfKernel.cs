@@ -237,7 +237,11 @@ public struct BodySdfKernel : IDisposable
         m = Mathf.Lerp(m, 0.7f, mouthArea * (1f - thick));
         m = Mathf.Lerp(m, 0.15f, Mathf.Max(forehead, temples));
         m = Mathf.Lerp(m, 0.6f, lowerLid);
-        return Mathf.Lerp(m, 0.03f, structure);
+        m = Mathf.Lerp(m, 0.03f, structure);
+        // (Face Metrics Fix 1: the lower lip keeps a little fat - between a fat-free lip and a fat chin the fold
+        // was a crater.)
+        float lowerLip = G(ax / 0.32f) * G((u.y + 0.7f) / 0.06f) * S(0.5f, 0.8f, u.z);
+        return Mathf.Max(m, 0.4f * lowerLip * thick + 0.2f * lowerLip);
     }
 
     // Signed distance to a polygon (Inigo Quilez's sdPolygon), 4 vertices.

@@ -97,10 +97,17 @@ public partial class ScenarioTest : MonoBehaviour
         {
             if (args[i] == "-metricsonly") only = args[i + 1].Replace('_', ' ');   // (underscores for spaces)
             if (args[i] == "-metricseeds") int.TryParse(args[i + 1], out seeds);
+            // (Resolution trials: cell sizes in mm; triangle budgets scale with the cell's area.)
+            var mr = BodyRules.Default.mesh;
+            if (args[i] == "-headcell" && float.TryParse(args[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float hc))
+            { float r = mr.headCell / (hc * 0.001f); mr.headTriangles = Mathf.RoundToInt(mr.headTriangles * r * r); mr.headCell = hc * 0.001f; }
+            if (args[i] == "-bodycell" && float.TryParse(args[i + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float bc))
+            { float r = mr.cell / (bc * 0.001f); mr.targetTriangles = Mathf.RoundToInt(mr.targetTriangles * r * r); mr.cell = bc * 0.001f; }
         }
+        Log($"mesh: body cell {BodyRules.Default.mesh.cell * 1000f:0.0} mm ({BodyRules.Default.mesh.targetTriangles} triangles), head cell {BodyRules.Default.mesh.headCell * 1000f:0.0} mm ({BodyRules.Default.mesh.headTriangles})");
         yield return null;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        FaceMetrics.Run(out string table, out string json, seeds, only);
+        FaceMetrics.Run(out string table, out string json, seeds, only, m => Debug.Log("FACEMETRICS " + m));
         foreach (var l in table.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd());
         Log($"face metrics took {sw.Elapsed.TotalSeconds:0} s");
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(Application.dataPath), "face_metrics.json"), json);
