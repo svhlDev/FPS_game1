@@ -184,8 +184,8 @@ public class FaceDef
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.05f, strength: true),
         // Face Metrics lower face: the chin, bone on the front of the jaw below the lower lip, standing forward
         // (a press stands out along the base's normal - at the egg's bottom that's down: hence pushDir).
-        P("Chin", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.24f, 0.85f), Vector3.zero, new Vector3(0.22f, 0.14f, 0.12f), 0.004f, FacePartScale.Chin,
-          op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.1f, femaleSize: new Vector3(0.8f, 0.85f, 0.85f), sizeVar: new Vector3(0.1f, 0.08f, 0f),
+        P("Chin", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.26f, 0.85f), Vector3.zero, new Vector3(0.28f, 0.18f, 0.14f), 0.004f, FacePartScale.Chin,
+          op: FacePartOp.Press, axis: new Vector3(1f, 0f, 0f), press: 0.28f,   // (~2 cm out: to the lower lip's line - the egg recedes there) femaleSize: new Vector3(0.8f, 0.85f, 0.85f), sizeVar: new Vector3(0.1f, 0.08f, 0f),
           pushDir: new Vector3(0f, -0.15f, 1f), strength: true),
         // The jaw arcs (the teeth under the lips): the lips sit on them (BodySDF places the lips on the bone with them).
         P("UpperJawArc", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0.06f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.17f, 0.16f), 0.004f,
@@ -222,7 +222,7 @@ public class FaceDef
         P("Temporalis", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.88f, 0.22f, 0.3f), Vector3.zero, new Vector3(0.26f, 0.24f, 0.1f), 0.004f,
           mirrored: true, op: FacePartOp.Muscle, axis: new Vector3(0f, 1f, -0.2f), press: 0.025f),
         P("OrbicularisOris", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, 0f, 0.9f), Vector3.zero, new Vector3(0.42f, 0.24f, 0.18f), 0.004f,
-          op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.08f),
+          op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.03f),   // (thin: the lips stand out of it)
         // The chin's muscle under the lower lip (grows with STR, like the masseter and the lips).
         P("Mentalis", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.13f, 0.85f), Vector3.zero, new Vector3(0.24f, 0.11f, 0.08f), 0.004f,
           op: FacePartOp.Muscle, axis: new Vector3(1f, 0f, 0f), press: 0.035f, strength: true),

@@ -229,7 +229,8 @@ public struct BodySdfKernel : IDisposable
         // Near-zero on the structure.
         float nose = G(ax / 0.24f) * S(-0.52f, -0.44f, u.y) * (1f - S(0.05f, 0.15f, u.y)) * S(0.6f, 0.8f, u.z);
         float philtrum = G(ax / 0.12f) * S(-0.62f, -0.56f, u.y) * (1f - S(-0.46f, -0.4f, u.y)) * S(0.6f, 0.8f, u.z);
-        float lips = G(ax / 0.34f) * G((u.y + 0.63f) / 0.07f) * S(0.5f, 0.8f, u.z);
+        // (Both lips: from the upper lip's top down past the lower lip - the chin's fat pool reached up over it.)
+        float lips = G(ax / 0.36f) * G((u.y + 0.67f) / 0.1f) * S(0.5f, 0.8f, u.z);
         float eyes = G((ax - 0.4f) / 0.28f) * G((u.y - 0.02f) / 0.12f) * S(0.4f, 0.65f, u.z);
         float brow = G((ax - 0.35f) / 0.35f) * G((u.y - 0.14f) / 0.08f) * S(0.5f, 0.75f, u.z);
         float structure = Mathf.Max(Mathf.Max(nose, philtrum), Mathf.Max(Mathf.Max(lips, eyes), brow));

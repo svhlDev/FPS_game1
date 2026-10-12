@@ -435,7 +435,8 @@ public class BodySDF : IDisposable
             }
             else
             {
-                var (ps, ns) = Snap(e.target);
+                // (Muscles ride on the bone - the base plus the pressed bone: the jaw arcs, the chin - not the bare egg.)
+                var (ps, ns) = fp.op == (int)FacePartOp.Muscle ? SnapBone(e.target) : Snap(e.target);
                 // (A set push direction: it stands out that way instead of along the base's normal.)
                 if (pushDirs.TryGetValue(e.i, out var pd)) ns = pd;
                 Vector3 x = Vector3.ProjectOnPlane(e.axis, ns);
