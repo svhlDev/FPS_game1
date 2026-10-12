@@ -230,11 +230,16 @@ public class FaceDef
           op: FacePartOp.Subtract, snap: true),
         P("MouthLineSide", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.24f, -0.003f, -0.0006f), new Vector3(0f, 33.6f, -91f), new Vector3(0.022f, 0.09f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Subtract, snap: true),
+        // (press on a skin feature: a fold - the fat along it is thinned by up to that fraction, so the fat
+        // either side bulges against it and the fold deepens with the fat.)
         P("MouthCorner", FaceLine.Mouth, FacePartShape.Sphere, new Vector3(0.37f, -0.004f, -0.0022f), Vector3.zero, new Vector3(0.045f, 0f, 0f), 0.002f,
-          mirrored: true, op: FacePartOp.Subtract, snap: true),
+          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.7f),
         P("Nasolabial", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.345f, 0.04f, -0.0006f), new Vector3(0f, 0f, -153.3f), new Vector3(0.03f, 0.163f, 0f), 0.002f,
-          mirrored: true, op: FacePartOp.Subtract, snap: true),
+          mirrored: true, op: FacePartOp.Subtract, snap: true, press: 0.85f),
         P("ChinGroove", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, -0.14f, -0.0012f), new Vector3(0f, 0f, -90f), new Vector3(0.05f, 0.12f, 0f), 0.003f,
-          op: FacePartOp.Subtract, snap: true),
+          op: FacePartOp.Subtract, snap: true, press: 0.6f),
+        // The double chin's crease: under the jaw, only with a lot of fat (it starts as a hairline).
+        P("DoubleChinCrease", FaceLine.Chin, FacePartShape.Capsule, new Vector3(0f, -0.12f, -0.004f), new Vector3(0f, 0f, -90f), new Vector3(0.01f, 0.3f, 0f), 0.004f,
+          op: FacePartOp.Subtract, snap: true, press: 0.35f),
     };
 }

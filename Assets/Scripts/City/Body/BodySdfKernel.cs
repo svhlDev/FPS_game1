@@ -196,32 +196,45 @@ public struct BodySdfKernel : IDisposable
     //           readable nose, brow and eyes)
     // The thick pools only thicken the front and sides of the face, near its surface (never the back of
     // the neck); the cranium elsewhere carries a little.
-    public float FaceFatMask(Vector3 p)
+    public float FaceFatMask(Vector3 p) => FaceFatMask(p, 0f);
+
+    // Face Polish Part 1: fat is uneven and hangs. baseFat: the head's fat thickness (m) - the more of it,
+    // the further the pools (cheek pads, jowls, under the chin) sag downward.
+    //   pools   the cheek pads (below the cheekbones, beside the nose), the jowls, under the chin: most fat
+    //   medium  round the mouth; a slight puff under the lower lids
+    //   ~none   the nose (bridge, tip, wings), the philtrum, the lips, the lids and a band round the sockets,
+    //           the brow ridge - as defined on a DEX 1 face as on a DEX 20 one
+    //   thin    the forehead, the temples; a little on the cranium
+    public float FaceFatMask(Vector3 p, float baseFat)
     {
         Vector3 d = p - faceO;
         Vector3 u = new Vector3(Vector3.Dot(d, skull.x) / faceR.x, Vector3.Dot(d, skull.y) / faceR.y, Vector3.Dot(d, skull.z) / faceR.z);
         float ax = Mathf.Abs(u.x);
         float G(float x) => Mathf.Exp(-x * x);
         float S(float a, float b, float x) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, x));
+        float sag = 0.6f * baseFat / Mathf.Max(faceR.y, 1e-3f);   // (half heights)
         float fwd = S(-0.15f, 0.3f, u.z);
         float shell = G((new Vector3(u.x, u.y * 0.9f, u.z).magnitude - 0.95f) / 0.45f);
-        float cheeks = G((ax - 0.42f) / 0.2f) * G((u.y + 0.32f) / 0.2f) * S(0.2f, 0.5f, u.z);
-        float jowls = G((ax - 0.52f) / 0.22f) * G((u.y + 0.8f) / 0.17f) * fwd;
-        float chin = G(ax / 0.45f) * G((u.y + 1.02f) / 0.16f) * fwd;
+        float cheeks = G((ax - 0.45f) / 0.28f) * G((u.y + 0.38f + sag) / 0.28f) * S(0.15f, 0.45f, u.z);
+        float jowls = G((ax - 0.55f) / 0.3f) * G((u.y + 0.82f + sag * 1.3f) / 0.25f) * fwd;
+        float chin = G(ax / 0.5f) * G((u.y + 1.05f + sag * 1.5f) / 0.24f) * fwd;
         float thick = Mathf.Max(cheeks, Mathf.Max(jowls, chin)) * shell;
         float mouthArea = G(ax / 0.45f) * G((u.y + 0.6f) / 0.17f) * S(0.3f, 0.6f, u.z);
-        float lips = G(ax / 0.32f) * G((u.y + 0.63f) / 0.06f) * S(0.5f, 0.8f, u.z);
-        // Thin: forehead (above the brow line, in front), nose (the midline between the eyes and the nose
-        // base, forward), brows and eyes, temples.
+        float lowerLid = G((ax - 0.4f) / 0.15f) * G((u.y + 0.16f) / 0.06f) * S(0.5f, 0.75f, u.z);
+        // Near-zero on the structure.
+        float nose = G(ax / 0.24f) * S(-0.52f, -0.44f, u.y) * (1f - S(0.05f, 0.15f, u.y)) * S(0.6f, 0.8f, u.z);
+        float philtrum = G(ax / 0.12f) * S(-0.62f, -0.56f, u.y) * (1f - S(-0.46f, -0.4f, u.y)) * S(0.6f, 0.8f, u.z);
+        float lips = G(ax / 0.34f) * G((u.y + 0.63f) / 0.07f) * S(0.5f, 0.8f, u.z);
+        float eyes = G((ax - 0.4f) / 0.28f) * G((u.y - 0.02f) / 0.12f) * S(0.4f, 0.65f, u.z);
+        float brow = G((ax - 0.35f) / 0.35f) * G((u.y - 0.14f) / 0.08f) * S(0.5f, 0.75f, u.z);
+        float structure = Mathf.Max(Mathf.Max(nose, philtrum), Mathf.Max(Mathf.Max(lips, eyes), brow));
         float forehead = S(0.1f, 0.25f, u.y) * S(0.1f, 0.5f, u.z);
-        float nose = G(ax / 0.2f) * S(-0.5f, -0.4f, u.y) * (1f - S(0.05f, 0.15f, u.y)) * S(0.55f, 0.75f, u.z);
-        float eyes = G((ax - 0.4f) / 0.3f) * G((u.y - 0.04f) / 0.17f) * S(0.4f, 0.65f, u.z);
         float temples = S(0.62f, 0.8f, ax) * G((u.y - 0.15f) / 0.25f) * S(-0.1f, 0.3f, u.z);
-        float thin = Mathf.Max(Mathf.Max(forehead, nose), Mathf.Max(eyes, temples));
-        float m = Mathf.Lerp(0.5f, 2.0f, thick);
-        m = Mathf.Lerp(m, 0.8f, mouthArea * (1f - thick));
-        m = Mathf.Lerp(m, 0.15f, thin);
-        return Mathf.Lerp(m, 0.12f, lips);
+        float m = Mathf.Lerp(0.4f, 2.3f, thick);
+        m = Mathf.Lerp(m, 0.7f, mouthArea * (1f - thick));
+        m = Mathf.Lerp(m, 0.15f, Mathf.Max(forehead, temples));
+        m = Mathf.Lerp(m, 0.6f, lowerLid);
+        return Mathf.Lerp(m, 0.03f, structure);
     }
 
     // Signed distance to a polygon (Inigo Quilez's sdPolygon), 4 vertices.
@@ -299,6 +312,28 @@ public struct BodySdfKernel : IDisposable
     // pressed landmarks and the overhanging pieces (nose, brow bar, lips, ears) - one small blend; muscle: the
     // bone offset by the muscle map, plus the pressed muscles; skin: the muscle offset by the fat map, base and
     // pieces joined once with a radius that grows with the fat (lean faces crisp, fat ones round).
+    // Face Polish Part 1: folds after the fat. Along a fold (a skin feature with press > 0: the nose-to-mouth
+    // fold, the mouth corners, the chin crease, the double chin's crease) the skin is tied down: the fat there
+    // is thinned (by up to `press`), in a band that only widens a little with the fat. The fat either side
+    // bulges against it, so the fold deepens with the fat (self-limiting: deeper in, the band is farther).
+    // Distance measured across the surface (the part's own z, out of the face, ignored).
+    float FoldTether(Vector3 p, float fat)
+    {
+        if (fat <= 1e-4f) return 0f;
+        float w = 0.003f + 0.2f * fat, t = 0f;
+        for (int j = 0; j < face.Length; j++)
+        {
+            var f = face[j];
+            if (f.op != (int)FacePartOp.Subtract || f.press <= 0f) continue;
+            Vector3 d = p - f.o;
+            float lx = Vector3.Dot(d, f.x), ly = Vector3.Dot(d, f.y);
+            if (f.shape == (int)FacePartShape.Capsule) ly -= Mathf.Clamp(ly, -f.halfLen, f.halfLen);
+            float r = Mathf.Sqrt(lx * lx + ly * ly) / w;
+            if (r < 3f) t = Mathf.Max(t, f.press * Mathf.Exp(-r * r));
+        }
+        return Mathf.Min(t, 0.95f);
+    }
+
     public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin)
     {
         float A = HeadBase(p);
@@ -560,12 +595,15 @@ public struct BodySdfKernel : IDisposable
             soft = SMin(soft, v, kFat);
         }
         bool nearHead = headIndex >= 0 && (p - skull.o).sqrMagnitude < faceReach * faceReach;
+        float headFat = 0f;
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
         // The head (Anatomy Rework Part 1): its own layers, joined to the body at the neck.
         if (nearHead)
         {
-            float headFat = FatAt(p, headIndex) * FaceFatMask(p);
+            float baseFat = FatAt(p, headIndex);
+            headFat = baseFat * FaceFatMask(p, baseFat);
+            headFat *= 1f - FoldTether(p, headFat);
             HeadLayers(p, headFat, out float hb, out float hm, out float hs);
             if (hs < skin) fat = headFat * fatScale;
             core = Mathf.Min(core, hb);

@@ -700,6 +700,7 @@ public class BodySDF : IDisposable
                 {
                     o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
                     halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
+                    press = part.op == FacePartOp.Subtract ? part.press : 0f,   // (Face Polish 1: folds deepen with fat)
                 };
                 // Anatomy Rework Part 1: pressed shapes, planes and pieces are placed on the base once it exists.
                 var op = part.op;
