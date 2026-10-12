@@ -307,6 +307,7 @@ public class BodySDF : IDisposable
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
             cranium = E(cranium.f, cranium.r, headIndex, 0), craniumBottom = craniumBottom, craniumTop = craniumTop, jaw = mandible,
+            faceO = Canon.o, faceR = new Vector3(Canon.halfW, Canon.halfH, Canon.halfD),
             headIndex = headIndex, eyeL = EyeL, eyeR = EyeR, eyeRadius = EyeRadius, lidL = LidL, lidR = LidR, earL = EarLeft, earR = EarRight,
             muscleBlend = muscleBlend, fatBlendPerMetre = fatBlendPerMetre, fatBlendMin = fatBlendMin,
             breastBlend = breastBlend, featureBlend = featureBlend, eyeCarveBlend = eyeCarveBlend, fatBlendFalloff = fatBlendFalloff,
