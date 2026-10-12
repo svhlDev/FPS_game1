@@ -375,6 +375,14 @@ public struct BodySdfKernel : IDisposable
         }
     }
 
+    // The nose's pieces (no fat on them): their distance.
+    float NosePieces(Vector3 p)
+    {
+        float d = float.MaxValue;
+        for (int j = 0; j < face.Length; j++) if (face[j].noFat != 0) d = Mathf.Min(d, FaceDist(face[j], p));
+        return d;
+    }
+
     public static float FaceDist(FacePrim f, Vector3 p)
     {
         p -= f.o;
@@ -622,6 +630,8 @@ public struct BodySdfKernel : IDisposable
             muscle = SMin(muscle, hm, neckBlend);
             skin = SMin(skin, hs, neckBlend);
         }
+        // The nose again after the fat (its pieces, crisp): a fat face never swallows it.
+        if (nearHead) skin = SMin(skin, NosePieces(p), headBlend);
         if (nearHead)
             for (int j = 0; j < face.Length; j++)
             {
@@ -773,6 +783,7 @@ public struct BodySdfKernel : IDisposable
         float baseFat = FatAt(p, headIndex);
         float headFat = baseFat * FaceFatMask(p, baseFat);
         HeadLayers(p, headFat, out _, out _, out float skin);
+        skin = SMin(skin, NosePieces(p), headBlend);
         for (int j = 0; j < face.Length; j++)
         {
             if (face[j].snapped != 0 && fatScale < 0.5f) continue;
