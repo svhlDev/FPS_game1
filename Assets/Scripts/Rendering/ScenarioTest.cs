@@ -824,8 +824,10 @@ public partial class ScenarioTest : MonoBehaviour
             if (holes < 6) sb.Append($"({p.x * 100f:0.0},{p.y * 100f:0.0},{p.z * 100f:0.0}) ");
             holes++;
         }
-        // Inverted triangles (facing against their vertices' normals): culled, they look like holes.
-        var hm = f.Asset.head; var hv = hm.vertices; var hn = hm.normals; var ht = hm.triangles;
+        // Inverted triangles (facing against the field's gradient at their centre - the truth; the vertex normals
+        // are smoothed and point wrong in creases): culled, they look like holes. Off-surface ones are left out.
+        var hm = f.Asset.head; var hv = hm.vertices; var ht = hm.triangles;
+        using var sdfK = new BodySDF(f.Plan); var kk = sdfK.Kernel; kk.cutMode = 0;
         int flipped = 0; var sf = new System.Text.StringBuilder();
         for (int i = 0; i < ht.Length; i += 3)
         {
@@ -836,7 +838,11 @@ public partial class ScenarioTest : MonoBehaviour
                 Vector3 m = (a0 + b0 + c0) / 3f - f.Asset.mouthCentre;   // (the mouth's box is double-sided by design)
                 if (Mathf.Abs(Vector3.Dot(m, c.x)) < c.mouthHalfWidth + 0.006f && Mathf.Abs(Vector3.Dot(m, c.y)) < 0.016f && Vector3.Dot(m, c.z) > -0.045f) continue;
             }
-            if (Vector3.Dot(fn.normalized, (hn[ht[i]] + hn[ht[i + 1]] + hn[ht[i + 2]]).normalized) < -0.2f)
+            Vector3 ct = (a0 + b0 + c0) / 3f; float s0 = kk.Skin(ct);
+            if (Mathf.Abs(s0) > 0.002f) continue;
+            const float hh = 0.0005f;
+            Vector3 g = new Vector3(kk.Skin(ct + new Vector3(hh, 0, 0)) - s0, kk.Skin(ct + new Vector3(0, hh, 0)) - s0, kk.Skin(ct + new Vector3(0, 0, hh)) - s0);
+            if (g.sqrMagnitude > 1e-14f && Vector3.Dot(fn.normalized, g.normalized) < -0.2f)
             {
                 var q = (a0 + b0 + c0) / 3f - c.o;
                 if (flipped < 6) sf.Append($"({q.x * 100f:0.0},{q.y * 100f:0.0},{q.z * 100f:0.0}) ");
@@ -1062,11 +1068,14 @@ public partial class ScenarioTest : MonoBehaviour
                                                      ("34", c + fwd * 0.36f + right * 0.3f + Vector3.up * 0.03f),
                                                      ("eye", c + fwd * 0.2f + right * 0.05f + Vector3.up * 0.01f),
                                                      ("mouth", c + fwd * 0.24f + right * 0.08f - Vector3.up * 0.045f),
+                                                     ("nose", c + fwd * 0.2f - Vector3.up * 0.03f),
+                                                     ("lowside", c + right * 0.22f + fwd * 0.03f - Vector3.up * 0.06f),
                                                      ("ear", c + right * 0.24f + fwd * 0.04f - Vector3.up * 0.02f),
                                                      ("back", c - fwd * 0.5f + right * 0.2f - Vector3.up * 0.06f),
                                                      ("body", c - Vector3.up * 0.75f + fwd * 2.4f + right * 0.6f) })
                 {
-                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : view == "mouth" ? c - Vector3.up * 0.055f : view == "ear" ? c + right * 0.06f - Vector3.up * 0.03f : c;
+                    Vector3 at = view == "body" ? c - Vector3.up * 0.75f : view == "nose" ? c + fwd * 0.07f - Vector3.up * 0.035f : view == "lowside" ? c + fwd * 0.06f - Vector3.up * 0.065f
+                               : view == "mouth" ? c - Vector3.up * 0.055f : view == "ear" ? c + right * 0.06f - Vector3.up * 0.03f : c;
                     bool ortho = view == "canon" || view == "side";
                     cam.orthographic = ortho; cam.orthographicSize = 0.17f;
                     if (ov != null) ov.Show(view == "canon" ? HeadCanonOverlay.View.Front : view == "side" ? HeadCanonOverlay.View.Side : HeadCanonOverlay.View.Off);
