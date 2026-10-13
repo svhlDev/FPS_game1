@@ -495,6 +495,24 @@ public static class FaceMetrics
         float cheekW = Silhouette(ke, c, -0.17f * c.halfH);
         var parts = new StringBuilder();
         // (Each layer's front at the lips and the chin: bone, muscle, skin - HeadLayers - and the whole field.)
+        // (The midline, every 2 mm from above the mouth down to the chin: y | field front / muscle front / bone front, mm.)
+        parts.Append("midline y|field/muscle/bone: ");
+        for (float yy = c.mouth + 0.012f; yy >= c.chin - 0.004f; yy -= 0.002f)
+        {
+            float LF(int which)
+            {
+                Vector3 b0 = c.o + c.y * yy; float z = c.halfD * 2.2f;
+                for (int it = 0; it < 400; it++)
+                {
+                    Vector3 q = b0 + c.z * z; float d;
+                    if (which == 3) d = k.Skin(q); else { k.HeadLayers(q, 0f, out float hb, out float hm, out _); d = which == 0 ? hb : hm; }
+                    if (d < 0.0001f) break; z -= Mathf.Clamp(d * 0.8f, 0.0001f, 0.01f);
+                }
+                return z;
+            }
+            parts.Append($"{F((yy - c.mouth) * 1000f, "0")}|{F(LF(3) * 1000f, "0")}/{F(LF(1) * 1000f, "0")}/{F(LF(0) * 1000f, "0")} ");
+        }
+        parts.Append("; ");
         foreach (var (lbl, yy) in new[] { ("upper lip", c.mouth + 0.005f), ("lower lip", c.mouth - 0.006f), ("chin", c.chin + 0.012f) })
         {
             float L(int which)
@@ -520,7 +538,7 @@ public static class FaceMetrics
         }
         return $"[{parts}] jaw/cheek {F(jaw / Mathf.Max(cheekW, 1e-4f), "0.000")}, chin vs lower lip {F((chin - lower) / (2f * c.halfH) * 100f, "0.0")}% of head height; " +
                $"profile mm: upper lip {F(upper * 1000f)}, lower lip {F(lower * 1000f)} ({F((lower - upper) * 1000f)} vs upper), fold {F(foldDepth * 1000f)} deep, chin {F(chin * 1000f)} ({F((chin - lower) * 1000f)} vs lower lip); " +
-               $"nose tip {F((noseTip - cheek) * 1000f)} mm in front of the cheek; jaw width {F(jaw * 100f, "0.00")} cm";
+               $"nose tip {F(noseTip * 1000f)} ({F((noseTip - cheek) * 1000f)} mm in front of the cheek); jaw width {F(jaw * 100f, "0.00")} cm";
     }
 
     // An ear's attachment: at each height down its top 80%, a walk from its front edge (inside the ear)

@@ -80,6 +80,16 @@ public partial class ScenarioTest : MonoBehaviour
             case "heads": yield return HeadsTest(); break;
             case "headsfat": yield return HeadsTest(LowDexRows(), false); break;
             case "facemetrics": yield return FaceMetricsRun(); break;
+            case "profile":
+            {
+                // (The lower face's side profile numbers only - plan + SDF, no meshes: seconds.)
+                foreach (var (lbl, sh) in new[] { ("M sSTR1", new CharacterSheet(Sex.Male, 1, 10, 10, 3321)), ("M sSTR10", new CharacterSheet(Sex.Male, 10, 10, 10, 3321)), ("M sSTR20", new CharacterSheet(Sex.Male, 20, 10, 10, 3321)),
+                                                  ("F sSTR1", new CharacterSheet(Sex.Female, 1, 10, 10, 3322)), ("F sSTR10", new CharacterSheet(Sex.Female, 10, 10, 10, 3322)), ("F sSTR20", new CharacterSheet(Sex.Female, 20, 10, 10, 3322)),
+                                                  ("M DEX1", new CharacterSheet(Sex.Male, 10, 10, 1, 3101)), ("M DEX10", new CharacterSheet(Sex.Male, 10, 10, 10, 3102)), ("M DEX20", new CharacterSheet(Sex.Male, 10, 10, 20, 3103)),
+                                                  ("F DEX1", new CharacterSheet(Sex.Female, 10, 10, 1, 3201)), ("F DEX10", new CharacterSheet(Sex.Female, 10, 10, 10, 3202)), ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) })
+                    Log($"  {lbl}: {FaceMetrics.Profile(BodyPlanner.Generate(sh))}");
+                yield return null; break;
+            }
             case "facesanity": { bool ok = FaceSanity.Run(out string rep); foreach (var l in rep.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd()); yield return null; break; }
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
