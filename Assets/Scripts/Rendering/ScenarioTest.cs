@@ -828,21 +828,24 @@ public partial class ScenarioTest : MonoBehaviour
         // are smoothed and point wrong in creases): culled, they look like holes. Off-surface ones are left out.
         var hm = f.Asset.head; var hv = hm.vertices; var ht = hm.triangles;
         using var sdfK = new BodySDF(f.Plan); var kk = sdfK.Kernel; kk.cutMode = 0;
+        lastMouthFlips = 0;
         int flipped = 0; var sf = new System.Text.StringBuilder();
         for (int i = 0; i < ht.Length; i += 3)
         {
             Vector3 a0 = hv[ht[i]], b0 = hv[ht[i + 1]], c0 = hv[ht[i + 2]];
             Vector3 fn = Vector3.Cross(b0 - a0, c0 - a0);
             if (fn.sqrMagnitude < 1e-12f) continue;
+            bool inMouth;
             {
-                Vector3 m = (a0 + b0 + c0) / 3f - f.Asset.mouthCentre;   // (the mouth's box is double-sided by design)
-                if (Mathf.Abs(Vector3.Dot(m, c.x)) < c.mouthHalfWidth + 0.006f && Mathf.Abs(Vector3.Dot(m, c.y)) < 0.016f && Vector3.Dot(m, c.z) > -0.045f) continue;
+                Vector3 m = (a0 + b0 + c0) / 3f - f.Asset.mouthCentre;   // (the mouth's box is double-sided by design: counted on its own)
+                inMouth = Mathf.Abs(Vector3.Dot(m, c.x)) < c.mouthHalfWidth + 0.006f && Mathf.Abs(Vector3.Dot(m, c.y)) < 0.016f && Vector3.Dot(m, c.z) > -0.045f;
             }
             Vector3 ct = (a0 + b0 + c0) / 3f; float s0 = kk.Skin(ct);
-            if (Mathf.Abs(s0) > 0.002f) continue;
+            if (Mathf.Abs(s0) > 0.002f) continue;   // (off the surface: the mouth's inside)
             const float hh = 0.0005f;
             Vector3 g = new Vector3(kk.Skin(ct + new Vector3(hh, 0, 0)) - s0, kk.Skin(ct + new Vector3(0, hh, 0)) - s0, kk.Skin(ct + new Vector3(0, 0, hh)) - s0);
-            if (g.sqrMagnitude > 1e-14f && Vector3.Dot(fn.normalized, g.normalized) < -0.2f)
+            if (g.sqrMagnitude > 1e-14f && Vector3.Dot(fn.normalized, g.normalized) < -0.2f && inMouth) { lastMouthFlips++; continue; }
+            if (g.sqrMagnitude > 1e-14f && Vector3.Dot(fn.normalized, g.normalized) < -0.2f && !inMouth)
             {
                 var q = (a0 + b0 + c0) / 3f - c.o;
                 if (flipped < 6) sf.Append($"({q.x * 100f:0.0},{q.y * 100f:0.0},{q.z * 100f:0.0}) ");
@@ -855,6 +858,7 @@ public partial class ScenarioTest : MonoBehaviour
     }
 
     static string lastOpen = "";
+    static int lastMouthFlips;   // flipped triangles (against the field) in the mouth's box, last FaceHoles call
     static int OpenEdges(Mesh m)
     {
         if (m == null) return 0;
@@ -1039,6 +1043,7 @@ public partial class ScenarioTest : MonoBehaviour
                     }
                 { int holes = FaceHoles(f, out string where); faceHoles += holes > 0 ? 1 : 0; if (holes > 0) Log($"  {lbl}: {holes} open edges in the face at {where}"); }
                 Log($"  {lbl}: {FaceMetrics.Profile(f.Plan)}");
+                Log($"  {lbl}: mouth region flipped triangles {lastMouthFlips}");
                 if (clay) Clay(f);
                 Log($"  {lbl}: {CanonReport(f)}; wig {f.Asset.wigStyle}: {OpenEdges(f.Asset.wig)} open edges; hair cards {(f.Asset.hairCards != null ? f.Asset.hairCards.triangles.Length / 3 : 0)} triangles; {f.Asset.neckWeld}");
                 if (f.Asset.wig != null) { wigsChecked++; if (OpenEdges(f.Asset.wig) > 0) { wigsOpen++; Log($"    open edges at {lastOpen}"); } }

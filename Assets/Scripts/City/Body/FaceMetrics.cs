@@ -496,8 +496,34 @@ public static class FaceMetrics
         var parts = new StringBuilder();
         // (Each layer's front at the lips and the chin: bone, muscle, skin - HeadLayers - and the whole field.)
         // (The midline, every 2 mm from above the mouth down to the chin: y | field front / muscle front / bone front, mm.)
+        // (The lip pieces on the midline, each on its own: upper - its front and lowest edge; lower - its front and top.)
+        {
+            var up = new List<BodySdfKernel.FacePrim>(); var lo = new List<BodySdfKernel.FacePrim>();
+            for (int j = 0; j < sdf.FacePartNames.Count; j++) { if (sdf.FacePartNames[j].StartsWith("LipUpper")) up.Add(sdf.FacePrims[j]); if (sdf.FacePartNames[j] == "LipLower") lo.Add(sdf.FacePrims[j]); }
+            (float front, float yTop, float yBot, float zAtBot) Piece(List<BodySdfKernel.FacePrim> ps)
+            {
+                float fr = float.MinValue, yt = float.MinValue, yb = float.MaxValue, zb = 0f;
+                for (float yy = c.mouth + 0.02f; yy >= c.mouth - 0.025f; yy -= 0.0002f)
+                {
+                    float best = float.MinValue;
+                    for (float zz = c.halfD * 1.6f; zz > 0f; zz -= 0.0002f)
+                    {
+                        Vector3 q = c.o + c.y * yy + c.z * zz; float d = float.MaxValue;
+                        foreach (var pp in ps) d = Mathf.Min(d, BodySdfKernel.FaceDist(pp, q));
+                        if (d <= 0f) { best = zz; break; }
+                    }
+                    if (best == float.MinValue) continue;
+                    fr = Mathf.Max(fr, best); yt = Mathf.Max(yt, yy);
+                    if (yy < yb) { yb = yy; zb = best; }
+                }
+                return (fr, yt, yb, zb);
+            }
+            var u = Piece(up); var l = Piece(lo);
+            parts.Append($"lip pieces (midline): upper front {F(u.front * 1000f)} at its lowest edge y {F((u.yBot - c.mouth) * 1000f)} z {F(u.zAtBot * 1000f)}; lower front {F(l.front * 1000f)} top y {F((l.yTop - c.mouth) * 1000f)}; " +
+                         $"lower lip vs upper's lower edge {F((u.zAtBot - l.front) * 1000f)} mm behind; vertical gap {F((u.yBot - l.yTop) * 1000f)} mm; ");
+        }
         parts.Append("midline y|field/muscle/bone: ");
-        for (float yy = c.mouth + 0.012f; yy >= c.chin - 0.004f; yy -= 0.002f)
+        for (float yy = c.mouth + 0.012f; yy >= c.chin - 0.004f; yy -= (Mathf.Abs(yy - c.mouth) < 0.012f ? 0.001f : 0.002f))
         {
             float LF(int which)
             {

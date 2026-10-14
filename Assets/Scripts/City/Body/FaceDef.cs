@@ -213,9 +213,9 @@ public class FaceDef
         P("NoseUnder", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.01f, 0.008f), new Vector3(76f, 0f, 0f), new Vector3(0.05f, 0.062f, 0f), 0.004f, FacePartScale.Nose,
           op: FacePartOp.Piece, femaleSize: new Vector3(0.85f, 0.9f, 1f)),
         // Lips: an M-shaped upper lip (two capsules wrapping back round the muzzle), a fuller lower lip behind it.
-        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.1875f, 0.02f, 0.006f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.055f, 0.145f, 0f), 0.003f,
-          mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(1.3f, 1.02f, 1f), sizeVar: new Vector3(0.15f, 0.06f, 0f), strength: true),
-        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.045f, 0f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.07f), 0.003f,
+        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.1875f, 0.05f, 0.006f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.055f, 0.145f, 0f), 0.003f,
+          mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(1.3f, 1.02f, 1f), femaleOffset: new Vector3(0f, 0.02f, 0f), sizeVar: new Vector3(0.15f, 0.06f, 0f), strength: true),
+        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.055f, 0.009f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.07f), 0.003f,
           op: FacePartOp.Piece, femaleSize: new Vector3(1.05f, 1.3f, 1.15f), sizeVar: new Vector3(0.08f, 0.15f, 0.1f), strength: true),
         // ---- Muscle ----
         P("Masseter", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.8f, -0.5f, 0.15f), Vector3.zero, new Vector3(0.26f, 0.15f, 0.1f), 0.004f,
@@ -244,7 +244,9 @@ public class FaceDef
         // from the nose to the mouth corners, the groove under the lower lip.
         P("Philtrum", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0.11f, -0.0008f), Vector3.zero, new Vector3(0.025f, 0.06f, 0f), 0.002f,
           op: FacePartOp.Subtract, snap: true),
-        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, -0.0005f), new Vector3(0f, 0f, -90f), new Vector3(0.02f, 0.12f, 0f), 0.0015f,
+        // (The mouth line between the lips: at least 2 head-grid cells wide and deep - a thinner groove is under the
+        // grid and leaves shards. Radius ~4.4 mm sunk ~2.6 mm: 7 mm wide at the surface, 7 mm deep.)
+        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, -0.0026f), new Vector3(0f, 0f, -90f), new Vector3(0.063f, 0.12f, 0f), 0.0015f,
           op: FacePartOp.Subtract, snap: true),
         P("MouthLineSide", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.24f, -0.003f, -0.0006f), new Vector3(0f, 33.6f, -91f), new Vector3(0.022f, 0.09f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Subtract, snap: true),

@@ -796,7 +796,8 @@ public class BodySDF : IDisposable
         Vector3 V3(PcgRandom r, Vector3 range) => new Vector3(range.x * r.Signed(), range.y * r.Signed(), range.z * r.Signed());
         foreach (var part in faceDef.parts)
         {
-            if (!SkinFeatures && part.snap && (part.op == FacePartOp.Subtract || part.op == FacePartOp.Union)) continue;
+            // (The mouth line stays: it separates the lips.)
+            if (!SkinFeatures && part.snap && part.name != "MouthLine" && (part.op == FacePartOp.Subtract || part.op == FacePartOp.Union)) continue;
             var rng = new PcgRandom(plan.sheet.seed, "face." + part.name);
             Vector3 dPos = V3(rng, part.positionVar), dRot = V3(rng, part.rotationVar), dSize = V3(rng, part.sizeVar);
             for (int side = part.mirrored ? -1 : 1; side <= 1; side += 2)
@@ -810,6 +811,8 @@ public class BodySDF : IDisposable
                 float strK = part.strength ? 1f + faceDef.strFace * plan.sheet.S : 1f;
                 Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy) * strK;
                 if (female) size = Vector3.Scale(size, part.femaleSize);
+                // (The lips' halves keep meeting at the midline: their sideways place scales with their size.)
+                if (part.strength && part.name.StartsWith("Lip")) pos.x *= strK;
                 if (overrides != null)
                     foreach (var ov in overrides)
                     {
