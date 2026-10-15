@@ -494,6 +494,71 @@ public static class FaceMetrics
         float jaw = Silhouette(ke, c, -0.66f * c.halfH);
         float cheekW = Silhouette(ke, c, -0.17f * c.halfH);
         var parts = new StringBuilder();
+        // (The jawline against the chin: the head's own underside - no neck - its lowest point at the midline (the
+        // chin), at the jaw body (0.5 half widths out) and at the jaw angle (0.72); mm from the eye line.)
+        {
+            float Bottom(float xf)
+            {
+                float low = float.MaxValue;
+                for (float zf = -0.4f; zf <= 1.3f; zf += 0.05f)
+                {
+                    Vector3 b0 = c.o + c.x * (xf * c.halfW) + c.z * (zf * c.halfD);
+                    float y = -c.halfH * 2f;
+                    for (int it = 0; it < 400; it++)
+                    {
+                        float d = k.HeadSkin(b0 + c.y * y);
+                        if (d < 0.0002f) { low = Mathf.Min(low, y); break; }
+                        y += Mathf.Clamp(d * 0.8f, 0.0002f, 0.01f);
+                        if (y > 0f) break;
+                    }
+                }
+                return low;
+            }
+            float ycb = Bottom(0f), yb = Bottom(0.5f), ya = Bottom(0.72f);
+            // (The jaw angle front-back: its press's centre against the ear lobe and the neck's back at that height.)
+            int ja = sdf.FacePartNames.IndexOf("JawAngle.R");
+            if (ja >= 0 && k.earR.on != 0)
+            {
+                var jp = sdf.FacePrims[ja];
+                float jz = Vector3.Dot(jp.o - c.o, c.z), jy = Vector3.Dot(jp.o - c.o, c.y);
+                float lobeZ = Vector3.Dot(k.earR.lobe - c.o, c.z), lobeY = Vector3.Dot(k.earR.lobe - c.o, c.y);
+                float zb = -c.halfD * 2.5f;
+                for (int it = 0; it < 400; it++) { float d = k.Skin(c.o + c.y * jy + c.z * zb); if (d < 0.0002f) break; zb += Mathf.Clamp(d * 0.8f, 0.0002f, 0.01f); }
+                parts.Append($"jaw angle centre y {F(jy * 1000f)} z {F(jz * 1000f)}; ear lobe y {F(lobeY * 1000f)} z {F(lobeZ * 1000f)}; neck back at that height z {F(zb * 1000f)} mm; ");
+            }
+            // (Bone level: the jaw angle's lowest point (and its depth) against the chin's; the jaw presses on the bone.)
+            {
+                var kb = k; kb.muscleScale = 0f; kb.fatScale = 0f; kb.brainScale = 0f;
+                (float y, float z) BoneLow(float xf)
+                {
+                    float low = float.MaxValue, lz = 0f;
+                    for (float zf = -0.6f; zf <= 1.3f; zf += 0.02f)
+                    {
+                        Vector3 b0 = c.o + c.x * (xf * c.halfW) + c.z * (zf * c.halfD);
+                        float y = -c.halfH * 2f;
+                        for (int it = 0; it < 400; it++)
+                        {
+                            float d = kb.HeadSkin(b0 + c.y * y);
+                            if (d < 0.0002f) { if (y < low) { low = y; lz = zf * c.halfD; } break; }
+                            y += Mathf.Clamp(d * 0.8f, 0.0002f, 0.01f);
+                            if (y > 0f) break;
+                        }
+                    }
+                    return (low, lz);
+                }
+                var bc = BoneLow(0f); var bj = BoneLow(0.62f); var bj2 = BoneLow(0.68f); if (bj2.y < bj.y) bj = bj2;
+                parts.Append($"BONE jaw angle low y {F(bj.y * 1000f)} at z {F(bj.z * 1000f)} = {F((bj.y - bc.y) * 1000f)} mm above the chin's low {F(bc.y * 1000f)}; ");
+                for (int j = 0; j < sdf.FacePartNames.Count; j++)
+                {
+                    string nm = sdf.FacePartNames[j];
+                    if (nm != "JawAngle.R" && nm != "JawBody.R") continue;
+                    var fp = sdf.FacePrims[j];
+                    Vector3 root = fp.o + fp.z * (fp.r.z - fp.press);
+                    parts.Append($"{nm} root off the base {F(k.HeadBase(root) * 1000f)} mm; ");
+                }
+            }
+            parts.Append($"underside y mm: chin {F(ycb * 1000f)}, jaw body {F(yb * 1000f)} ({F((yb - ycb) * 1000f)} vs chin), jaw angle {F(ya * 1000f)} ({F((ya - ycb) * 1000f)} vs chin); ");
+        }
         // (Each layer's front at the lips and the chin: bone, muscle, skin - HeadLayers - and the whole field.)
         // (The midline, every 2 mm from above the mouth down to the chin: y | field front / muscle front / bone front, mm.)
         // (The lip pieces on the midline, each on its own: upper - its front and lowest edge; lower - its front and top.)

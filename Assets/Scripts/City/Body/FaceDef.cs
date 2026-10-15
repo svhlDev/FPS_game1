@@ -60,6 +60,8 @@ public class FacePart
     public Vector3 pushDir;
     [Tooltip("STR drives it (the lower face's volumes): size and press x (1 + strFace x (STR - 10) / 10).")]
     public bool strength;
+    [Tooltip("Male: moved this many metres down (the jaw bone sits lower on men).")]
+    public float maleDrop;
 }
 
 // One per-character edit of a part (the customizer's data): move (face space), rotate (degrees), scale
@@ -122,7 +124,7 @@ public class FaceDef
     public Vector3 craniumCentre = new Vector3(0f, 0.17f, -0.08f), craniumRadii = new Vector3(1.08f, 0.83f, 0.98f);
     public float craniumBottom = 0.8f, craniumTop = 1.04f;
     [Tooltip("The lower jaw: the menton (chin bottom; y from the chin line), the jaw angles (gonion, the right one) and the chin's half width.")]
-    public Vector3 menton = new Vector3(0f, 0f, 0.7f), gonion = new Vector3(0.74f, -0.66f, 0.05f), femaleGonion = new Vector3(0.66f, -0.64f, 0.05f);
+    public Vector3 menton = new Vector3(0f, 0f, 0.7f), gonion = new Vector3(0.74f, -0.72f, -0.08f), femaleGonion = new Vector3(0.66f, -0.7f, -0.08f);
     public float chinHalfWidth = 0.24f, femaleChinHalfWidth = 0.16f;
     [Tooltip("Gonion half width + this x STR (normalized), seed variation (+-) of it.")]
     public float jawStr = 0.05f, jawVariation = 0.04f;
@@ -144,8 +146,9 @@ public class FaceDef
     static FacePart P(string name, FaceLine anchor, FacePartShape shape, Vector3 pos, Vector3 rot, Vector3 size, float blend, FacePartScale scale = FacePartScale.None,
                       bool mirrored = false, Vector3 femaleSize = default, Vector3 femaleOffset = default, FacePartOp op = FacePartOp.Union,
                       Vector3 posVar = default, Vector3 rotVar = default, Vector3 sizeVar = default, bool snap = false, Vector3 axis = default, float press = 0f,
-                      Vector3 pushDir = default, bool strength = false) => new FacePart
+                      Vector3 pushDir = default, bool strength = false, float maleDrop = 0f) => new FacePart
     {
+        maleDrop = maleDrop,
         snap = snap, axis = axis, press = press, pushDir = pushDir, strength = strength || scale == FacePartScale.Strength,
         name = name, anchor = anchor, shape = shape, op = op, position = pos, rotationEuler = rot, size = size, blend = blend, scaleBy = scale, mirrored = mirrored,
         femaleSize = femaleSize == default ? Vector3.one : femaleSize, femaleOffset = femaleOffset,
@@ -169,7 +172,7 @@ public class FaceDef
           op: FacePartOp.Plane, axis: new Vector3(0f, 0.3f, 1f)),
         P("FaceSidePlane", FaceLine.EyeLine, FacePartShape.Plane, new Vector3(0.76f, -0.35f, 0.3f), Vector3.zero, new Vector3(0.4f, 0.25f, 0.6f), 0.012f,
           mirrored: true, op: FacePartOp.Plane, axis: new Vector3(1f, 0f, 0.3f)),
-        P("UnderJawPlane", FaceLine.Chin, FacePartShape.Plane, new Vector3(0f, 0.2f, 0.3f), Vector3.zero, new Vector3(0.9f, 0.3f, 0.45f), 0.01f,
+        P("UnderJawPlane", FaceLine.Chin, FacePartShape.Plane, new Vector3(0f, 0.2f, 0.3f), Vector3.zero, new Vector3(0.55f, 0.3f, 0.45f), 0.01f,
           op: FacePartOp.Plane, axis: new Vector3(0f, -1f, 0.55f)),
         // ---- Bone: pressed landmarks ----
         P("NasalRoot", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0f, 0.03f, 1f), Vector3.zero, new Vector3(0.12f, 0.1f, 0.1f), 0.004f,
@@ -178,7 +181,7 @@ public class FaceDef
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0.25f, -0.05f, -1f), press: 0.07f, posVar: new Vector3(0.02f, 0.02f, 0f)),
         P("CheekboneFront", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.22f, 0.85f), Vector3.zero, new Vector3(0.17f, 0.13f, 0.1f), 0.004f,
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(1f, -0.4f, 0f), press: 0.05f),
-        P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, 0f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
+        P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, -0.09f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.07f, femaleSize: new Vector3(0.85f, 0.85f, 1f), strength: true),
         P("JawBody", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.85f, 0.4f), Vector3.zero, new Vector3(0.38f, 0.1f, 0.12f), 0.004f,
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.05f, strength: true),
@@ -213,10 +216,10 @@ public class FaceDef
         P("NoseUnder", FaceLine.NoseBase, FacePartShape.Capsule, new Vector3(0f, 0.01f, 0.008f), new Vector3(76f, 0f, 0f), new Vector3(0.05f, 0.062f, 0f), 0.004f, FacePartScale.Nose,
           op: FacePartOp.Piece, femaleSize: new Vector3(0.85f, 0.9f, 1f)),
         // Lips: an M-shaped upper lip (two capsules wrapping back round the muzzle), a fuller lower lip behind it.
-        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.1875f, 0.05f, 0.006f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.055f, 0.145f, 0f), 0.003f,
-          mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(1.3f, 1.02f, 1f), femaleOffset: new Vector3(0f, 0.02f, 0f), sizeVar: new Vector3(0.15f, 0.06f, 0f), strength: true),
-        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.055f, 0.009f), Vector3.zero, new Vector3(0.33f, 0.055f, 0.07f), 0.003f,
-          op: FacePartOp.Piece, femaleSize: new Vector3(1.05f, 1.3f, 1.15f), sizeVar: new Vector3(0.08f, 0.15f, 0.1f), strength: true),
+        P("LipUpper", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.0797f, 0.05f, 0.006f), new Vector3(0f, 33.6f, -95.7f), new Vector3(0.023375f, 0.061625f, 0f), 0.003f,
+          mirrored: true, op: FacePartOp.Piece, femaleSize: new Vector3(1.1176f, 1f, 1.1765f), femaleOffset: new Vector3(0f, 0.02f, 0f), sizeVar: new Vector3(0.15f, 0.06f, 0f), strength: true),
+        P("LipLower", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.055f, 0.009f), Vector3.zero, new Vector3(0.14025f, 0.023375f, 0.02975f), 0.003f,
+          op: FacePartOp.Piece, femaleSize: new Vector3(1f, 1.1176f, 1.0588f), sizeVar: new Vector3(0.08f, 0.15f, 0.1f), strength: true),
         // ---- Muscle ----
         P("Masseter", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.8f, -0.5f, 0.15f), Vector3.zero, new Vector3(0.26f, 0.15f, 0.1f), 0.004f,
           mirrored: true, op: FacePartOp.Muscle, axis: new Vector3(0f, 1f, 0.25f), press: 0.05f, strength: true),
@@ -246,7 +249,7 @@ public class FaceDef
           op: FacePartOp.Subtract, snap: true),
         // (The mouth line between the lips: at least 2 head-grid cells wide and deep - a thinner groove is under the
         // grid and leaves shards. Radius ~4.4 mm sunk ~2.6 mm: 7 mm wide at the surface, 7 mm deep.)
-        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, -0.0026f), new Vector3(0f, 0f, -90f), new Vector3(0.063f, 0.12f, 0f), 0.0015f,
+        P("MouthLine", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0f, 0f, -0.0026f), new Vector3(0f, 0f, -90f), new Vector3(0.063f, 0.051f, 0f), 0.0015f,
           op: FacePartOp.Subtract, snap: true),
         P("MouthLineSide", FaceLine.Mouth, FacePartShape.Capsule, new Vector3(0.24f, -0.003f, -0.0006f), new Vector3(0f, 33.6f, -91f), new Vector3(0.022f, 0.09f, 0f), 0.0015f,
           mirrored: true, op: FacePartOp.Subtract, snap: true),

@@ -80,6 +80,9 @@ public partial class ScenarioTest : MonoBehaviour
             case "heads": yield return HeadsTest(); break;
             case "headsfat": yield return HeadsTest(LowDexRows(), false); break;
             case "facemetrics": yield return FaceMetricsRun(); break;
+            // One head only (quick look): the DEX 20 woman of the head lineup.
+            case "fdex20": yield return HeadsTest(new[] { new List<(string, CharacterSheet)> { ("F DEX20", new CharacterSheet(Sex.Female, 10, 10, 20, 3203)) } }, false); break;
+            case "mdex20": yield return HeadsTest(new[] { new List<(string, CharacterSheet)> { ("M DEX20", new CharacterSheet(Sex.Male, 10, 10, 20, 3103)) } }, false); break;
             case "profile":
             {
                 // (The lower face's side profile numbers only - plan + SDF, no meshes: seconds.)

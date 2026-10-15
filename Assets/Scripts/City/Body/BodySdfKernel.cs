@@ -111,6 +111,9 @@ public struct BodySdfKernel : IDisposable
     [ReadOnly] public NativeArray<Bone> bones;
     [ReadOnly] public NativeArray<Ellipsoid> blobs, breasts;
     [ReadOnly] public NativeArray<FacePrim> face;
+    // The lower jaw (one, or none): an array so the kernel struct stays small (it's copied into every garment
+    // kernel and passed by value to jobs).
+    [ReadOnly] public NativeArray<Mandible> jaw;
     [ReadOnly] public NativeArray<Digit> digits;
     [ReadOnly] public NativeArray<HandCut> cuts;
     public float fingerBlend;
@@ -156,6 +159,7 @@ public struct BodySdfKernel : IDisposable
         if (breasts.IsCreated) breasts.Dispose();
         if (digits.IsCreated) digits.Dispose();
         if (cuts.IsCreated) cuts.Dispose();
+        if (jaw.IsCreated) jaw.Dispose();
     }
 
     // ---------- primitives ----------
@@ -304,6 +308,9 @@ public struct BodySdfKernel : IDisposable
     public float HeadBase(Vector3 p)
     {
         float A = EggOf(skullBase, p);
+        // The lower jaw: a real bone shape, smooth-unioned with the egg before the planes (the gonion sets the jaw
+        // angle's height and width).
+        if (jaw.IsCreated && jaw.Length > 0 && jaw[0].on != 0) A = SMin(A, MandibleDist(jaw[0], p), jaw[0].blend);
         for (int j = 0; j < face.Length; j++)
         {
             var f = face[j];

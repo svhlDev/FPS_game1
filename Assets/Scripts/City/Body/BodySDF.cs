@@ -528,6 +528,7 @@ public class BodySDF : IDisposable
             bones = new NativeArray<BodySdfKernel.Bone>(n, alloc),
             blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
             face = new NativeArray<BodySdfKernel.FacePrim>(faceParts.ToArray(), alloc),
+            jaw = new NativeArray<BodySdfKernel.Mandible>(new[] { mandible }, alloc),
             socketClearance = BodyRules.Default.face.socketClearance, faceReach = FaceReach(), faceFatBlendMax = BodyRules.Default.face.faceFatBlendMax,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
@@ -769,6 +770,9 @@ public class BodySDF : IDisposable
             float js = dna != null ? dna.jaw : 1f;
             Vector3 g = fem ? fd.femaleGonion : fd.gonion;
             float gx = (g.x + fd.jawStr * plan.sheet.S + fd.jawVariation * jr.Signed()) * js * rx;
+            // (STR: the jaw angle lower and squarer when strong - ~8 mm lower at STR 20 - higher when weak, ~5 mm at STR 1.)
+            float sJ = plan.sheet.S;
+            g.y += (sJ >= 0f ? -0.008f * sJ : -0.0055f * sJ) / hy;
             float cx = (fem ? fd.femaleChinHalfWidth : fd.chinHalfWidth) * js * rx * (1f + 0.15f * jr.Signed());
             Vector3 menton = O + f.y * (Canon.chin + fd.menton.y * hy) + f.z * (fd.menton.z * rz);
             Vector3 gon = O + f.y * (g.y + 0.03f * jr.Signed()) * hy + f.z * g.z * rz;
@@ -806,13 +810,25 @@ public class BodySDF : IDisposable
                 var asym = new PcgRandom(plan.sheet.seed, "face." + inst);
                 Vector3 pos = part.position + dPos + V3(asym, part.positionVar) * faceDef.asymmetry + (female ? part.femaleOffset : Vector3.zero);
                 pos.y += Anchor(part.anchor);
+                if (!female && part.maleDrop != 0f) pos.y -= part.maleDrop / hy;   // (the jaw bone lower on men; the chin stays)
                 Vector3 rot = part.rotationEuler + dRot + V3(asym, part.rotationVar) * faceDef.asymmetry;
                 // (STR drives the lower face's volumes: size and press.)
                 float strK = part.strength ? 1f + faceDef.strFace * plan.sheet.S : 1f;
                 Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy) * strK;
                 if (female) size = Vector3.Scale(size, part.femaleSize);
+                // The jaw angle by STR: strong - lower (~8 mm at STR 20), a little wider, a sharper corner (smaller,
+                // pressed as far); weak - higher (~5 mm at STR 1) and softer.
+                float jawBlend = part.blend;
+                if (part.name == "JawAngle")
+                {
+                    float S = plan.sheet.S;
+                    pos.y += (S >= 0f ? -0.008f * S : -0.0055f * S) / hy;
+                    pos.x *= 1f + 0.06f * S;
+                    size *= 1f - 0.2f * S;
+                    jawBlend = part.blend * (1f - 0.5f * S);
+                }
                 // (The lips' halves keep meeting at the midline: their sideways place scales with their size.)
-                if (part.strength && part.name.StartsWith("Lip")) pos.x *= strK;
+                if (part.strength && part.name.StartsWith("Lip")) pos.x *= strK * (female ? part.femaleSize.y : 1f);
                 if (overrides != null)
                     foreach (var ov in overrides)
                     {
@@ -828,7 +844,7 @@ public class BodySDF : IDisposable
                 var prim = new BodySdfKernel.FacePrim
                 {
                     o = FacePoint(pos), x = W(q * Vector3.right), y = W(q * Vector3.up), z = W(q * Vector3.forward), r = r,
-                    halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = part.blend, shape = (int)part.shape, op = (int)part.op,
+                    halfLen = part.shape == FacePartShape.Capsule ? size.y * hy : 0f, blend = jawBlend, shape = (int)part.shape, op = (int)part.op,
                 };
                 // Anatomy Rework Part 1: pressed shapes, planes and pieces are placed on the base once it exists.
                 var op = part.op;
