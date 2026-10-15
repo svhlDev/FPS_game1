@@ -181,10 +181,13 @@ public class FaceDef
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0.25f, -0.05f, -1f), press: 0.07f, posVar: new Vector3(0.02f, 0.02f, 0f)),
         P("CheekboneFront", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.22f, 0.85f), Vector3.zero, new Vector3(0.17f, 0.13f, 0.1f), 0.004f,
           FacePartScale.Cheekbones, mirrored: true, op: FacePartOp.Press, axis: new Vector3(1f, -0.4f, 0f), press: 0.05f),
-        P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, -0.09f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
-          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.07f, femaleSize: new Vector3(0.85f, 0.85f, 1f), strength: true, maleDrop: -0.005f),
+        // The jaw's outline is the mandible's (BodySDF: the jaw bone, its corner at the gonion). These two are only
+        // accents riding on it: JawAngle placed at the gonion, JawBody along the mandible's lower edge (BodySDF
+        // sets their targets; the positions here are fallbacks).
+        P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, 0f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
+          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.025f, femaleSize: new Vector3(0.85f, 0.85f, 1f), strength: true),
         P("JawBody", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.85f, 0.4f), Vector3.zero, new Vector3(0.38f, 0.1f, 0.12f), 0.004f,
-          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.05f, strength: true),
+          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.03f, strength: true),
         // Face Metrics lower face: the chin, bone on the front of the jaw below the lower lip, standing forward
         // (a press stands out along the base's normal - at the egg's bottom that's down: hence pushDir).
         P("Chin", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.28f, 0.85f), Vector3.zero, new Vector3(0.34f, 0.22f, 0.14f), 0.004f, FacePartScale.Chin,

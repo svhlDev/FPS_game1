@@ -46,7 +46,8 @@ public class BodySDF : IDisposable
     public readonly List<string> FacePartNames = new List<string>();
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
     readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();
-    readonly Dictionary<int, Vector3> pushDirs = new Dictionary<int, Vector3>();   // presses standing out in a set direction (root space)   // snapped face parts: their offset from the skin (m)
+    readonly Dictionary<int, Vector3> pushDirs = new Dictionary<int, Vector3>();
+    Vector3 gonionR, chinCornerR;   // the mandible's right corner (gonion) and the chin's right corner (root space)   // presses standing out in a set direction (root space)   // snapped face parts: their offset from the skin (m)
     // Anatomy Rework Part 1: parts placed on the base (index, target, axis or tip, size (m), press (m), offset, root offset).
     readonly List<(int i, Vector3 target, Vector3 axis, Vector3 size, float press, float offset, float rootOffset)> pressed = new List<(int, Vector3, Vector3, Vector3, float, float, float)>();
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
@@ -783,6 +784,9 @@ public class BodySDF : IDisposable
             float gz = Vector3.Dot(gon - menton, f.z);
             float round = fd.jawRound * hy;
             var poly = Inset(new[] { new Vector2(-cx, 0f), new Vector2(cx, 0f), new Vector2(gx, gz), new Vector2(-gx, gz) }, round);
+            // (For the jaw accents: the right gonion and the chin's right corner on the jaw line, root space.)
+            gonionR = gon + f.x * gx;
+            chinCornerR = menton + f.x * cx;
             mandible = new BodySdfKernel.Mandible
             {
                 menton = menton, x = f.x, y = f.y, z = f.z, jawN = n, q0 = poly[0], q1 = poly[1], q2 = poly[2], q3 = poly[3],
@@ -817,17 +821,7 @@ public class BodySDF : IDisposable
                 float strK = part.strength ? 1f + faceDef.strFace * plan.sheet.S : 1f;
                 Vector3 size = Vector3.Scale(part.size, Vector3.one + dSize) * DnaScale(part.scaleBy) * strK;
                 if (female) size = Vector3.Scale(size, part.femaleSize);
-                // The jaw angle by STR: strong - lower (~8 mm at STR 20), a little wider, a sharper corner (smaller,
-                // pressed as far); weak - higher (~5 mm at STR 1) and softer.
                 float jawBlend = part.blend;
-                if (part.name == "JawAngle")
-                {
-                    float S = plan.sheet.S;
-                    pos.y += (S >= 0f ? -0.008f * S : -0.0055f * S) / hy;
-                    pos.x *= 1f + 0.06f * S;
-                    size *= 1f - 0.2f * S;
-                    jawBlend = part.blend * (1f - 0.5f * S);
-                }
                 // (The lips' halves keep meeting at the midline: their sideways place scales with their size.)
                 if (part.strength && part.name.StartsWith("Lip")) pos.x *= strK * (female ? part.femaleSize.y : 1f);
                 if (overrides != null)
@@ -864,7 +858,17 @@ public class BodySDF : IDisposable
                     // (Snapped along the line from the egg's centre through the target: presses aim with their own
                     // depth, pieces - the nose, lips, brow bar - from the front.)
                     float aimZ = op == FacePartOp.Piece ? 0.9f : pos.z;
-                    pressed.Add((faceParts.Count, FacePoint(new Vector3(pos.x, pos.y, aimZ)), op == FacePartOp.Piece && part.shape == FacePartShape.RoundCone ? FacePoint(new Vector3(ax.x, ax.y, 0.9f)) : W(ax),
+                    Vector3 target = FacePoint(new Vector3(pos.x, pos.y, aimZ)), axisW = W(ax);
+                    // The jaw accents ride on the mandible: JawAngle at the gonion, JawBody halfway along the lower
+                    // edge (from the chin's corner to the gonion), laid along it.
+                    if (mandible.on != 0 && (part.name == "JawAngle" || part.name == "JawBody"))
+                    {
+                        Vector3 gs = gonionR - f.x * (side < 0 ? 2f * Vector3.Dot(gonionR - O, f.x) : 0f);
+                        Vector3 cs = chinCornerR - f.x * (side < 0 ? 2f * Vector3.Dot(chinCornerR - O, f.x) : 0f);
+                        if (part.name == "JawAngle") target = gs;
+                        else { target = (gs + cs) * 0.5f; axisW = (gs - cs).normalized; }
+                    }
+                    pressed.Add((faceParts.Count, target, op == FacePartOp.Piece && part.shape == FacePartShape.RoundCone ? FacePoint(new Vector3(ax.x, ax.y, 0.9f)) : axisW,
                                  size * rx, part.press * (op == FacePartOp.Piece ? 1f : rx) * strF, pos.z, part.shape == FacePartShape.RoundCone ? size.z : 0f));
                 }
                 if (part.name == "Nose" || part.name == "Ala" || part.name == "NoseUnder") prim.noFat = 1;
