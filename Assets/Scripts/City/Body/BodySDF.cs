@@ -773,6 +773,7 @@ public class BodySDF : IDisposable
             // (STR: the jaw angle lower and squarer when strong - ~8 mm lower at STR 20 - higher when weak, ~5 mm at STR 1.)
             float sJ = plan.sheet.S;
             g.y += (sJ >= 0f ? -0.008f * sJ : -0.0055f * sJ) / hy;
+            if (!fem) g.y -= 0.015f / hy;   // (men: the jaw bone corner 15 mm lower)
             float cx = (fem ? fd.femaleChinHalfWidth : fd.chinHalfWidth) * js * rx * (1f + 0.15f * jr.Signed());
             Vector3 menton = O + f.y * (Canon.chin + fd.menton.y * hy) + f.z * (fd.menton.z * rz);
             Vector3 gon = O + f.y * (g.y + 0.03f * jr.Signed()) * hy + f.z * g.z * rz;
