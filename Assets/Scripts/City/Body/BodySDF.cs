@@ -47,7 +47,7 @@ public class BodySDF : IDisposable
     public IReadOnlyList<BodySdfKernel.FacePrim> FacePrims => faceParts;
     readonly Dictionary<int, float> snapOffsets = new Dictionary<int, float>();
     readonly Dictionary<int, Vector3> pushDirs = new Dictionary<int, Vector3>();
-    Vector3 gonionR, chinCornerR;   // the mandible's right corner (gonion) and the chin's right corner (root space)   // presses standing out in a set direction (root space)   // snapped face parts: their offset from the skin (m)
+    Vector3 gonionR, chinCornerR, mentonW;   // the mandible's right corner (gonion) and the chin's right corner (root space)   // presses standing out in a set direction (root space)   // snapped face parts: their offset from the skin (m)
     // Anatomy Rework Part 1: parts placed on the base (index, target, axis or tip, size (m), press (m), offset, root offset).
     readonly List<(int i, Vector3 target, Vector3 axis, Vector3 size, float press, float offset, float rootOffset)> pressed = new List<(int, Vector3, Vector3, Vector3, float, float, float)>();
     public Vector3 JawPivot, MouthCentre;   // the jaw's hinge and the mouth line's centre (root space)
@@ -787,6 +787,7 @@ public class BodySDF : IDisposable
             // (For the jaw accents: the right gonion and the chin's right corner on the jaw line, root space.)
             gonionR = gon + f.x * gx;
             chinCornerR = menton + f.x * cx;
+            mentonW = menton;
             mandible = new BodySdfKernel.Mandible
             {
                 menton = menton, x = f.x, y = f.y, z = f.z, jawN = n, q0 = poly[0], q1 = poly[1], q2 = poly[2], q3 = poly[3],
@@ -868,6 +869,9 @@ public class BodySDF : IDisposable
                         if (part.name == "JawAngle") target = gs;
                         else { target = (gs + cs) * 0.5f; axisW = (gs - cs).normalized; }
                     }
+                    // The chin rides on the mandible's front: at the menton, a little above its bottom (its push
+                    // direction still forward), so chin and jaw meet.
+                    if (mandible.on != 0 && part.name == "Chin") target = mentonW + f.y * (size.y * hy * 0.2f);
                     pressed.Add((faceParts.Count, target, op == FacePartOp.Piece && part.shape == FacePartShape.RoundCone ? FacePoint(new Vector3(ax.x, ax.y, 0.9f)) : axisW,
                                  size * rx, part.press * (op == FacePartOp.Piece ? 1f : rx) * strF, pos.z, part.shape == FacePartShape.RoundCone ? size.z : 0f));
                 }

@@ -125,7 +125,7 @@ public class FaceDef
     public float craniumBottom = 0.8f, craniumTop = 1.04f;
     [Tooltip("The lower jaw: the menton (chin bottom; y from the chin line), the jaw angles (gonion, the right one) and the chin's half width.")]
     public Vector3 menton = new Vector3(0f, 0f, 0.7f), gonion = new Vector3(0.74f, -0.72f, -0.08f), femaleGonion = new Vector3(0.66f, -0.7f, -0.08f);
-    public float chinHalfWidth = 0.24f, femaleChinHalfWidth = 0.16f;
+    public float chinHalfWidth = 0.32f, femaleChinHalfWidth = 0.16f;
     [Tooltip("Gonion half width + this x STR (normalized), seed variation (+-) of it.")]
     public float jawStr = 0.05f, jawVariation = 0.04f;
     [Tooltip("STR's share in the lower face's volumes (jaw, chin, jaw arcs, masseter, mentalis, lips): size and press x (1 + strFace x s), s = (STR - 10) / 10.")]
@@ -186,8 +186,6 @@ public class FaceDef
         // sets their targets; the positions here are fallbacks).
         P("JawAngle", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.72f, -0.66f, 0f), Vector3.zero, new Vector3(0.18f, 0.13f, 0.12f), 0.004f,
           FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(0f, 1f, 0.3f), press: 0.025f, femaleSize: new Vector3(0.85f, 0.85f, 1f), strength: true),
-        P("JawBody", FaceLine.EyeLine, FacePartShape.Ellipsoid, new Vector3(0.5f, -0.85f, 0.4f), Vector3.zero, new Vector3(0.38f, 0.1f, 0.12f), 0.004f,
-          FacePartScale.Jaw, mirrored: true, op: FacePartOp.Press, axis: new Vector3(-0.35f, -0.25f, 0.9f), press: 0.03f, strength: true),
         // Face Metrics lower face: the chin, bone on the front of the jaw below the lower lip, standing forward
         // (a press stands out along the base's normal - at the egg's bottom that's down: hence pushDir).
         P("Chin", FaceLine.Mouth, FacePartShape.Ellipsoid, new Vector3(0f, -0.28f, 0.85f), Vector3.zero, new Vector3(0.34f, 0.22f, 0.14f), 0.004f, FacePartScale.Chin,

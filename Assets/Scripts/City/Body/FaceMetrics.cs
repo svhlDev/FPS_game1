@@ -587,6 +587,41 @@ public static class FaceMetrics
             parts.Append($"lip pieces (midline): upper front {F(u.front * 1000f)} at its lowest edge y {F((u.yBot - c.mouth) * 1000f)} z {F(u.zAtBot * 1000f)}; lower front {F(l.front * 1000f)} top y {F((l.yTop - c.mouth) * 1000f)}; " +
                          $"lower lip vs upper's lower edge {F((u.zAtBot - l.front) * 1000f)} mm behind; vertical gap {F((u.yBot - l.yTop) * 1000f)} mm; ");
         }
+        // (The jaw's lower edge in outline, chin bottom up to the gonion's height: the right side's outline - the
+        // farthest skin across the view - per height, front view and 3/4 view (45 degrees); the deepest dip under a
+        // chord of up to 20 mm. 0 = no concavity.)
+        {
+            var kh = k; kh.earL.on = 0; kh.earR.on = 0;
+            float Outline(float y, float ang)
+            {
+                Vector3 lat = (c.x * Mathf.Cos(ang) - c.z * Mathf.Sin(ang)).normalized, dep = Vector3.Cross(c.y, lat).normalized;
+                float best = 0f;
+                for (int di = -12; di <= 12; di++)
+                {
+                    Vector3 b0 = c.o + c.y * y + dep * (di * c.halfD * 0.1f);
+                    float x = c.halfW * 2.4f;
+                    for (int it = 0; it < 200 && x > 0f; it++) { float d = kh.HeadSkin(b0 + lat * x); if (d < 0.0002f) { best = Mathf.Max(best, x); break; } x -= Mathf.Clamp(d * 0.8f, 0.0003f, 0.01f); }
+                }
+                return best;
+            }
+            float yBot = c.chin - 0.01f, yTop = -0.72f * c.halfH;
+            foreach (var (vn, ang) in new[] { ("front", 0f), ("3/4", 45f * Mathf.Deg2Rad) })
+            {
+                var pts = new List<Vector2>();
+                for (float y = yBot; y <= yTop; y += 0.002f) { float o = Outline(y, ang); if (o > 0f) pts.Add(new Vector2(o, y)); }
+                float dip = 0f; float atY = 0f;
+                for (int i = 1; i + 1 < pts.Count; i++)
+                    for (int j0 = Mathf.Max(0, i - 10); j0 < i; j0++)
+                        for (int m = i + 1; m < Mathf.Min(pts.Count, i + 11); m++)
+                        {
+                            Vector2 t = pts[m] - pts[j0]; float len = t.magnitude; if (len < 1e-5f) continue; t /= len;
+                            Vector2 nOut = new Vector2(t.y, -t.x);   // (outward: away from the face's middle)
+                            float dd = Vector2.Dot(pts[j0] - pts[i], nOut);
+                            if (dd > dip) { dip = dd; atY = pts[i].y; }
+                        }
+                parts.Append($"jaw edge dip {vn} {F(dip * 1000f)} mm at y {F(atY * 1000f)}; ");
+            }
+        }
         parts.Append("midline y|field/muscle/bone: ");
         for (float yy = c.mouth + 0.012f; yy >= c.chin - 0.004f; yy -= (Mathf.Abs(yy - c.mouth) < 0.012f ? 0.001f : 0.002f))
         {
