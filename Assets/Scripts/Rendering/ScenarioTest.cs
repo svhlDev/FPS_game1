@@ -30,7 +30,7 @@ public partial class ScenarioTest : MonoBehaviour
             var go = new GameObject("ScenarioTest");
             DontDestroyOnLoad(go);
             go.AddComponent<ScenarioTest>().scenarioName = args[i + 1];
-            PlayerWeapon.ForceStartWithGun = args[i + 1] != "combat"; // the older scenarios expect a gun
+            PlayerWeapon.ForceStartWithGun = args[i + 1] != "combat" && args[i + 1] != "weapons"; // the older scenarios expect a gun
             return;
         }
     }
@@ -96,6 +96,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "facesanity": { bool ok = FaceSanity.Run(out string rep); foreach (var l in rep.Split((char)10)) if (l.Length > 0) Log(l.TrimEnd()); yield return null; break; }
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
+            case "weapons": yield return WeaponsTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();

@@ -7,8 +7,10 @@ using UnityEngine.InputSystem;
 //      (from the ground, another car's roof, anywhere) -> "E open trunk" / "E close trunk"; open and
 //      looking right at an item in it -> "E pick up grenade"
 //   2. an item in an open trunk within 2 m, looked at -> "E pick up grenade"
-//   3. a dropped T-gun within 2 m, looked at -> "E pick up laser" (only without a gun of your own)
-//   4. otherwise FirstPersonController's E (get into / take a car); the prompt says which.
+//   3. a dropped T-gun within 2 m, looked at -> "E pick up laser" (only without a T-gun of your own)
+//   4. a weapon on the police armory rack (WeaponRack) within useRange, looked at -> "E take <weapon>",
+//      or "E refill <weapon>" for one you already carry
+//   5. otherwise FirstPersonController's E (get into / take a car); the prompt says which.
 // "Looked at": within lookAngle degrees of the centre of the view.
 [DefaultExecutionOrder(95)]
 [RequireComponent(typeof(FirstPersonController))]
@@ -17,11 +19,13 @@ public class PlayerInteract : MonoBehaviour
     public float pickupRange = 2f;
     public float lookAngle = 14f;
     
-    enum Kind { None, Gun, TrunkItem, Trunk }
+    enum Kind { None, Gun, TrunkItem, Trunk, Rack }
     Kind kind;
     GunPickup gun;
     CarTrunk trunk;
     Transform item;
+    WeaponRack rack;
+    WeaponRack.Slot slot;
     public string Prompt { get; private set; }
 
     FirstPersonController fpc;
@@ -63,6 +67,9 @@ public class PlayerInteract : MonoBehaviour
                 if (grenades != null && grenades.Add()) { trunk.TakeItem(item); fpc.Flash("Grenade  (hold G to throw)"); }
                 else fpc.Flash("Can't carry more grenades");
                 break;
+            case Kind.Rack:
+                rack.Use(slot, weapon, fpc);
+                break;
             case Kind.Trunk:
                 if (trunk.IsOpen) trunk.Close();
                 else
@@ -77,7 +84,7 @@ public class PlayerInteract : MonoBehaviour
 
     void Find()
     {
-        kind = Kind.None; gun = null; trunk = null; item = null; Prompt = null;
+        kind = Kind.None; gun = null; trunk = null; item = null; rack = null; slot = null; Prompt = null;
         if (!fpc.isActiveAndEnabled || fpc.Restrained || fpc.Stunned || fpc.Frozen || fpc.IsHanging || fpc.playerCamera == null) return;
         var cam = fpc.playerCamera.transform;
         Vector3 eye = fpc.cameraRoot.position;
@@ -138,16 +145,34 @@ public class PlayerInteract : MonoBehaviour
             }
         }
 
+        // 4. The armory rack: the weapon looked at.
+        if (kind == Kind.None && weapon != null)
+        {
+            float best = lookAngle;
+            foreach (var r in WeaponRack.All)
+            {
+                if (r == null || (r.transform.position - eye).sqrMagnitude > 36f) continue;
+                foreach (var s in r.Slots)
+                {
+                    Vector3 c = r.SlotCenter(s);
+                    if ((c - eye).sqrMagnitude > r.useRange * r.useRange) continue;
+                    float a = Angle(c);
+                    if (a < best) { best = a; kind = Kind.Rack; rack = r; slot = s; }
+                }
+            }
+        }
+
         Prompt = kind switch
         {
             Kind.Gun => "E  pick up laser",
+            Kind.Rack => rack.PromptFor(slot, weapon),
             Kind.TrunkItem => "E  pick up grenade",
             Kind.Trunk => trunk.IsOpen ? "E  close trunk" : "E  open trunk",
             _ => CarPrompt(cam),
         };
     }
 
-    // 4. Nothing of ours: what FirstPersonController's E will do (the roof car, or the car looked at).
+    // 5. Nothing of ours: what FirstPersonController's E will do (the roof car, or the car looked at).
     string CarPrompt(Transform cam)
     {
         var roof = fpc.Platform;

@@ -316,6 +316,14 @@ public class PoliceDispatch : MonoBehaviour
         Show("POLICE: Theft from a patrol car");
     }
 
+    // Took a weapon (or ammo) from the station's armory rack: in sight of police, wanted 1 (theft).
+    public void ReportArmoryTheft(Vector3 at)
+    {
+        if (!PoliceSees(at, triggerRange, out var by)) return;
+        EnsureWanted(1, by);
+        Show("POLICE: Armory theft");
+    }
+
     public bool Sees(Vector3 p, float range) => PoliceSees(p, range, out _);
 
     // ---------- events from cars, the player and the ride ----------
