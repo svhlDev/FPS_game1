@@ -88,6 +88,7 @@ public class NpcBody : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("NpcBody.Update");
         float dt = Time.deltaTime;
         if (Dead)
         {

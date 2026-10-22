@@ -298,11 +298,13 @@ public class Ragdoll : MonoBehaviour
 
     void FixedUpdate()
     {
+        using var _alloc = AllocProbe.Begin("Ragdoll.FixedUpdate");
         if (HipsBody != null) carry.Step(Bodies, HipsBody.position, 0.45f);
     }
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("Ragdoll.Update");
         offscreen.Tick(renderers);
         if (Time.time - Born > OffscreenTimer.Lifetime && offscreen.HiddenFor >= OffscreenTimer.HiddenTime) Remove();
     }

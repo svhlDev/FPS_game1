@@ -58,9 +58,7 @@ public class BodySDF : IDisposable
     readonly List<Feature> breasts = new List<Feature>();
     Feature skull;                                 // the face's frame / profile egg (fat mask, wig, bake)
     Feature skullBase;                             // the egg without INT's growth (the brain layer scales between)
-    Feature cranium;                               // Face Fix Part 2: the braincase ...
     BodySdfKernel.Mandible mandible;               // ... and the lower jaw (the head's core)
-    float craniumBottom, craniumTop;
     public float EggTop, EggBottom;
     public Vector3 EyeL, EyeR;
     public float EyeRadius;
@@ -252,6 +250,17 @@ public class BodySDF : IDisposable
         }
         MouthCentre = p;
     }
+
+    // The face parts' ranges for the kernel's loops (see BodySdfKernel.layerEnd): one past the last layer part,
+    // the first skin feature; when the two interleave, 0 / 0 (walk them all).
+    static bool IsFeature(int op) => op == (int)FacePartOp.Subtract || op == (int)FacePartOp.Union;
+    int FaceLayerEnd()
+    {
+        int end = 0; for (int j = 0; j < faceParts.Count; j++) if (!IsFeature(faceParts[j].op) && faceParts[j].op != (int)FacePartOp.Marker) end = j + 1;
+        return end <= FaceFeatureStartRaw() ? end : 0;
+    }
+    int FaceFeatureStartRaw() { for (int j = 0; j < faceParts.Count; j++) if (IsFeature(faceParts[j].op)) return j; return faceParts.Count; }
+    int FaceFeatureStart() => FaceLayerEnd() > 0 ? FaceFeatureStartRaw() : 0;
 
     // Face Metrics Fix 4: the head's cut sphere must hold the whole neck above the plane (a heavy nape isn't
     // round about the neck's bone): out from the neck's axis at a few heights above the plane, to the skin;
@@ -530,6 +539,7 @@ public class BodySDF : IDisposable
             blobs = new NativeArray<BodySdfKernel.Ellipsoid>(blobs.Count, alloc),
             face = new NativeArray<BodySdfKernel.FacePrim>(faceParts.ToArray(), alloc),
             jaw = new NativeArray<BodySdfKernel.Mandible>(new[] { mandible }, alloc),
+            layerEnd = FaceLayerEnd(), featureStart = FaceFeatureStart(),
             socketClearance = BodyRules.Default.face.socketClearance, faceReach = FaceReach(), faceFatBlendMax = BodyRules.Default.face.faceFatBlendMax,
             breasts = new NativeArray<BodySdfKernel.Ellipsoid>(breasts.Count, alloc),
             skull = E(skull.f, skull.r, headIndex, 0), eggTop = EggTop, eggBottom = EggBottom,
@@ -629,9 +639,6 @@ public class BodySDF : IDisposable
         return reach + BodyRules.Default.face.faceFatBlendMax + fat + 0.01f;
     }
 
-    // The highest point the cranium reaches (root space y) and its centre: for sanity checks.
-    public Vector3 CraniumCentre => cranium.f.o;
-    public Vector3 CraniumRadii => cranium.r;
     // The head's egg (Anatomy Rework Part 1: the bone layer's base, with INT's growth).
     public Vector3 SkullCentre => skull.f.o;
     public Vector3 SkullRadii => skull.r;
@@ -758,13 +765,6 @@ public class BodySDF : IDisposable
         float Anchor(FaceLine l) => Canon.Line(l) / hy;
         var fd = BodyRules.Default.face;
         bool fem = plan.sheet.sex == Sex.Female;
-        // Face Fix Part 2: the cranium (braincase), an egg big end up and back; INT grows it up and back.
-        {
-            Vector3 cc = fd.craniumCentre, cr = fd.craniumRadii;
-            Vector3 o = FacePoint(cc) + f.y * cr.y * hy * el * 0.8f - f.z * cr.z * rz * el * 0.4f;
-            cranium = new Feature { f = new Frame { o = o, x = f.x, y = f.y, z = f.z }, r = new Vector3(cr.x * rx, cr.y * hy * (1f + el * 0.8f), cr.z * rz * (1f + el * 0.6f)) };
-            craniumBottom = fd.craniumBottom; craniumTop = fd.craniumTop;
-        }
         // The lower jaw: the menton on the chin line, the jaw angles (sex, STR, DNA, seed), the chin's width.
         {
             var jr = new PcgRandom(plan.sheet.seed, "jaw");

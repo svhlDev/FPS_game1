@@ -48,6 +48,7 @@ public class PlayerGrenades : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("PlayerGrenades.Update");
         float dt = Time.deltaTime;
         if (dt > 0f)
         {
@@ -74,6 +75,7 @@ public class PlayerGrenades : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("PlayerGrenades.LateUpdate");
         bool show = Readying;
         if (show)
         {
@@ -198,7 +200,11 @@ public class PlayerGrenades : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("PlayerGrenades.OnGUI");
         if (Count <= 0 && !Readying) return;
-        GUI.Label(new Rect(Screen.width - 160, Screen.height - 30, 150, 25), $"GRENADES  {Count}" + (Readying ? "   (release G)" : ""));
+        int key = Count * 2 + (Readying ? 1 : 0);
+        if (label == null || key != shownKey) { shownKey = key; label = $"GRENADES  {Count}" + (Readying ? "   (release G)" : ""); }
+        GUI.Label(new Rect(Screen.width - 160, Screen.height - 30, 150, 25), label);
     }
+    string label; int shownKey;
 }

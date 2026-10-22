@@ -41,6 +41,7 @@ public class FireSystem : MonoBehaviour
     readonly List<Patch> patches = new List<Patch>(400);
     readonly Dictionary<long, float> heat = new Dictionary<long, float>();
     readonly Dictionary<long, List<Patch>> patchCells = new Dictionary<long, List<Patch>>();
+    readonly Stack<List<Patch>> cellSpare = new Stack<List<Patch>>();   // (cell lists reused: no garbage per rebuild)
     static readonly List<Flammable> flammables = new List<Flammable>();
     float nextHeat;
     static readonly RaycastHit[] hits = new RaycastHit[8];
@@ -88,9 +89,12 @@ public class FireSystem : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("FireSystem.Update");
         float dt = Time.deltaTime;
         Vector3 player = PlayerPos();
         float active2 = activeRadius * activeRadius;
+
+        Flammable.TickBurning();
 
         // ---------- chunks ----------
         for (int i = chunks.Count - 1; i >= 0; i--)
@@ -262,7 +266,7 @@ public class FireSystem : MonoBehaviour
     void AddToCells(Patch p)
     {
         long k = Key(p.World);
-        if (!patchCells.TryGetValue(k, out var list)) patchCells[k] = list = new List<Patch>();
+        if (!patchCells.TryGetValue(k, out var list)) patchCells[k] = list = cellSpare.Count > 0 ? cellSpare.Pop() : new List<Patch>(4);
         list.Add(p);
     }
 
@@ -270,6 +274,7 @@ public class FireSystem : MonoBehaviour
     void RebuildHeat(Vector3 player, float active2)
     {
         heat.Clear();
+        foreach (var l in patchCells.Values) { l.Clear(); cellSpare.Push(l); }
         patchCells.Clear();
         foreach (var p in patches)
         {

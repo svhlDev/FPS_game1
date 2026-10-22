@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
@@ -184,21 +185,7 @@ public static class BodyMesher
         sw.Restart();
 
         // ---------- 3. smooth + re-project ----------
-        var adj = Neighbours(verts.Count, tris);
-        var tmp = new Vector3[verts.Count];
-        for (int it = 0; it < settings.smoothIterations; it++)
-        {
-            for (int i = 0; i < verts.Count; i++)
-            {
-                var nb = adj[i];
-                if (nb.Count == 0) { tmp[i] = verts[i]; continue; }
-                Vector3 avg = Vector3.zero;
-                foreach (int j in nb) avg += verts[j];
-                avg /= nb.Count;
-                tmp[i] = Vector3.Lerp(verts[i], avg, settings.smoothStrength);
-            }
-            for (int i = 0; i < verts.Count; i++) verts[i] = tmp[i];
-        }
+        Smooth(verts, tris, settings.smoothIterations, settings.smoothStrength);
         Project(kernel, verts, cell, 3);
         res.smoothMs = (float)sw.Elapsed.TotalMilliseconds; sw.Restart();
 
@@ -265,20 +252,28 @@ public static class BodyMesher
     // Laplacian smoothing: each vertex moves toward its neighbours' average (re-project afterwards).
     internal static void Smooth(List<Vector3> verts, List<int> tris, int iterations, float strength)
     {
-        var adj = Neighbours(verts.Count, tris);
-        var tmp = new Vector3[verts.Count];
-        for (int it = 0; it < iterations; it++)
+        int n = verts.Count;
+        if (iterations <= 0 || n == 0) return;
+        Neighbours(n, tris, out int[] start, out int[] count, out int[] adj);
+        var cur = verts.ToArray();
+        var tmp = new Vector3[n];
+        try
         {
-            for (int i = 0; i < verts.Count; i++)
+            for (int it = 0; it < iterations; it++)
             {
-                var nb = adj[i];
-                if (nb.Count == 0) { tmp[i] = verts[i]; continue; }
-                Vector3 avg = Vector3.zero;
-                foreach (int j in nb) avg += verts[j];
-                tmp[i] = Vector3.Lerp(verts[i], avg / nb.Count, strength);
+                for (int i = 0; i < n; i++)
+                {
+                    int c = count[i];
+                    if (c == 0) { tmp[i] = cur[i]; continue; }
+                    Vector3 avg = Vector3.zero;
+                    for (int k = start[i], e = start[i] + c; k < e; k++) avg += cur[adj[k]];
+                    tmp[i] = Vector3.Lerp(cur[i], avg / c, strength);
+                }
+                (cur, tmp) = (tmp, cur);
             }
-            for (int i = 0; i < verts.Count; i++) verts[i] = tmp[i];
         }
+        finally { intPool.Return(start); intPool.Return(count); intPool.Return(adj); }
+        for (int i = 0; i < n; i++) verts[i] = cur[i];
     }
 
     internal static float Importance(Settings s, BoneKind k) =>
@@ -287,13 +282,27 @@ public static class BodyMesher
 
     internal const int CoarseStep = C;
 
-    static List<int>[] Neighbours(int n, List<int> tris)
+    // Vertex neighbours as flat arrays (CSR): those of i are adj[start[i] .. start[i] + count[i]), in the
+    // order the triangles link them. Rented from intPool (one block per mesh instead of a list per vertex);
+    // the caller returns all three.
+    static readonly ArrayPool<int> intPool = ArrayPool<int>.Create(1 << 25, 8);
+    static void Neighbours(int n, List<int> tris, out int[] start, out int[] count, out int[] adj)
     {
-        var adj = new List<int>[n];
-        for (int i = 0; i < n; i++) adj[i] = new List<int>(6);
-        void Link(int a, int b) { if (!adj[a].Contains(b)) adj[a].Add(b); if (!adj[b].Contains(a)) adj[b].Add(a); }
+        // Room for every link (each triangle links each of its corners twice), then filled without repeats.
+        var st = start = intPool.Rent(n + 1);
+        var ct = count = intPool.Rent(n);
+        System.Array.Clear(st, 0, n + 1); System.Array.Clear(ct, 0, n);
+        for (int t = 0; t < tris.Count; t++) st[tris[t] + 1] += 2;
+        for (int i = 0; i < n; i++) st[i + 1] += st[i];
+        var ad = adj = intPool.Rent(Mathf.Max(1, st[n]));
+        void Add(int a, int b)
+        {
+            int s0 = st[a], c = ct[a];
+            for (int k = s0; k < s0 + c; k++) if (ad[k] == b) return;
+            ad[s0 + c] = b; ct[a] = c + 1;
+        }
+        void Link(int a, int b) { Add(a, b); Add(b, a); }
         for (int t = 0; t < tris.Count; t += 3) { Link(tris[t], tris[t + 1]); Link(tris[t + 1], tris[t + 2]); Link(tris[t + 2], tris[t]); }
-        return adj;
     }
 
     // Edges used by one face (holes) or more than two (non-manifold).

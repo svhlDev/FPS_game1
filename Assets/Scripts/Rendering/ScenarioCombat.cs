@@ -384,6 +384,20 @@ public partial class ScenarioTest
         Log($"chunks over an officer: patches +{FireSystem.PatchCount - patches0}, officer health {(o != null ? o.Health.Health : 0f):0}");
         Log(FireSystem.PatchCount > patches0 ? "PASS chunks fall past the capsule and land (no burst round it)" : "FAIL chunks did not land");
 
+        // 2b. A burning NPC takes the fire damage (12 a second; Flammable's burning tick). (Officers aren't
+        // flammable by default - pedestrians are - so this one is made so.)
+        var fl = o != null ? Flammable.Add(o.gameObject, Flammable.Kind.Character) : null;
+        if (fl != null)
+        {
+            float hpFire = o.Health.Health;
+            fl.Ignite();
+            yield return new WaitForSeconds(1f);
+            float lost = hpFire - (o != null ? o.Health.Health : 0f);
+            Log($"officer on fire for 1 s: burning {fl.Burning}, health lost {lost:0.0}");
+            Log(fl.Burning && lost > 8f && lost < 16f ? "PASS a burning NPC loses ~12 health a second" : "FAIL burning NPC damage");
+            fl.Extinguish();
+        }
+
         // 3. Punch: head snaps back, the body is shoved and staggers.
         var o2 = OfficerAgent.DebugSpawn(Ground(fpc.transform.position + fwd * 0.6f), Quaternion.LookRotation(-fwd));
         yield return new WaitForSeconds(0.8f);

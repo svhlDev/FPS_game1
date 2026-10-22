@@ -47,13 +47,22 @@ public class LanePath : MonoBehaviour
 
     readonly List<Vector3> points = new List<Vector3>();
     readonly List<float> cumulative = new List<float>();
+    // (The per-car queries' data, copied once per rebuild: the points, the points in top view and their
+    // distances along the path - Sample and Project read plain arrays instead of the lists.)
+    Vector2[] flat = new Vector2[0];
+    Vector3[] pts = new Vector3[0];
+    float[] cum = new float[0];
     readonly List<int> levels = new List<int>();
     public float Length { get; private set; }
 
     // Cars currently attached to this lane (Lane mode). Maintained by FlyingVehicle via TrafficSystem.
     [NonSerialized] public readonly List<FlyingVehicle> Cars = new List<FlyingVehicle>();
 
-    void OnEnable() => Rebuild();
+    // Every enabled flyway (no scene search needed to find them).
+    public static readonly List<LanePath> Active = new List<LanePath>();
+
+    void OnEnable() { if (!Active.Contains(this)) Active.Add(this); Rebuild(); }
+    void OnDisable() => Active.Remove(this);
     void OnValidate() => Rebuild();
     void Update() { if (!Application.isPlaying) Rebuild(); }
 
@@ -77,6 +86,15 @@ public class LanePath : MonoBehaviour
                 AddPoint(CatmullRom(p0, p1, p2, p3, k / (float)samplesPerSegment));
         }
         AddPoint(closedLoop ? wp[0] : wp[n - 1]);
+        BuildArrays();
+    }
+
+    // Array copies of the polyline for the per-frame queries (no List indexer calls in the inner loops).
+    void BuildArrays()
+    {
+        pts = points.ToArray(); cum = cumulative.ToArray();
+        flat = new Vector2[pts.Length];
+        for (int i = 0; i < pts.Length; i++) flat[i] = new Vector2(pts[i].x, pts[i].z);
     }
 
     void AddPoint(Vector3 p)
@@ -92,18 +110,21 @@ public class LanePath : MonoBehaviour
     {
         if (points.Count < 2) { position = transform.position; forward = transform.forward; return; }
         distance = WrapDistance(distance);
+        if (pts.Length != points.Count) BuildArrays();
+        var cu = cum;
 
-        int lo = 0, hi = cumulative.Count - 1;
+        int lo = 0, hi = cu.Length - 1;
         while (hi - lo > 1)
         {
-            int mid = (lo + hi) / 2;
-            if (cumulative[mid] < distance) lo = mid; else hi = mid;
+            int mid = (lo + hi) >> 1;
+            if (cu[mid] < distance) lo = mid; else hi = mid;
         }
-        float segLen = cumulative[hi] - cumulative[lo];
-        float t = segLen > 0.0001f ? (distance - cumulative[lo]) / segLen : 0f;
+        float segLen = cu[hi] - cu[lo];
+        float t = segLen > 0.0001f ? (distance - cu[lo]) / segLen : 0f;
 
-        position = Vector3.Lerp(points[lo], points[hi], t);
-        forward = points[hi] - points[lo];
+        Vector3 a = pts[lo], b = pts[hi];
+        position = Vector3.Lerp(a, b, t);
+        forward = b - a;
         forward = forward.sqrMagnitude > 1e-6f ? forward.normalized : transform.forward;
     }
 
@@ -203,20 +224,23 @@ public class LanePath : MonoBehaviour
     {
         int segCount = points.Count - 1;
         if (segCount < 1) return hint;
+        if (flat.Length != points.Count) BuildArrays();
 
         Vector2 p2 = new Vector2(pos.x, pos.z);
         float bestSq = float.MaxValue, best = hint, covered = 0f;
         int i = IndexAt(hint - window);
+        var fl = flat; var cu = cum;
         for (int guard = 0; guard < segCount && covered < 2f * window; guard++)
         {
             int j = i + 1;
-            Vector2 a = new Vector2(points[i].x, points[i].z), b = new Vector2(points[j].x, points[j].z);
-            Vector2 ab = b - a;
-            float len2 = ab.sqrMagnitude;
-            float t = len2 > 1e-6f ? Mathf.Clamp01(Vector2.Dot(p2 - a, ab) / len2) : 0f;
-            float sq = (a + ab * t - p2).sqrMagnitude;
-            float segLen = cumulative[j] - cumulative[i];
-            if (sq < bestSq) { bestSq = sq; best = cumulative[i] + segLen * t; }
+            Vector2 a = fl[i], ab = fl[j] - a;
+            float len2 = ab.x * ab.x + ab.y * ab.y;
+            Vector2 ap = p2 - a;
+            float t = len2 > 1e-6f ? Mathf.Clamp01((ap.x * ab.x + ap.y * ab.y) / len2) : 0f;
+            float ex = a.x + ab.x * t - p2.x, ey = a.y + ab.y * t - p2.y;
+            float sq = ex * ex + ey * ey;
+            float segLen = cu[j] - cu[i];
+            if (sq < bestSq) { bestSq = sq; best = cu[i] + segLen * t; }
             covered += segLen;
             i = j;
             if (i >= segCount) { if (closedLoop) i = 0; else break; }
@@ -230,13 +254,14 @@ public class LanePath : MonoBehaviour
     int IndexAt(float distance)
     {
         distance = WrapDistance(distance);
-        int lo = 0, hi = cumulative.Count - 1;
+        var cu = cum;
+        int lo = 0, hi = cu.Length - 1;
         while (hi - lo > 1)
         {
-            int mid = (lo + hi) / 2;
-            if (cumulative[mid] <= distance) lo = mid; else hi = mid;
+            int mid = (lo + hi) >> 1;
+            if (cu[mid] <= distance) lo = mid; else hi = mid;
         }
-        return Mathf.Min(lo, cumulative.Count - 2);
+        return Mathf.Min(lo, cu.Length - 2);
     }
 
     public Vector3 ToWorld(Vector3 basePos, Vector3 forward, Vector2 offset)

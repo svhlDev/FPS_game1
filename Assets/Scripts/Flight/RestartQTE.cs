@@ -51,6 +51,7 @@ public class RestartQTE : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("RestartQTE.Update");
         if (!running) return;
         var kb = Keyboard.current;
         if (kb == null) return;
@@ -81,6 +82,7 @@ public class RestartQTE : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("RestartQTE.OnGUI");
         if (!running) return;
         float w = 64f, gap = 8f;
         float total = sequence.Length * (w + gap) - gap;

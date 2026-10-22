@@ -14,6 +14,7 @@ public class EyeLook : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("EyeLook.LateUpdate");
         if (fig == null || fig.HeadJoint == null) return;
         float k = 1f - Mathf.Exp(-speed * Time.deltaTime);
         Aim(eyeL, k);

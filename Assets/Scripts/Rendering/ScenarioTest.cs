@@ -296,6 +296,7 @@ public partial class ScenarioTest : MonoBehaviour
         var graph = FindAnyObjectByType<WalkGraph>();
         if (fpc == null || ps == null || graph == null) { Log($"FAIL setup (player {fpc != null}, peds {ps != null}, graph {graph != null})"); yield break; }
         Log($"walk graph {graph.Count} nodes");
+        PathCheck(graph);
         fpc.PlaceAt(new Vector3(27f, 1f, -92f), Quaternion.LookRotation(Vector3.back));
         yield return new WaitForSeconds(5f);
 
@@ -344,6 +345,58 @@ public partial class ScenarioTest : MonoBehaviour
         Log(waitingSeen > 0 ? "PASS pedestrians wait at crosswalks" : "WARN no crosswalk waits seen");
         Log(fallen == 0 ? "PASS nobody fell through" : "FAIL pedestrians fell");
         Log(around > 0 && fled == around ? "PASS pedestrians flee danger" : "FAIL flee reaction");
+    }
+
+    // WalkGraph.FindPath against a plain Dijkstra: same reachability, and the path as short as the
+    // shortest one (to float rounding) along real edges, for random node pairs.
+    void PathCheck(WalkGraph graph)
+    {
+        int n = graph.Count;
+        if (n < 2) { Log("WARN walk graph too small for the path check"); return; }
+        var rng = new System.Random(5);
+        var path = new List<int>();
+        var dist = new float[n]; var done = new bool[n];
+        int pairs = 0, mismatched = 0, broken = 0; float worstExtra = 0f;
+        var sw = System.Diagnostics.Stopwatch.StartNew(); double astarMs = 0;
+        for (int k = 0; k < 200; k++)
+        {
+            int a = rng.Next(n), b = rng.Next(n);
+            if (a == b) continue;
+            pairs++;
+            for (int i = 0; i < n; i++) { dist[i] = float.MaxValue; done[i] = false; }
+            dist[a] = 0f;
+            while (true)
+            {
+                int cur = -1; float best = float.MaxValue;
+                for (int i = 0; i < n; i++) if (!done[i] && dist[i] < best) { best = dist[i]; cur = i; }
+                if (cur < 0 || cur == b) break;
+                done[cur] = true;
+                for (int e = graph.adjStart[cur]; e < graph.adjStart[cur + 1]; e++)
+                {
+                    int nb = graph.adj[e];
+                    float nd = dist[cur] + Vector3.Distance(graph.positions[cur], graph.positions[nb]);
+                    if (nd < dist[nb]) dist[nb] = nd;
+                }
+            }
+            sw.Restart();
+            bool found = graph.FindPath(a, b, path);
+            astarMs += sw.Elapsed.TotalMilliseconds;
+            bool reachable = dist[b] < float.MaxValue;
+            if (found != reachable) { mismatched++; continue; }
+            if (!found) continue;
+            float len = 0f; bool ok = path[0] == a && path[path.Count - 1] == b;
+            for (int i = 1; i < path.Count && ok; i++)
+            {
+                bool edge = false;
+                for (int e = graph.adjStart[path[i - 1]]; e < graph.adjStart[path[i - 1] + 1]; e++) if (graph.adj[e] == path[i]) { edge = true; break; }
+                ok = edge;
+                len += Vector3.Distance(graph.positions[path[i - 1]], graph.positions[path[i]]);
+            }
+            if (!ok) { broken++; continue; }
+            worstExtra = Mathf.Max(worstExtra, len - dist[b]);
+        }
+        Log($"path check: {pairs} pairs, reachability mismatches {mismatched}, broken paths {broken}, worst extra length {worstExtra:0.000} m, A* {astarMs / Mathf.Max(1, pairs):0.000} ms a search");
+        Log(mismatched == 0 && broken == 0 && worstExtra < 0.01f ? "PASS walk paths are shortest paths" : "FAIL walk path search");
     }
 
     // ---------- car damage, fire, explosions, laser ----------

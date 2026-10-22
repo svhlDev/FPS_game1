@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -12,6 +13,13 @@ public static class SurfaceNets
 {
     public struct Result { public Mesh mesh; public int samples, vertices, triangles; public float sampleMs, meshMs; }
 
+    // Grid-sized scratch arrays (several MB per body piece), shared by the build workers instead of being
+    // allocated - and collected - per piece. Rented arrays can be longer than asked for.
+    static readonly ArrayPool<float> gridPool = ArrayPool<float>.Create(1 << 25, 4);
+    static readonly ArrayPool<int> cellPool = ArrayPool<int>.Create(1 << 25, 4);
+    public static float[] RentGrid(int length) => gridPool.Rent(length);
+    public static void ReturnGrid(float[] grid) => gridPool.Return(grid);
+
     // Grid values v (x fastest, then y, then z), nx * ny * nz points at min + (x, y, z) * cell.
     // Ambiguous cells (two separate pieces of surface in one cell: a gap or bridge thinner than a cell)
     // would share one vertex and make non-manifold edges; they're resolved first by moving the outside
@@ -21,53 +29,58 @@ public static class SurfaceNets
         int Idx(int x, int y, int z) => x + nx * (y + ny * z);
         int cx = nx - 1, cy = ny - 1, cz = nz - 1;
         int flipped = ResolveAmbiguous(v, nx, ny, nz);
-        var cellVert = new int[cx * cy * cz];
-        int CIdx(int x, int y, int z) => x + cx * (y + cy * z);
-        var corner = new float[8];
-        for (int z = 0; z < cz; z++)
-            for (int y = 0; y < cy; y++)
-                for (int x = 0; x < cx; x++)
-                {
-                    int inside = 0;
-                    for (int c = 0; c < 8; c++)
-                    {
-                        corner[c] = v[Idx(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))];
-                        if (corner[c] < 0f) inside++;
-                    }
-                    if (inside == 0 || inside == 8) { cellVert[CIdx(x, y, z)] = -1; continue; }
-                    Vector3 sum = Vector3.zero; int cnt = 0;
-                    for (int e = 0; e < 12; e++)
-                    {
-                        int a = EdgeA[e], b = EdgeB[e];
-                        float da = corner[a], db = corner[b];
-                        if ((da < 0f) == (db < 0f)) continue;
-                        float t = da / (da - db);
-                        sum += Vector3.Lerp(Corner(a), Corner(b), t);
-                        cnt++;
-                    }
-                    cellVert[CIdx(x, y, z)] = verts.Count;
-                    verts.Add(min + (new Vector3(x, y, z) + sum / cnt) * cell);
-                }
-
-        // A quad per crossed grid edge, from the four cells sharing it.
-        void Quad(int a, int b, int c, int d, bool flip)
+        // (Every cell is written below - a vertex index or -1 - so the rented array needs no clearing.)
+        var cellVert = cellPool.Rent(cx * cy * cz);
+        try
         {
-            if (a < 0 || b < 0 || c < 0 || d < 0) return;
-            if (flip) { tris.Add(a); tris.Add(c); tris.Add(b); tris.Add(a); tris.Add(d); tris.Add(c); }
-            else { tris.Add(a); tris.Add(b); tris.Add(c); tris.Add(a); tris.Add(c); tris.Add(d); }
+            int CIdx(int x, int y, int z) => x + cx * (y + cy * z);
+            var corner = new float[8];
+            for (int z = 0; z < cz; z++)
+                for (int y = 0; y < cy; y++)
+                    for (int x = 0; x < cx; x++)
+                    {
+                        int inside = 0;
+                        for (int c = 0; c < 8; c++)
+                        {
+                            corner[c] = v[Idx(x + (c & 1), y + ((c >> 1) & 1), z + ((c >> 2) & 1))];
+                            if (corner[c] < 0f) inside++;
+                        }
+                        if (inside == 0 || inside == 8) { cellVert[CIdx(x, y, z)] = -1; continue; }
+                        Vector3 sum = Vector3.zero; int cnt = 0;
+                        for (int e = 0; e < 12; e++)
+                        {
+                            int a = EdgeA[e], b = EdgeB[e];
+                            float da = corner[a], db = corner[b];
+                            if ((da < 0f) == (db < 0f)) continue;
+                            float t = da / (da - db);
+                            sum += Vector3.Lerp(Corner(a), Corner(b), t);
+                            cnt++;
+                        }
+                        cellVert[CIdx(x, y, z)] = verts.Count;
+                        verts.Add(min + (new Vector3(x, y, z) + sum / cnt) * cell);
+                    }
+
+            // A quad per crossed grid edge, from the four cells sharing it.
+            void Quad(int a, int b, int c, int d, bool flip)
+            {
+                if (a < 0 || b < 0 || c < 0 || d < 0) return;
+                if (flip) { tris.Add(a); tris.Add(c); tris.Add(b); tris.Add(a); tris.Add(d); tris.Add(c); }
+                else { tris.Add(a); tris.Add(b); tris.Add(c); tris.Add(a); tris.Add(c); tris.Add(d); }
+            }
+            for (int z = 1; z < cz; z++)
+                for (int y = 1; y < cy; y++)
+                    for (int x = 1; x < cx; x++)
+                    {
+                        bool in0 = v[Idx(x, y, z)] < 0f;
+                        if (in0 != (v[Idx(x + 1, y, z)] < 0f))
+                            Quad(cellVert[CIdx(x, y - 1, z - 1)], cellVert[CIdx(x, y, z - 1)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x, y - 1, z)], !in0);
+                        if (in0 != (v[Idx(x, y + 1, z)] < 0f))
+                            Quad(cellVert[CIdx(x - 1, y, z - 1)], cellVert[CIdx(x - 1, y, z)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x, y, z - 1)], !in0);
+                        if (in0 != (v[Idx(x, y, z + 1)] < 0f))
+                            Quad(cellVert[CIdx(x - 1, y - 1, z)], cellVert[CIdx(x, y - 1, z)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x - 1, y, z)], !in0);
+                    }
         }
-        for (int z = 1; z < cz; z++)
-            for (int y = 1; y < cy; y++)
-                for (int x = 1; x < cx; x++)
-                {
-                    bool in0 = v[Idx(x, y, z)] < 0f;
-                    if (in0 != (v[Idx(x + 1, y, z)] < 0f))
-                        Quad(cellVert[CIdx(x, y - 1, z - 1)], cellVert[CIdx(x, y, z - 1)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x, y - 1, z)], !in0);
-                    if (in0 != (v[Idx(x, y + 1, z)] < 0f))
-                        Quad(cellVert[CIdx(x - 1, y, z - 1)], cellVert[CIdx(x - 1, y, z)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x, y, z - 1)], !in0);
-                    if (in0 != (v[Idx(x, y, z + 1)] < 0f))
-                        Quad(cellVert[CIdx(x - 1, y - 1, z)], cellVert[CIdx(x, y - 1, z)], cellVert[CIdx(x, y, z)], cellVert[CIdx(x - 1, y, z)], !in0);
-                }
+        finally { cellPool.Return(cellVert); }
         return flipped;
     }
 

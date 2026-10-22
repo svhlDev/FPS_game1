@@ -24,6 +24,9 @@ public class VehicleHUD : MonoBehaviour
     float overlayUntil;
     bool overlayPinned;
     float escPressedAt = float.NegativeInfinity;
+    string status, laneStatus;
+    long shownStatusKey;
+    int shownLaneKey;
 
     public static void Ensure()
     {
@@ -36,6 +39,7 @@ public class VehicleHUD : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("VehicleHUD.Update");
         var kb = Keyboard.current;
         var mouse = Mouse.current;
 
@@ -76,6 +80,7 @@ public class VehicleHUD : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("VehicleHUD.OnGUI");
         float y = 20f;
 
         if (OverlayVisible)
@@ -94,15 +99,31 @@ public class VehicleHUD : MonoBehaviour
         var car = FlyingVehicle.Driven;
         if (car == null) return;
 
+        // (The readouts are rebuilt only when what they show changes: OnGUI runs several times a frame.)
         var mode = car.Mode;
-        string where = mode == FlightMode.Free ? "none"
-                     : mode == FlightMode.Lane ? $"{car.GridLayer} (lane level {car.LaneLevel:+0;-0;0})"
-                     : car.GridLayer.ToString();
-        GUI.Label(new Rect(20, y, 500, 25), $"Mode: {mode}   Layer: {where}   Speed: {car.HudSpeed:0}");
+        int layer = car.GridLayer, level = car.LaneLevel, kmh = Mathf.RoundToInt(car.HudSpeed);
+        long statusKey = ((long)mode << 48) ^ ((long)(layer & 0xFFFF) << 32) ^ ((long)(level & 0xFFFF) << 16) ^ (kmh & 0xFFFF);
+        if (statusKey != shownStatusKey || status == null)
+        {
+            shownStatusKey = statusKey;
+            string where = mode == FlightMode.Free ? "none"
+                         : mode == FlightMode.Lane ? $"{layer} (lane level {level:+0;-0;0})"
+                         : layer.ToString();
+            status = $"Mode: {mode}   Layer: {where}   Speed: {kmh}";
+        }
+        GUI.Label(new Rect(20, y, 500, 25), status);
         if (mode == FlightMode.Lane && car.path != null)
-            GUI.Label(new Rect(20, y + 25, 700, 25),
-                $"Magnet: {car.MagnetHold * 100f:0}%   Lane above: {car.CanStepLane(1)}   " +
-                $"Lane below: {car.CanStepLane(-1)}   No-switch: {car.InNoSwitchZone}");
+        {
+            bool up = car.CanStepLane(1), down = car.CanStepLane(-1), noSwitch = car.InNoSwitchZone;
+            int magnet = Mathf.RoundToInt(car.MagnetHold * 100f);
+            int laneKey = magnet << 3 | (up ? 4 : 0) | (down ? 2 : 0) | (noSwitch ? 1 : 0);
+            if (laneKey != shownLaneKey || laneStatus == null)
+            {
+                shownLaneKey = laneKey;
+                laneStatus = $"Magnet: {magnet}%   Lane above: {up}   Lane below: {down}   No-switch: {noSwitch}";
+            }
+            GUI.Label(new Rect(20, y + 25, 700, 25), laneStatus);
+        }
         string flash = car.FlashMessage;
         if (flash != null) GUI.Label(new Rect(20, y + 50, 500, 25), flash);
         GUI.Label(new Rect(20, Screen.height - 30, 900, 25),

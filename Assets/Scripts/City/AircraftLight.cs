@@ -15,6 +15,7 @@ public class AircraftLight : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("AircraftLight.Update");
         bool on = Mathf.Repeat(Time.time / period + phase, 1f) < onFraction;
         if (rend.enabled != on) rend.enabled = on;
     }

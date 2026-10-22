@@ -61,6 +61,7 @@ public class GunPickup : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("GunPickup.Update");
         offscreen.Tick(renderers);
         if (Time.time - Born > OffscreenTimer.Lifetime && offscreen.HiddenFor >= OffscreenTimer.HiddenTime) Destroy(gameObject);
     }

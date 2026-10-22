@@ -37,6 +37,7 @@ public static class BodySurfaceBake
         public BeardStyle beardStyle;
         // Face Polish Part 4: the brows' centre lines (FaceHair): a soft hair-coloured tint under the tufts.
         public List<Vector3[]> browLines; public HeadCanon canon; public bool female;
+        public bool eyesForBrows; public int seed;   // (for computing browLines off the main thread)
         // Face Polish Part 6: the neck's cut (the head mesh's seam with the body): marks fade out above it,
         // so the head's edge matches the body's skin there.
         public Vector3 cutO, cutAxis;
@@ -48,7 +49,8 @@ public static class BodySurfaceBake
             var sheet = sdf.Plan.sheet;
             m.canon = sdf.Canon; m.female = sheet.sex == Sex.Female;
             if (sdf.HasHeadPiece) { m.cutO = sdf.HeadCutOrigin; m.cutAxis = sdf.HeadCutAxis; }
-            if (sdf.EyeRadius > 0f) m.browLines = FaceHair.BrowLines(sdf.Kernel, sdf.Canon, sdf.EyeL, sdf.EyeR, sheet.seed, m.female);
+            // (The brows' lines - field marches - are left to the caller's worker: BodyBuild fills browLines there.)
+            m.eyesForBrows = sdf.EyeRadius > 0f; m.seed = sheet.seed;
             m.beardStyle = FaceHair.PickBeard(sheet, out m.beard);
             for (int i = 0; i < sdf.FacePrims.Count; i++)
             {

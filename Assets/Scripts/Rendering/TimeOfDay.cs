@@ -179,6 +179,7 @@ public class TimeOfDay : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("TimeOfDay.Update");
         var kb = Keyboard.current;
         if (kb != null && kb.tKey.wasPressedThisFrame) Hour = Mathf.Repeat(Hour + skipHours, 24f);
         if (!freeze) Hour = Mathf.Repeat(Hour + Time.deltaTime * 24f / Mathf.Max(0.01f, dayMinutes * 60f), 24f);

@@ -58,6 +58,7 @@ public class CityProbes : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("CityProbes.Update");
         if (!On || probes.Count == 0) return;
         int count;
         if (!startup)

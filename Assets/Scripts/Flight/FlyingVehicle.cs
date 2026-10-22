@@ -287,7 +287,6 @@ public class FlyingVehicle : MonoBehaviour
     Camera cam;
     int enterFrame = -1;
     bool eArmed; float eDownTime;
-    LanePath[] allLanes;
     string flash; float flashUntil;
     BoxCollider bodyCol;
     Vector3 colHalf, colCenter;
@@ -350,7 +349,6 @@ public class FlyingVehicle : MonoBehaviour
         started = true;
         SetupKind();
         isPolice = GetComponent<PoliceDriver>() != null;
-        allLanes = FindObjectsByType<LanePath>(FindObjectsSortMode.None);
         yaw = transform.eulerAngles.y;
         int playerLayer = LayerMask.NameToLayer("Player");
         collisionMask = Physics.DefaultRaycastLayers & ~(playerLayer >= 0 ? 1 << playerLayer : 0);
@@ -524,13 +522,20 @@ public class FlyingVehicle : MonoBehaviour
     static readonly ProfilerMarker UpdateMarker = new ProfilerMarker("FlyingVehicle.Update");
     static readonly ProfilerMarker AIMarker = new ProfilerMarker("FlyingVehicle.AITargetSpeed");
     static readonly ProfilerMarker CollideMarker = new ProfilerMarker("FlyingVehicle.MoveAndCollide");
+    static readonly ProfilerMarker AvoidMarker = new ProfilerMarker("FlyingVehicle.Avoidance");
+    static readonly ProfilerMarker ProjectMarker = new ProfilerMarker("FlyingVehicle.LaneProject");
+    static readonly ProfilerMarker OffsetMarker = new ProfilerMarker("FlyingVehicle.LineOffset");
+    static readonly ProfilerMarker SetPoseMarker = new ProfilerMarker("FlyingVehicle.SetPose");
+    static readonly ProfilerMarker InputMarker = new ProfilerMarker("FlyingVehicle.InputAim");
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("FlyingVehicle.Update");
         using var _ = UpdateMarker.Auto();
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (IsOccupied && kb != null) HandleModeInput(kb);
+        using var _t0 = AllocProbe.Begin("FV.modes"); // ALLOCTMP
 
         if (AttachHost != null) { FollowHost(); return; }
         if (Health != null && Health.Wrecked) { UpdateWreck(); return; }
@@ -694,9 +699,8 @@ public class FlyingVehicle : MonoBehaviour
     {
         LanePath best = null; int bestLevel = 0;
         float bestD = 0f, bestSq = captureRadius * captureRadius;
-        foreach (var lp in allLanes)
+        foreach (var lp in LanePath.Active)
         {
-            if (lp == null) continue;
             foreach (int level in lp.Levels)
             {
                 if (lp.GridLayerOf(level) != gridLayer) continue;
@@ -758,17 +762,22 @@ public class FlyingVehicle : MonoBehaviour
     {
         if (path == null) { Mode = FlightMode.Layer; return; }
         float dt = Time.deltaTime;
-        Vector2 input = MoveInput(kb);
-        UpdateAim(mouse);
+        Vector2 input;
+        using (AllocProbe.Begin("FV.input")) // ALLOCTMP
+        using (InputMarker.Auto()) { input = MoveInput(kb); UpdateAim(mouse); }
 
         // Traffic routes round stops (shifts level), and drifts back to its own level whenever it
         // legally can and that level is clear.
-        if (IsAI) UpdateAvoidance();
+        if (IsAI) using (AllocProbe.Begin("FV.avoid")) using (AvoidMarker.Auto()) UpdateAvoidance(); // ALLOCTMP
         if (IsAI && laneLevel != startLevel && returnClear && IsAvailable(startLevel) && !path.IsNoSwitch(distance))
             laneLevel = startLevel;
 
-        distance = path.Project(transform.position, distance);
-        Vector3 linePoint = UpdateLineOffset(out Vector3 laneFwd);
+        // (Tracking frame to frame: the car can only have moved so far along the lane - search that, not +-40 m.)
+        using (AllocProbe.Begin("FV.project")) // ALLOCTMP
+        using (ProjectMarker.Auto()) distance = path.Project(transform.position, distance, Mathf.Max(6f, velocity.magnitude * dt * 2f + 4f));
+        Vector3 linePoint, laneFwd;
+        using (AllocProbe.Begin("FV.offset")) // ALLOCTMP
+        using (OffsetMarker.Auto()) linePoint = UpdateLineOffset(out laneFwd);
         Vector3 laneFlat = Flat(laneFwd);
 
         // Sideways distance to the line (horizontal only, ignoring progress along it).
@@ -816,7 +825,7 @@ public class FlyingVehicle : MonoBehaviour
         }
         else
         {
-            float target = AITargetSpeed(carFwd);
+            float target; using (AllocProbe.Begin("FV.aispeed")) target = AITargetSpeed(carFwd, laneFwd); // ALLOCTMP
             fwdSpeed = Mathf.MoveTowards(fwdSpeed, target, (target < fwdSpeed ? braking : acceleration) * dt);
         }
 
@@ -840,9 +849,11 @@ public class FlyingVehicle : MonoBehaviour
         float bank = Mathf.Clamp(-Vector3.Dot(hv, carRight) * 0.6f, -20f, 20f);
         float p = Mathf.Clamp(-altVel * 1.5f, -20f, 20f);
         Quaternion rot = heading * Quaternion.Euler(p, 0f, bank);
+        using (AllocProbe.Begin("FV.collide")) // ALLOCTMP
         pos = MoveAndCollide(transform.position, pos - transform.position, rot);
         speed = Vector3.Dot(velocity, carFwd);
-        transform.SetPositionAndRotation(pos, rot);
+        using (AllocProbe.Begin("FV.setpose")) // ALLOCTMP
+        using (SetPoseMarker.Auto()) transform.SetPositionAndRotation(pos, rot);
     }
 
     // Knocked off its lane: fly the straight 3D line back to the nearest point on it
@@ -889,9 +900,11 @@ public class FlyingVehicle : MonoBehaviour
     // Speed limit, then: follow the car ahead at followGap, and yield at crossings.
     // Uses the TrafficSystem snapshot: the leader is the next car on our lane and layer,
     // and only cars in the neighbouring grid cells are checked for conflicts.
-    float AITargetSpeed(Vector3 fwd)
+    // laneFwd: the lane's smoothed tangent here (UpdateLineOffset's, this frame).
+    float AITargetSpeed(Vector3 fwd, Vector3 laneFwd)
     {
         using var _ = AIMarker.Auto();
+        using (AllocProbe.Begin("FV.ensurebuilt")) // ALLOCTMP
         TrafficSystem.EnsureBuilt();
         float target = aiCruiseSpeed;
         int self = TrafficIndex;
@@ -915,7 +928,7 @@ public class FlyingVehicle : MonoBehaviour
         if (path != null)
         {
             // Two windows: the full lookahead and half of it (catches short, sharp corners).
-            Vector3 f0 = path.SmoothForward(distance);
+            Vector3 f0 = laneFwd;
             for (int k = 1; k <= 2; k++)
             {
                 float look = curveLookahead * k * 0.5f;
@@ -1618,6 +1631,7 @@ public class FlyingVehicle : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("FlyingVehicle.LateUpdate");
         if (!IsOccupied || cam == null || CameraOverride) return;
         var mouse = Mouse.current;
         if (mouse != null)

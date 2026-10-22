@@ -21,6 +21,7 @@ public class GoalZone : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("GoalZone.Update");
         if (player == null || !player.isActiveAndEnabled) return;
         if (!zone.bounds.Contains(player.transform.position + Vector3.up)) return;
         if (reachedRun == player.SpawnTime) return;
@@ -31,6 +32,7 @@ public class GoalZone : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("GoalZone.OnGUI");
         if (Time.time < shownUntil) GUI.Label(new Rect(Screen.width / 2f - 150, 100, 400, 25), shown);
     }
 }

@@ -53,7 +53,7 @@ public class PedestrianSystem : MonoBehaviour
         public Transform near;
         internal CharacterController cc;
         internal FigureAnimator anim;
-        internal float bob, vy, lastStare;
+        internal float vy, lastStare;
         internal bool downLethal;
         internal Vector3 knock;           // displacement still to apply (eased out)
         internal float staggerUntil, lastShock = -100f, shockStart;
@@ -73,6 +73,7 @@ public class PedestrianSystem : MonoBehaviour
     readonly List<Matrix4x4> bodyMatrices = new List<Matrix4x4>(1024);
     Mesh farMesh;
     readonly Dictionary<long, List<Ped>> grid = new Dictionary<long, List<Ped>>();
+    readonly Stack<List<Ped>> gridSpare = new Stack<List<Ped>>();   // (the cells' lists, reused every frame: no garbage)
     WalkGraph graph;
     int[] component;
     List<List<int>> componentGoals, componentEntrances;
@@ -408,10 +409,12 @@ public class PedestrianSystem : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("PedestrianSystem.Update");
         float dt = Time.deltaTime;
         Vector3 center = Center();
         dangers.RemoveAll(d => Time.time - d.t > 0.5f);
 
+        var _t0 = AllocProbe.Begin("PS.paths"); // ALLOCTMP
         // Pathfinding is spread over frames.
         for (int k = 0; k < pathsPerFrame && needPath.Count > 0; k++)
         {
@@ -430,12 +433,14 @@ public class PedestrianSystem : MonoBehaviour
             break; // one per frame
         }
 
+        _t0.Dispose(); var _t1 = AllocProbe.Begin("PS.grid+bodies"); // ALLOCTMP
         // Spatial hash of the near tier for separation.
+        foreach (var l in grid.Values) { l.Clear(); gridSpare.Push(l); }
         grid.Clear();
         foreach (var p in nearList)
         {
             long key = Cell(p.pos);
-            if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<Ped>();
+            if (!grid.TryGetValue(key, out var list)) grid[key] = list = gridSpare.Count > 0 ? gridSpare.Pop() : new List<Ped>(4);
             list.Add(p);
         }
 
@@ -457,6 +462,7 @@ public class PedestrianSystem : MonoBehaviour
                 }
             }
 
+        _t1.Dispose(); // ALLOCTMP
         var fpc = FirstPersonController.Instance;
         bool roofRider = fpc != null && fpc.isActiveAndEnabled && fpc.Platform != null;
         float near2 = nearRadius * nearRadius, far2 = farRadius * farRadius;
@@ -482,10 +488,10 @@ public class PedestrianSystem : MonoBehaviour
             if (p.near == null && d2 < near2) Promote(p);
             else if (p.near != null && d2 > far2) Demote(p);
 
-            Vector3 want = Steer(p, dt, roofRider ? fpc.transform.position : (Vector3?)null);
+            Vector3 want; using (AllocProbe.Begin("PS.steer")) want = Steer(p, dt, roofRider ? fpc.transform.position : (Vector3?)null); // ALLOCTMP
             if (p.state == State.Gone) continue;
 
-            if (p.near != null) UpdateNear(p, want, dt);
+            if (p.near != null) using (AllocProbe.Begin("PS.near")) UpdateNear(p, want, dt); // ALLOCTMP
             else
             {
                 p.pos += want * dt;
@@ -599,8 +605,10 @@ public class PedestrianSystem : MonoBehaviour
             {
                 if (o == p) continue;
                 Vector3 r = p.pos - o.pos; r.y = 0f;
-                float d = r.magnitude;
-                if (d < separation && d > 0.01f) push += r / d * (separation - d) * 3f;
+                float d2 = r.sqrMagnitude;
+                if (d2 >= separation * separation || d2 < 0.0001f) continue;   // (no square root for the far ones)
+                float d = Mathf.Sqrt(d2);
+                push += r / d * (separation - d) * 3f;
             }
         }
         // Make room for officers.

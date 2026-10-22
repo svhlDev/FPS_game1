@@ -8,6 +8,7 @@ public class HairLOD : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("HairLOD.LateUpdate");
         if (cards == null) return;
         var cam = Camera.main;
         bool near = cam == null || (cam.transform.position - transform.position).sqrMagnitude < distance * distance;

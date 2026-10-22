@@ -182,6 +182,7 @@ public class BurnMarks : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("BurnMarks.Update");
         var cam = Camera.main;
         if (cam != null) GeometryUtility.CalculateFrustumPlanes(cam, frustum);
         Vector3 cp = cam != null ? cam.transform.position : Vector3.zero;

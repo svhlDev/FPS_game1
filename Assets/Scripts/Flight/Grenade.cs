@@ -85,6 +85,7 @@ public class Grenade : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("Grenade.Update");
         if (Time.time >= ExplodeAt) Explode();
     }
 

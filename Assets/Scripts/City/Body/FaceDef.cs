@@ -120,9 +120,6 @@ public class FaceDef
     public float faceForward = 0.25f;
 
     [Header("Skull (Face Fix Part 2), face units: x half widths, y half heights (from the eye line), z half depths")]
-    [Tooltip("The cranium (braincase): an egg, big end up and back.")]
-    public Vector3 craniumCentre = new Vector3(0f, 0.17f, -0.08f), craniumRadii = new Vector3(1.08f, 0.83f, 0.98f);
-    public float craniumBottom = 0.8f, craniumTop = 1.04f;
     [Tooltip("The lower jaw: the menton (chin bottom; y from the chin line), the jaw angles (gonion, the right one) and the chin's half width.")]
     public Vector3 menton = new Vector3(0f, 0f, 0.7f), gonion = new Vector3(0.74f, -0.72f, -0.08f), femaleGonion = new Vector3(0.66f, -0.7f, -0.08f);
     public float chinHalfWidth = 0.32f, femaleChinHalfWidth = 0.16f;

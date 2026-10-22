@@ -72,13 +72,6 @@ public class PoliceDriver : MonoBehaviour
     bool contacted;
     Vector3 ramDir;
 
-    float sightTime, nextBurst, nextShot;
-    int shotsLeft;
-    LineRenderer tracer;
-    float tracerUntil;
-    Transform spark;
-    float sparkUntil;
-
     FlyingVehicle.DriveModel Model => new FlyingVehicle.DriveModel
     {
         accel = policeAccel, topSpeed = policeTopSpeed, brake = policeBrake,
@@ -93,6 +86,7 @@ public class PoliceDriver : MonoBehaviour
     // (force level down, target changed, sent home) must not leave its beam hanging in the air.
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("PoliceDriver.LateUpdate");
         if (laser != null && laser.enabled && laserFrame < Time.frameCount) StopLaser();
     }
     int laserFrame = -1;
@@ -108,7 +102,6 @@ public class PoliceDriver : MonoBehaviour
     {
         IsPursuing = false;
         AtSlot = false;
-        sightTime = 0f;
         Car.ReportContacts = false;
         Car.ClearAutopilot(); // the lane AI flies it back to its lane
     }
@@ -350,58 +343,8 @@ public class PoliceDriver : MonoBehaviour
 
     public void StopLaser() { laserCycleStart = -1f; HideLaser(); }
 
-    void Update()
-    {
-        if (tracer != null && tracer.enabled && Time.time > tracerUntil) tracer.enabled = false;
-        if (spark != null && spark.gameObject.activeSelf && Time.time > sparkUntil) spark.gameObject.SetActive(false);
-    }
-
-    // ---------- placeholder effects ----------
-
-    void ShowTracer(Vector3 a, Vector3 b)
-    {
-        PedestrianSystem.ReportDanger(a); // gunfire: people near the shooter flee
-        if (tracerMaterial == null) return;
-        if (tracer == null)
-        {
-            var go = new GameObject("Tracer");
-            tracer = go.AddComponent<LineRenderer>();
-            tracer.sharedMaterial = tracerMaterial;
-            tracer.positionCount = 2;
-            tracer.startWidth = tracer.endWidth = 0.08f;
-            tracer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            tracer.receiveShadows = false;
-        }
-        tracer.SetPosition(0, a);
-        tracer.SetPosition(1, b);
-        tracer.enabled = true;
-        tracerUntil = Time.time + 0.06f;
-    }
-
-    void ShowSpark(Vector3 p)
-    {
-        if (sparkMaterial == null) return;
-        if (spark == null)
-        {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            go.name = "Spark";
-            Destroy(go.GetComponent<Collider>());
-            go.transform.localScale = Vector3.one * 0.4f;
-            var rend = go.GetComponent<Renderer>();
-            rend.sharedMaterial = sparkMaterial;
-            rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            spark = go.transform;
-        }
-        spark.position = p;
-        spark.rotation = Random.rotation;
-        spark.gameObject.SetActive(true);
-        sparkUntil = Time.time + 0.1f;
-    }
-
     void OnDestroy()
     {
-        if (tracer != null) Destroy(tracer.gameObject);
-        if (spark != null) Destroy(spark.gameObject);
         if (laser != null) Destroy(laser.gameObject);
     }
 }

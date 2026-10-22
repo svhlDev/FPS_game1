@@ -31,6 +31,7 @@ public class FaceAnimator : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("FaceAnimator.LateUpdate");
         var cam = Camera.main;
         if (cam != null && (cam.transform.position - transform.position).sqrMagnitude > activeDistance * activeDistance && MouthOverride < 0f && BlinkOverride < 0f) return;
         float t = Time.time, dt = Time.deltaTime;

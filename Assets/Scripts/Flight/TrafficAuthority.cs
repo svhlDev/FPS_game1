@@ -17,6 +17,7 @@ public class TrafficAuthority : MonoBehaviour
     const float DefaultSpacing = 5f, DefaultHover = 0.5f;
     const int DefaultMaxLayer = 60;
     public int credits = 5000;
+    string creditsText; int shownCredits;
 
     string message; float messageUntil;
 
@@ -62,8 +63,10 @@ public class TrafficAuthority : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("TrafficAuthority.OnGUI");
         float x = Screen.width - 320;
-        GUI.Label(new Rect(x, 20, 300, 25), $"Credits: {credits}");
+        if (creditsText == null || shownCredits != credits) { shownCredits = credits; creditsText = $"Credits: {credits}"; }
+        GUI.Label(new Rect(x, 20, 300, 25), creditsText);
         if (Time.time < messageUntil)
             GUI.Label(new Rect(Screen.width / 2f - 200, 60, 400, 25), message);
     }

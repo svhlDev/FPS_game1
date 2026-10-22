@@ -145,6 +145,7 @@ public class CarTrunk : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("CarTrunk.Update");
         OpenAmount = Mathf.MoveTowards(OpenAmount, IsOpen ? 1f : 0f, Time.deltaTime / SlideTime);
         var p = Hatch.localPosition;
         Hatch.localPosition = new Vector3(p.x, Mathf.Lerp(closedY, openY, OpenAmount), p.z);

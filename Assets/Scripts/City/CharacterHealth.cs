@@ -30,7 +30,7 @@ public class CharacterHealth : MonoBehaviour
 {
     public const float OfficerHealth = 100f, CivilianHealth = 60f, PlayerHealth = 100f;
     public const float LaserImpulse = 3f;
-    public const float FireDamagePerSecond = 12f;
+    public const float FireDamagePerSecond = 12f;   // while burning (applied by Flammable; the player burns on FirstPersonController)
 
     public float maxHealth = CivilianHealth;
     public float Health { get; private set; }
@@ -50,7 +50,6 @@ public class CharacterHealth : MonoBehaviour
     public static IReadOnlyList<CharacterHealth> All => all;
 
     FirstPersonController fpc;
-    Flammable flammable;
     internal CharacterController cc;
 
     public static CharacterHealth Add(GameObject go, CharacterFigure.Role role)
@@ -77,7 +76,6 @@ public class CharacterHealth : MonoBehaviour
     void Awake()
     {
         fpc = GetComponent<FirstPersonController>();
-        flammable = GetComponent<Flammable>();
         cc = GetComponent<CharacterController>();
         if (Health <= 0f && !Dead) Health = maxHealth;
     }
@@ -117,15 +115,6 @@ public class CharacterHealth : MonoBehaviour
         if (handled) return;
         if (fig != null && fig.Hips != null) Ragdoll.FromFigure(fig, Velocity, d);
         Destroy(gameObject);
-    }
-
-    // Burning (Flammable): 12 damage a second (the player burns on FirstPersonController).
-    void Update()
-    {
-        if (IsPlayer || Dead) return;
-        if (flammable == null) flammable = GetComponent<Flammable>();
-        if (flammable != null && flammable.Burning)
-            Damage(new DamageInfo { amount = FireDamagePerSecond * Time.deltaTime, kind = DamageKind.Fire, point = transform.position + Vector3.up });
     }
 
     // ---------- shared hit rules ----------
@@ -236,6 +225,7 @@ public class CombatSystem : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("CharacterHealth.Update");
         float dt = Time.deltaTime;
         if (dt <= 0f) return;
         var list = CharacterHealth.All;

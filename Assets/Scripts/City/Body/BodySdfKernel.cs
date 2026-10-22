@@ -114,6 +114,11 @@ public struct BodySdfKernel : IDisposable
     // The lower jaw (one, or none): an array so the kernel struct stays small (it's copied into every garment
     // kernel and passed by value to jobs).
     [ReadOnly] public NativeArray<Mandible> jaw;
+    // The face parts' order (BodySDF): the bone / muscle / piece parts (and planes) come first, markers, then the
+    // skin features. layerEnd: one past the last layer part; featureStart: the first skin feature. 0 / 0: walk
+    // them all (an unordered list).
+    public int layerEnd, featureStart;
+    int LayerEnd => layerEnd > 0 ? layerEnd : face.Length;
     [ReadOnly] public NativeArray<Digit> digits;
     [ReadOnly] public NativeArray<HandCut> cuts;
     public float fingerBlend;
@@ -311,7 +316,7 @@ public struct BodySdfKernel : IDisposable
         // The lower jaw: a real bone shape, smooth-unioned with the egg before the planes (the gonion sets the jaw
         // angle's height and width).
         if (jaw.IsCreated && jaw.Length > 0 && jaw[0].on != 0) A = SMin(A, MandibleDist(jaw[0], p), jaw[0].blend);
-        for (int j = 0; j < face.Length; j++)
+        for (int j = 0, je = LayerEnd; j < je; j++)
         {
             var f = face[j];
             if (f.op != (int)FacePartOp.Plane) continue;
@@ -344,11 +349,15 @@ public struct BodySdfKernel : IDisposable
     // pressed landmarks and the overhanging pieces (nose, brow bar, lips, ears) - one small blend; muscle: the
     // bone offset by the muscle map, plus the pressed muscles; skin: the muscle offset by the fat map, base and
     // pieces joined once with a radius that grows with the fat (lean faces crisp, fat ones round).
-    public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin)
+    public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin) => HeadLayers(p, fatThick, out bone, out muscle, out skin, out _);
+
+    // (noseDist: the nose pieces' distance, found on the way - the caller re-unions the nose after the fat
+    // without walking the face parts again.)
+    public void HeadLayers(Vector3 p, float fatThick, out float bone, out float muscle, out float skin, out float noseDist)
     {
         float A = HeadBase(p);
         float P = float.MaxValue, M = float.MaxValue, PN = float.MaxValue, PF = float.MaxValue;
-        for (int j = 0; j < face.Length; j++)
+        for (int j = 0, je = LayerEnd; j < je; j++)
         {
             var f = face[j];
             int op = f.op;
@@ -375,20 +384,13 @@ public struct BodySdfKernel : IDisposable
         f0 *= 1f - nearNose;
         skin = SMin(A - m - f0, Mathf.Min(PF - m, M) - f0, headBlend + Mathf.Min(Mathf.Lerp(faceFatBlendMax, 0.004f, nearNose), f0 * 1.2f));
         if (PN < float.MaxValue) skin = SMin(skin, PN - m, headBlend);
+        noseDist = PN;
         // Ears: cartilage under a trace of fat (they never swell with the face).
         if (ears < float.MaxValue)
         {
             muscle = SMin(muscle, ears, headBlend);
             skin = SMin(skin, ears - f0 * 0.08f, headBlend + 0.001f);
         }
-    }
-
-    // The nose's pieces (no fat on them): their distance.
-    float NosePieces(Vector3 p)
-    {
-        float d = float.MaxValue;
-        for (int j = 0; j < face.Length; j++) if (face[j].noFat != 0) d = Mathf.Min(d, FaceDist(face[j], p));
-        return d;
     }
 
     public static float FaceDist(FacePrim f, Vector3 p)
@@ -574,9 +576,11 @@ public struct BodySdfKernel : IDisposable
         }
         // Fat thickness blended over the nearby bones, so it never steps where the nearest bone changes.
         float wSum = 0f, fSum = 0f;
+        float farCut = fatBlendFalloff * 4.6051702f;   // (w < 0.01 exactly where d - best > falloff x ln 100: skip those without the Exp)
         for (int i = 0; i < n; i++)
         {
             if (i == headIndex) continue;   // (the head's fat is its own layer: HeadLayers)
+            if (d[i] - best > farCut) continue;
             float w = Mathf.Exp(-(d[i] - best) / fatBlendFalloff);
             if (w < 0.01f) continue;
             wSum += w; fSum += w * FatAt(p, i);
@@ -624,7 +628,7 @@ public struct BodySdfKernel : IDisposable
             soft = SMin(soft, v, kFat);
         }
         bool nearHead = headIndex >= 0 && (p - skull.o).sqrMagnitude < faceReach * faceReach;
-        float headFat = 0f;
+        float headFat = 0f, noseD = float.MaxValue;
         float skin = Mathf.Min(muscle, soft - fat);
         for (int j = 0; j < breasts.Length; j++) skin = SMin(skin, EllipsoidDist(breasts[j].ToLocal(p), breasts[j].r), breastBlend);
         // The head (Anatomy Rework Part 1): its own layers, joined to the body at the neck.
@@ -632,16 +636,16 @@ public struct BodySdfKernel : IDisposable
         {
             float baseFat = FatAt(p, headIndex);
             headFat = baseFat * FaceFatMask(p, baseFat);
-            HeadLayers(p, headFat, out float hb, out float hm, out float hs);
+            HeadLayers(p, headFat, out float hb, out float hm, out float hs, out noseD);
             if (hs < skin) fat = headFat * fatScale;
             core = Mathf.Min(core, hb);
             muscle = SMin(muscle, hm, neckBlend);
             skin = SMin(skin, hs, neckBlend);
         }
         // The nose again after the fat (its pieces, crisp): a fat face never swallows it.
-        if (nearHead) skin = SMin(skin, NosePieces(p), headBlend);
+        if (nearHead) skin = SMin(skin, noseD, headBlend);
         if (nearHead)
-            for (int j = 0; j < face.Length; j++)
+            for (int j = featureStart; j < face.Length; j++)
             {
                 // Skin features after the fat: grooves cut in, ridges (Union: the philtrum's ridges, the lip
                 // border) added on (Face Polish Part 2).
@@ -790,9 +794,9 @@ public struct BodySdfKernel : IDisposable
         if (headIndex < 0) return float.MaxValue;
         float baseFat = FatAt(p, headIndex);
         float headFat = baseFat * FaceFatMask(p, baseFat);
-        HeadLayers(p, headFat, out _, out _, out float skin);
-        skin = SMin(skin, NosePieces(p), headBlend);
-        for (int j = 0; j < face.Length; j++)
+        HeadLayers(p, headFat, out _, out _, out float skin, out float noseD);
+        skin = SMin(skin, noseD, headBlend);
+        for (int j = featureStart; j < face.Length; j++)
         {
             if (face[j].snapped != 0 && fatScale < 0.5f) continue;
             if (face[j].op == (int)FacePartOp.Subtract) skin = SMax(skin, -FaceDist(face[j], p), face[j].blend);

@@ -108,6 +108,7 @@ public class TrafficSignal : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("TrafficSignal.Update");
         int ns = (int)State(Axis.NorthSouth), ew = (int)State(Axis.EastWest);
         if (ns != shownNs) { Show(northSouthLamps, ns); shownNs = ns; }
         if (ew != shownEw) { Show(eastWestLamps, ew); shownEw = ew; }

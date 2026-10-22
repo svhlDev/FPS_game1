@@ -263,7 +263,6 @@ public class BodyBuild
         public byte mode; public int garment = -1; public float cell; public int target;
         public Vector3 min; public int nx, ny, nz, mx, my, mz;
         public NativeArray<float> coarse, fine; public NativeArray<byte> evaluated;
-        public float[] grid;
         public List<Vector3> v; public List<int> t;
         public void Dispose() { if (coarse.IsCreated) coarse.Dispose(); if (fine.IsCreated) fine.Dispose(); if (evaluated.IsCreated) evaluated.Dispose(); }
     }
@@ -477,11 +476,16 @@ public class BodyBuild
             ForPieces(k =>
             {
                 var p = pieces[k];
-                p.grid = p.fine.ToArray();
                 var v = new List<Vector3>(); var t = new List<int>();
-                SurfaceNets.Extract(p.grid, p.nx, p.ny, p.nz, p.min, p.cell, v, t);
+                var grid = SurfaceNets.RentGrid(p.fine.Length);
+                try
+                {
+                    NativeArray<float>.Copy(p.fine, grid, p.fine.Length);
+                    SurfaceNets.Extract(grid, p.nx, p.ny, p.nz, p.min, p.cell, v, t);
+                }
+                finally { SurfaceNets.ReturnGrid(grid); }
                 BodyMesher.Smooth(v, t, iters, strength);
-                p.v = v; p.t = t; p.grid = null;
+                p.v = v; p.t = t;
             });
             Concat();
         });
@@ -492,8 +496,11 @@ public class BodyBuild
     // pieces' in another (vertGarment: each vertex's garment).
     void Concat()
     {
-        verts = new List<Vector3>(); tris = new List<int>(); cverts = new List<Vector3>(); ctris = new List<int>();
-        var vp = new List<byte>(); var vg = new List<byte>();
+        // (Sized up front: these hold every extracted vertex, so growing them would copy megabytes.)
+        int nb = 0, nbt = 0, nc = 0, nct = 0;
+        foreach (var p in pieces) { if (p.garment >= 0) { nc += p.v.Count; nct += p.t.Count; } else { nb += p.v.Count; nbt += p.t.Count; } }
+        verts = new List<Vector3>(nb); tris = new List<int>(nbt); cverts = new List<Vector3>(nc); ctris = new List<int>(nct);
+        vertPiece = new byte[nb]; vertGarment = new byte[nc];
         foreach (var p in pieces)
         {
             bool cloth = p.garment >= 0;
@@ -501,9 +508,9 @@ public class BodyBuild
             int o = V.Count;
             V.AddRange(p.v);
             foreach (int i in p.t) T.Add(i + o);
-            for (int i = 0; i < p.v.Count; i++) { if (cloth) vg.Add((byte)p.garment); else vp.Add(p.mode); }
+            if (cloth) for (int i = 0; i < p.v.Count; i++) vertGarment[o + i] = (byte)p.garment;
+            else for (int i = 0; i < p.v.Count; i++) vertPiece[o + i] = p.mode;
         }
-        vertPiece = vp.ToArray(); vertGarment = vg.ToArray();
     }
 
     JobHandle ScheduleBodyProject(bool weights)
@@ -679,7 +686,8 @@ public class BodyBuild
         int ng = fields.Count;
         faceMarks = BodySurfaceBake.FaceMarks.From(sdf, wigStyle);
         // (Face Polish Part 4: the brows are hair cards now - FaceHair - not the wig's strand ridge.)
-        var browLines = faceMarks.browLines; bool female = sheet.sex == Sex.Female; var beard = faceMarks.beardStyle;
+        bool female = sheet.sex == Sex.Female; var beard = faceMarks.beardStyle;
+        var marks = faceMarks; Vector3 eyeL = sdf.EyeL, eyeR = sdf.EyeR;
         skullCopy = sdf.Kernel.skull; jawPivot = sdf.JawPivot; mouthCentre = sdf.MouthCentre; mouthHalf = sdf.Canon.mouthHalfWidth;
         var kernelCopy = sdf.Kernel;
         splitKernel = kernelCopy;
@@ -691,6 +699,9 @@ public class BodyBuild
         var canon = sdf.Canon; int headBone = plan.Index("Head"); var hs = hairStyle; var hch = hairChains;
         task = Task.Run(() =>
         {
+            // The brows' lines (field marches: kept off the main thread); the head's bake reads them.
+            if (marks.eyesForBrows) marks.browLines = FaceHair.BrowLines(kernelCopy, canon, eyeL, eyeR, marks.seed, female);
+            var browLines = marks.browLines;
             if (weld) { T = WeldNeck(V, N, T, VP, headMode, kernelCopy, cutO, cutAxis, cutR, bodyCell, headCell, out var rep); NeckReport = rep; }
             SplitParts(V, N, R, L, W, Cov, T, CV, CN, CR, CL, CW, CF, CG, CT, ng, pelvisBone, weld ? VP : null, headMode);
             if (FillLevels) { fillDeltas = FillLevelDeltas(kernelCopy, headParts.v, headParts.n, headParts.subs[0], bodyParts.v, out string frep); NeckReport += "; " + frep; }
@@ -728,7 +739,6 @@ public class BodyBuild
                 if (CG[i] == cs.garment && cs.Weight(CV[i], CW[i], pelvisBone) is BoneWeight w) CW[i] = w;
         // One vertex list: body vertices then cloth vertices.
         int nb = V.Length;
-        Vector3 Pv(int i) => i < nb ? V[i] : CV[i - nb];
         BoneKind K(int v) => (BoneKind)(int)R[v].x;
         var body = new Parts { subs = new List<int>[1 + ng] }; var head = new Parts { subs = new List<int>[1] };
         for (int i = 0; i < body.subs.Length; i++) body.subs[i] = new List<int>();

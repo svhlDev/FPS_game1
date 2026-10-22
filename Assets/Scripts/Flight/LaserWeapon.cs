@@ -116,6 +116,7 @@ public class LaserBeams : MonoBehaviour
     // Fade: the beam thins away over its life.
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("LaserWeapon.LateUpdate");
         for (int i = live.Count - 1; i >= 0; i--)
         {
             var b = live[i];

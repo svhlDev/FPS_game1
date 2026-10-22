@@ -140,12 +140,14 @@ public class VehicleHealth : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("VehicleHealth.Update");
         float dt = Time.deltaTime;
         if (Current == State.Critical) Damage(maxHealth * criticalDrain * dt);
         else if (Burning && Current == State.Ok) Damage(fireDamagePerSecond * dt);
         bool flames = Burning && !Smouldering;
         Vector3 top = transform.position + Vector3.up * (car != null ? car.BodyHalfExtents.y : 0.75f);
-        float near = Camera.main != null ? (Camera.main.transform.position - top).sqrMagnitude : 0f;
+        var cam = Camera.main;
+        float near = cam != null ? (cam.transform.position - top).sqrMagnitude : 0f;
         if (near > 500f * 500f) return;
 
         // Smoke below half health, thicker as it drops (and from smouldering wrecks).
@@ -158,8 +160,9 @@ public class VehicleHealth : MonoBehaviour
         if (flames)
         {
             float s = car != null ? car.BodyHalfExtents.x : 1.5f;
+            Quaternion rot = transform.rotation;
             for (int i = 0; i < 4; i++)
-                Effects.Flame(top + transform.rotation * new Vector3((i - 1.5f) * s * 0.5f, 0f, (i % 2 == 0 ? 1 : -1) * s * 0.6f), Random.Range(1.0f, 1.8f));
+                Effects.Flame(top + rot * new Vector3((i - 1.5f) * s * 0.5f, 0f, (i % 2 == 0 ? 1 : -1) * s * 0.6f), Random.Range(1.0f, 1.8f));
             // Burning and moving: drip fire.
             if (car != null && car.Velocity.sqrMagnitude > 4f && Time.time >= nextDrip)
             {

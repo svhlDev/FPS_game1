@@ -33,9 +33,25 @@ public class PerfProbe : MonoBehaviour
         "FlyingVehicle.Update",
         "FlyingVehicle.AITargetSpeed",
         "FlyingVehicle.MoveAndCollide",
+        "FlyingVehicle.Avoidance",
+        "FlyingVehicle.LaneProject",
+        "FlyingVehicle.LineOffset",
+        "FlyingVehicle.SetPose",
+        "FlyingVehicle.InputAim",
         "FPC.SyncTransforms",
         "TrafficSystem.Build",
         "TrafficSystem.Draw",
+        "PostLateUpdate.UpdateAllSkinnedMeshes",
+        "PreLateUpdate.DirectorUpdateAnimationBegin",
+        "GC.Collect",
+    };
+    // Per-script callbacks (development players time each: "<Class>.<Callback>() [Invoke]").
+    static readonly string[] ScriptsTimed =
+    {
+        "PedestrianSystem", "FigureAnimator", "FaceAnimator", "EyeLook", "HairLOD", "ClothDangle", "CharacterHealth", "Ragdoll", "NpcBody",
+        "BodyPool", "Effects", "FireSystem", "Flammable", "BurnMarks", "TrafficSystem", "FlyingVehicle", "TrafficSignal", "LanePath",
+        "FirstPersonController", "PlayerRide", "PlayerFists", "PlayerGrenades", "PlayerWeapon", "OfficerAgent", "PoliceDriver", "PoliceDispatch",
+        "VehicleHealth", "VehicleHUD", "DashboardGauge", "StopCone", "CarTrunk", "CityLights", "CityProbes", "TimeOfDay", "AircraftLight",
     };
     readonly List<ProfilerRecorder> recorders = new List<ProfilerRecorder>();
     readonly List<string> recorderNames = new List<string>();
@@ -48,7 +64,7 @@ public class PerfProbe : MonoBehaviour
     int recordedFrames;
     float clock;
     int warmupFrames;
-    bool measuring;
+    bool measuring, waitPool;
     Transform player;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -72,6 +88,7 @@ public class PerfProbe : MonoBehaviour
         var probe = new GameObject("PerfProbe").AddComponent<PerfProbe>();
         probe.label = label;
         if (warmupArg >= 0f) probe.warmup = warmupArg; // -perfwarmup N: e.g. let the body pool fill first
+        probe.waitPool = System.Array.IndexOf(args, "-perfwaitpool") >= 0;
     }
 
     void Start()
@@ -80,7 +97,10 @@ public class PerfProbe : MonoBehaviour
         Application.targetFrameRate = -1;
         var fpc = FindAnyObjectByType<FirstPersonController>();
         if (fpc != null) player = fpc.transform;
-        foreach (var name in Markers)
+        var names = new List<string>(Markers);
+        foreach (var sname in ScriptsTimed)
+            foreach (var cb in new[] { "Update", "LateUpdate", "FixedUpdate" }) names.Add($"{sname}.{cb}() [Invoke]");
+        foreach (var name in names)
         {
             foreach (var cat in new[] { ProfilerCategory.Scripts, ProfilerCategory.Internal, ProfilerCategory.Render, ProfilerCategory.Physics })
             {
@@ -92,6 +112,12 @@ public class PerfProbe : MonoBehaviour
         foreach (var name in Counters)
         {
             var r = ProfilerRecorder.StartNew(ProfilerCategory.Render, name);
+            if (r.Valid) { counters.Add(r); counterNames.Add(name); counterSums.Add(0); } else r.Dispose();
+        }
+        // Garbage: bytes allocated per frame (what drives the collector's pauses), available in release players.
+        foreach (var name in new[] { "GC Allocated In Frame", "GC Allocation In Frame Count" })
+        {
+            var r = ProfilerRecorder.StartNew(ProfilerCategory.Memory, name);
             if (r.Valid) { counters.Add(r); counterNames.Add(name); counterSums.Add(0); } else r.Dispose();
         }
     }
@@ -113,8 +139,12 @@ public class PerfProbe : MonoBehaviour
             clock += Mathf.Min(dt, 0.1f);
             warmupFrames++;
             if (clock < warmup || warmupFrames < 60) return;
+            // -perfwaitpool: steady state only - the body pool's worker builds allocate on their own threads,
+            // which the heap-based AllocProbe would charge to whatever main-thread scope is open.
+            if (waitPool && BodyPool.Instance != null && BodyPool.Instance.Filling) return;
             measuring = true;
             clock = warmup;
+            AllocProbe.On = true; AllocProbe.Reset();
         }
         clock += dt;
         if (player != null) player.Rotate(0f, 360f / duration * dt, 0f);
@@ -175,9 +205,13 @@ public class PerfProbe : MonoBehaviour
         sb.AppendLine($"traffic cars: {FlyingVehicle.Active.Count}");
         sb.AppendLine($"development build: {Debug.isDebugBuild}");
         for (int i = 0; i < recorders.Count; i++)
-            sb.AppendLine($"  {recorderNames[i]}: {recorderSums[i] / Mathf.Max(1, recordedFrames):0.00} ms/frame");
+            if (recorderSums[i] > 0.0) sb.AppendLine($"  {recorderNames[i]}: {recorderSums[i] / Mathf.Max(1, recordedFrames):0.00} ms/frame");
         for (int i = 0; i < counters.Count; i++)
             sb.AppendLine($"  {counterNames[i]}: {counterSums[i] / Mathf.Max(1, recordedFrames):0} per frame");
+        // Garbage per system (main thread, bytes per frame), the biggest first.
+        foreach (var (name, b, c) in AllocProbe.Report(recordedFrames))
+            if (b >= 1.0) sb.AppendLine($"  alloc {name}: {b:0} B/frame ({c:0.0} calls)");
+        AllocProbe.On = false;
         sb.AppendLine($"screen: {Screen.width}x{Screen.height}");
         sb.AppendLine($"gpu: {SystemInfo.graphicsDeviceName}");
         sb.AppendLine($"cpu: {SystemInfo.processorType}");

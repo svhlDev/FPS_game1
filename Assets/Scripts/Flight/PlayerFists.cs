@@ -80,6 +80,7 @@ public class PlayerFists : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("PlayerFists.Update");
         var anim = fpc != null ? fpc.Animator : null;
         if (anim == null) return;
         Subscribe();

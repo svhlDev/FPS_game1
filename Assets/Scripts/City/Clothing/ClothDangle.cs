@@ -106,6 +106,7 @@ public class ClothDangle : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("ClothDangle.LateUpdate");
         if (pelvis == null || sets.Count == 0) return;
         if (visCheck == null && fig != null && fig.Renderers.Count > 0) visCheck = fig.Renderers[0];
         float dt = Mathf.Min(Time.deltaTime, 1f / 30f);
@@ -150,13 +151,13 @@ public class ClothDangle : MonoBehaviour
             // The ring follows the pelvis.
             int r0 = p * L;
             s.x[r0] = Rest(s, r0); s.xp[r0] = s.x[r0];
+            // Air: wind minus our motion, with a little per-panel flutter (the same down the panel: once per panel).
+            Vector3 air = Wind - charVel + new Vector3(Mathf.Sin(t * 7.3f + p * 1.7f), Mathf.Sin(t * 5.1f + p * 2.3f) * 0.5f, Mathf.Cos(t * 6.1f + p)) * 0.6f;
             for (int l = 1; l < L; l++)
             {
                 int i = r0 + l;
                 Vector3 v = (s.x[i] - s.xp[i]) * keep;
                 s.xp[i] = s.x[i];
-                // Air: wind minus our motion, with a little per-panel flutter.
-                Vector3 air = Wind - charVel + new Vector3(Mathf.Sin(t * 7.3f + p * 1.7f), Mathf.Sin(t * 5.1f + p * 2.3f) * 0.5f, Mathf.Cos(t * 6.1f + p)) * 0.6f;
                 Vector3 acc = g + d.drag * (air - v / dt);
                 s.x[i] += v + acc * dt * dt;
                 float k = Mathf.Lerp(d.stiffnessRoot, d.stiffnessTip, (l - 1f) / Mathf.Max(1, L - 2));

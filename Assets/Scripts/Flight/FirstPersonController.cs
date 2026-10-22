@@ -276,6 +276,7 @@ public class FirstPersonController : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("FirstPersonController.Update");
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (kb == null || mouse == null) return;
@@ -411,6 +412,7 @@ public class FirstPersonController : MonoBehaviour
     // Collision pulls it in, but only against static world: moving cars and the player are ignored.
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("FirstPersonController.LateUpdate");
         zoom.HandleScroll(Mouse.current);
         // Landing dip: a damped spring back to 0 (one dip, no shaking).
         float ldt = Time.deltaTime;
@@ -1044,6 +1046,7 @@ public class FirstPersonController : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("FirstPersonController.OnGUI");
         DrawBurnVignette();
         float cx = Screen.width / 2f, cy = Screen.height / 2f;
         if (Time.time < flashUntil) GUI.Label(new Rect(cx - 100, cy - 60, 400, 25), flash);

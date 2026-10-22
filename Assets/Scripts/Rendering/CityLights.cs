@@ -67,6 +67,7 @@ public class CityLights : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("CityLights.LateUpdate");
         if (Time.unscaledTime < next) return;
         next = Time.unscaledTime + interval;
         Refresh();

@@ -105,6 +105,7 @@ public class StopCone : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("StopCone.LateUpdate");
         if (Target == null) { Destroy(gameObject); return; }
         if (Time.time >= nextProbe) { nextProbe = Time.time + 0.5f; Probe(); }
         Place();

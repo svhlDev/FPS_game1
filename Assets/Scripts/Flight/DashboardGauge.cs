@@ -56,6 +56,7 @@ public class DashboardGauge : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("DashboardGauge.LateUpdate");
         if (segs == null) return;
         bool show = FlyingVehicle.Driven == car && car.CameraZoom < 0.05f && car.Health != null;
         for (int i = 0; i < Segments; i++) segs[i].enabled = show;

@@ -121,6 +121,7 @@ public class PlayerRide : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("PlayerRide.Update");
         if (car == null) return;
         if (!car.isActiveAndEnabled) { car = null; return; }
         var kb = Keyboard.current;
@@ -230,6 +231,7 @@ public class PlayerRide : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("PlayerRide.LateUpdate");
         if (car == null || cam == null) return;
         Vector3 seat = CurrentSeat == Seat.Back ? BackSeatOf(car) : PassengerSeatOf(car);
         Vector3 pos = car.transform.position + car.PlatformRotation * seat;
@@ -243,6 +245,7 @@ public class PlayerRide : MonoBehaviour
 
     void OnGUI()
     {
+        using var _alloc = AllocProbe.Begin("PlayerRide.OnGUI");
         if (car == null) return;
         float cx = Screen.width / 2f, y = Screen.height - 60;
         if (Time.time < flashUntil) GUI.Label(new Rect(cx - 150, Screen.height * 0.35f, 400, 25), flash);

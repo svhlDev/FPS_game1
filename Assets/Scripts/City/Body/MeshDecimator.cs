@@ -49,12 +49,12 @@ public static class MeshDecimator
             }
 
         int alive = nf;
-        var tmp = new HashSet<int>();
+        var tmp = new HashSet<int>(); var tmp2 = new HashSet<int>();   // (scratch sets, reused for every collapse)
         while (alive > targetTris && heap.Count > 0)
         {
             var e = Pop(heap);
             if (vDead[e.u] || vDead[e.v] || ver[e.u] != e.vu || ver[e.v] != e.vv) continue;
-            if (!CanCollapse(P, F, vf, faceDead, e.u, e.v, e.pos, tmp)) continue;
+            if (!CanCollapse(P, F, vf, faceDead, e.u, e.v, e.pos, tmp, tmp2)) continue;
             // Collapse v into u at e.pos.
             int u = e.u, v = e.v;
             P[u] = e.pos;
@@ -73,7 +73,10 @@ public static class MeshDecimator
             }
             vDead[v] = true;
             vf[v].Clear();
-            vf[u].RemoveAll(f => faceDead[f]);
+            var fu = vf[u];   // (drop u's dead faces in place - no delegate per collapse)
+            int keep = 0;
+            for (int k = 0; k < fu.Count; k++) if (!faceDead[fu[k]]) fu[keep++] = fu[k];
+            fu.RemoveRange(keep, fu.Count - keep);
             ver[u]++;
             // New costs for every edge of u.
             tmp.Clear();
@@ -137,13 +140,13 @@ public static class MeshDecimator
         return new Entry { cost = c, u = u, v = v, vu = ver[u], vv = ver[v], pos = best };
     }
 
-    static bool CanCollapse(Vector3[] P, int[] F, List<int>[] vf, bool[] faceDead, int u, int v, Vector3 pos, HashSet<int> tmp)
+    static bool CanCollapse(Vector3[] P, int[] F, List<int>[] vf, bool[] faceDead, int u, int v, Vector3 pos, HashSet<int> tmp, HashSet<int> nv)
     {
         // Link condition: u and v share exactly the two neighbours across their two faces.
         tmp.Clear();
         foreach (int f in vf[u]) { if (faceDead[f]) continue; for (int k = 0; k < 3; k++) { int w = F[f * 3 + k]; if (w != u) tmp.Add(w); } }
         int shared = 0;
-        var nv = new HashSet<int>();
+        nv.Clear();
         foreach (int f in vf[v]) { if (faceDead[f]) continue; for (int k = 0; k < 3; k++) { int w = F[f * 3 + k]; if (w != v && nv.Add(w) && tmp.Contains(w)) shared++; } }
         if (shared != 2) return false;
         // No face may flip or collapse to a sliver.

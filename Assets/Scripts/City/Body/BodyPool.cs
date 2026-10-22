@@ -152,6 +152,7 @@ public class BodyPool : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("BodyPool.Update");
         if (!Enabled && requests.Count == 0 && inFlight.Count == 0) return;
         if (FillStarted < 0f) FillStarted = Time.realtimeSinceStartup;
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();

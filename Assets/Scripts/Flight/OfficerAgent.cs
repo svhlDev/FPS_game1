@@ -241,6 +241,7 @@ public class OfficerAgent : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("OfficerAgent.Update");
         float dt = Time.deltaTime;
         switch (State)
         {
@@ -496,6 +497,7 @@ public class OfficerAgent : MonoBehaviour
 
     void LateUpdate()
     {
+        using var _alloc = AllocProbe.Begin("OfficerAgent.LateUpdate");
         if (fig != null && fig.WristR != null && Time.deltaTime > 0f)
         {
             Vector3 w = fig.WristR.position;

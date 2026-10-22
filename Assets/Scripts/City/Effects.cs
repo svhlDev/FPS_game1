@@ -134,6 +134,7 @@ public class Effects : MonoBehaviour
 
     void Update()
     {
+        using var _alloc = AllocProbe.Begin("Effects.Update");
         float dt = Time.deltaTime;
         puffM.Clear(); debrisM.Clear(); flashM.Clear(); ringM.Clear(); stunM.Clear(); lethalM.Clear();
         for (int i = particles.Count - 1; i >= 0; i--)
