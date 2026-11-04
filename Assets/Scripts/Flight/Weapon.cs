@@ -14,9 +14,12 @@ using UnityEngine;
 //                 fired at your feet it launches you upward.
 //   Singularity : fires an orb that opens a short-lived micro black hole: pulls in cars, people and
 //                 bodies, then collapses in a blast.
-// The T-gun model: a slim gunmetal barrel bar sitting just above the hand, a matte black grip stem under
-// the barrel's centre raked back 12 degrees, two mode strips along the barrel sides and an emitter square
-// on the nose in the mode colour (blue stun, red lethal).
+// The T-gun model comes from Blender (Resources/Weapons/TGun, made in Tools/Blender/tgun_passes): two T
+// shapes that slide together. The Receiver is the grip with the lower bar on top; the Upper is the upper bar
+// with a stem that slots down into the grip. It rests collapsed, with chrome strips between the bars and a
+// glowing line in the grip's slits in the mode colour (blue stun, red lethal). On firing the Upper snaps up
+// along the stem (TGunAction), two energy beams light up ahead of the stem and the shot leaves from the
+// gap (Muzzle).
 public class Weapon : MonoBehaviour
 {
     public enum Mode { Stun, Lethal }
@@ -30,7 +33,7 @@ public class Weapon : MonoBehaviour
     [Header("Stun")]
     public float stunInterval = 0.6f;
     public float stunRange = 60f;
-    public float stunTime = 2f;
+    public float stunTime = 2f;         // only the arc caster's shock; stun lasers build up (StunMeter)
     public float carHiccup = 0.5f;
 
     [Header("Lethal")]
@@ -71,6 +74,8 @@ public class Weapon : MonoBehaviour
 
     readonly List<Renderer> modeParts = new List<Renderer>();
     readonly List<Renderer> glowParts = new List<Renderer>();
+    public IReadOnlyList<Renderer> ModeParts => modeParts;
+    public TGunAction Action { get; private set; }
     static Material gunmetal, stemBlack, sightMat, darkSteel, chrome;
     static readonly Dictionary<Kind, Material> accentMats = new Dictionary<Kind, Material>();
 
@@ -113,6 +118,9 @@ public class Weapon : MonoBehaviour
         var mat = LaserWeapon.ModeMat(m);
         foreach (var r in modeParts) if (r != null) r.sharedMaterial = mat;
     }
+
+    // A shot left the gun: the T-gun snaps open.
+    public void PlayFire() { if (Action != null) Action.Fire(); }
 
     // The glowing parts swell with a charge (Repulsor) without new materials: k = 1 is the built size.
     public IReadOnlyList<Renderer> GlowParts => glowParts;
@@ -182,32 +190,56 @@ public class Weapon : MonoBehaviour
 
     // ---------- T-gun ----------
 
+    // The Blender model, at rest. Origin = Grip (hand centre), barrel along +Z, the Upper slides along +Y.
+    public const string TGunResource = "Weapons/TGun/";
+
     public static Weapon BuildTGun(Transform parent, int layer, Mode mode = Mode.Stun)
     {
-        var w = NewRoot(parent, layer, Kind.TGun, "TGun");
-        var root = w.transform;
+        EnsureMats();
+        var model = Instantiate(Resources.Load<GameObject>(TGunResource + "TGun"), parent, false);
+        model.name = "TGun";
+        var root = model.transform;
+        var w = model.AddComponent<Weapon>();
+        w.kind = Kind.TGun;
+        w.grip = root.Find("Grip");
+        w.muzzle = root.Find("Muzzle");
 
-        // Barrel bar 0.032 x 0.036 x 0.20 (z -0.10 .. 0.10), its underside just inside the top of the
-        // 0.08 hand (hand centre = origin). The last 0.015 is a lower nose with 45-degree chamfers.
-        const float by = 0.045f, hw = 0.032f, hh = 0.036f;
-        Box(root, new Vector3(0f, by, -0.0075f), new Vector3(hw, hh, 0.185f), Quaternion.identity, gunmetal, layer);
-        Box(root, new Vector3(0f, by, 0.0925f), new Vector3(hw, 0.024f, 0.015f), Quaternion.identity, gunmetal, layer);
-        foreach (float sy in new[] { 1f, -1f })
-            Box(root, new Vector3(0f, by + sy * 0.012f, 0.085f), new Vector3(hw, 0.0085f, 0.0085f), Quaternion.Euler(45f, 0f, 0f), gunmetal, layer);
+        var baked = Resources.Load<Material>(TGunResource + "TGun_Baked");
+        var receiver = root.Find("Receiver");
+        var upper = root.Find("Upper");
+        receiver.GetComponent<Renderer>().sharedMaterial = baked;
+        upper.GetComponent<Renderer>().sharedMaterial = baked;
 
-        // Grip stem 0.026 x 0.085 x 0.036, raked back 12 degrees; the hand covers its upper half.
-        Box(root, new Vector3(0f, -0.021f, -0.004f), new Vector3(0.026f, 0.085f, 0.036f), Quaternion.Euler(12f, 0f, 0f), stemBlack, layer);
+        // The lights cast no shadows; the handle line is always on in the mode colour.
+        Renderer Light(Transform part, string name)
+        {
+            var r = part.Find(name).GetComponent<Renderer>();
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            return r;
+        }
+        w.modeParts.Add(Light(upper, "Upper_HandleGlow"));
+        Light(upper, "Upper_SightDot").sharedMaterial = sightMat;
 
-        // Emissive sight: a small green dot on top at the back of the barrel (Phase 5).
-        Box(root, new Vector3(0f, by + hh * 0.5f + 0.003f, -0.085f), new Vector3(0.006f, 0.006f, 0.01f), Quaternion.identity, sightMat, layer)
-            .shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        // Solid chrome strips along the lower bar's edges; the wires (black, orange, steel clips) on its left
+        // side; steel emitters on both bars for the energy beams.
+        var steel = MaterialLibrary.Get(SurfaceType.BrushedMetal, new Color(0.66f, 0.67f, 0.69f), MaterialLibrary.Variant.Smooth);
+        receiver.Find("Receiver_Seam").GetComponent<Renderer>().sharedMaterial = MaterialLibrary.Get(SurfaceType.Chrome, new Color(0.9f, 0.92f, 0.95f), MaterialLibrary.Variant.Smooth);
+        receiver.Find("Receiver_Wires").GetComponent<Renderer>().sharedMaterials = new[]
+        {
+            MaterialLibrary.Get(SurfaceType.Rubber, new Color(0.03f, 0.03f, 0.035f), MaterialLibrary.Variant.Smooth),
+            MaterialLibrary.Get(SurfaceType.Rubber, new Color(0.77f, 0.44f, 0.15f), MaterialLibrary.Variant.Smooth),
+            steel,
+        };
+        receiver.Find("Receiver_BeamEmitters").GetComponent<Renderer>().sharedMaterial = steel;
+        upper.Find("Upper_BeamEmitters").GetComponent<Renderer>().sharedMaterial = steel;
 
-        // Mode strips along the barrel sides and the emitter square on the nose.
-        foreach (float sx in new[] { 1f, -1f })
-            w.modeParts.Add(Box(root, new Vector3(sx * (hw * 0.5f + 0.002f), by, -0.01f), new Vector3(0.004f, 0.006f, 0.15f), Quaternion.identity, null, layer));
-        w.modeParts.Add(Box(root, new Vector3(0f, by, 0.1015f), new Vector3(0.018f, 0.018f, 0.003f), Quaternion.identity, null, layer));
+        var action = model.AddComponent<TGunAction>();
+        var beams = Light(receiver, "Receiver_EnergyBeams");
+        action.Init(w, upper, new[] { Light(receiver, "Receiver_GapGlow"), Light(upper, "Upper_GapGlow"), beams }, beams.transform);
+        w.Action = action;
 
-        Muzzle(w, new Vector3(0f, by, 0.104f));
+        foreach (var t in model.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = layer;
         w.SetMode(mode);
         return w;
     }
@@ -239,7 +271,7 @@ public class Weapon : MonoBehaviour
             .shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 
         Muzzle(w, new Vector3(0f, by, 0.165f));
-        w.stunInterval = 0.9f; w.stunRange = 30f; w.stunTime = 1.6f; w.carHiccup = 0.35f;
+        w.stunInterval = 0.9f; w.stunRange = 30f; w.carHiccup = 0.35f;
         w.lethalInterval = 0.85f; w.lethalRange = 45f; w.damage = 11f; w.carDamage = 5f;
         w.recoilPitch = 16f; w.recoilBack = 0.12f;
         w.ammo = w.maxAmmo = 24;

@@ -97,6 +97,7 @@ public partial class ScenarioTest : MonoBehaviour
             case "lighting": yield return LightingTest(); break;
             case "combat": yield return CombatTest(); break;
             case "weapons": yield return WeaponsTest(); break;
+            case "tgunstun": yield return TGunStunTest(); break;
             default: Log($"FAIL unknown scenario {scenarioName}"); break;
         }
         Finish();
@@ -2853,7 +2854,7 @@ public partial class ScenarioTest : MonoBehaviour
         w.DebugSteady = true;
         fpc.DebugLook(8f, fpc.transform.eulerAngles.y);
         yield return new WaitForSeconds(1f);
-        var strip = gun.transform.GetChild(gun.transform.childCount - 2).GetComponent<Renderer>();
+        var strip = gun.ModeParts[0];
         bool blue = strip.sharedMaterial == LaserWeapon.ModeMat(Weapon.Mode.Stun);
         yield return Shot("stun_mode");
         w.ToggleMode();
@@ -3006,12 +3007,14 @@ public partial class ScenarioTest : MonoBehaviour
             off.StopDistance = 0.5f;
             yield return null;
         }
-        Log($"test officer: {off.State}, {Vector3.Distance(off.transform.position, me):0.0} m away");
+        Log($"test officer: {off.State}, {Vector3.Distance(off.transform.position, me):0.0} m away, gun {off.Gun != null}, health {(off.Health != null ? off.Health.Health : -1f):0}, figure {off.GetComponent<CharacterFigure>() != null}");
+        if (off.Gun == null) { Log("FAIL the test officer has no gun"); yield break; }
         off.Armed = true;
         Vector3 chest = fpc.transform.position + Vector3.up * 1.2f;
         int hits = 0, shots = 0; float worstOrigin = 0f;
         for (float t = 0f; t < 5f; t += Time.deltaTime)
         {
+            if (off == null || off.Gun == null) { Log("WARN the test officer was shot down by police fire before the officer checks"); yield break; }
             off.Goal = spot; off.AimAt(chest);
             Vector3 muzzle = off.Gun.muzzle.position;
             int before = LaserWeapon.Shots;
@@ -3024,10 +3027,11 @@ public partial class ScenarioTest : MonoBehaviour
         fpc.zoom.Snap(1f);
         LookAt(off.transform.position + Vector3.up * 1.2f);
         fpc.DebugLook(25f, fpc.transform.eulerAngles.y + 35f);
-        for (int i = 0; i < 3; i++) { off.Goal = spot; off.AimAt(chest); yield return null; }
+        for (int i = 0; i < 3 && off != null; i++) { off.Goal = spot; off.AimAt(chest); yield return null; }
         yield return Shot("officer_aim");
         fpc.zoom.Snap(0f);
 
+        if (off == null) { Log("WARN the test officer was shot down by police fire before the cover check"); yield break; }
         // Cover: a slab 1.2 m in front of the officer (where its eye and barrel lines are furthest apart),
         // under the eye line but over the barrel line.
         Vector3 fromOff = chest - (off.transform.position + Vector3.up * 1.2f);
@@ -3043,6 +3047,7 @@ public partial class ScenarioTest : MonoBehaviour
         int coverHits = 0, coverShots = 0, onSlab = 0;
         for (float t = 0f; t < 3f; t += Time.deltaTime)
         {
+            if (off == null) break;
             off.Goal = spot; off.AimAt(chest);
             int before = LaserWeapon.Shots;
             if (off.FireStun(chest, 30f, 0.5f)) coverHits++;
@@ -3053,16 +3058,16 @@ public partial class ScenarioTest : MonoBehaviour
         Log(coverShots > 0 && coverHits == 0 && onSlab > 0 ? "PASS cover stops officers' shots" : eyeClear ? "FAIL cover didn't stop the shots" : "WARN slab also blocked the eye line (no shots)");
         Destroy(slab);
 
+        if (off == null) { Log("WARN the test officer was shot down by police fire before the stun check"); yield break; }
         // 6. The player stuns the officer.
         w.Draw();
         for (float t = 0f; t < 0.8f; t += Time.deltaTime) { off.Goal = spot; LookAt(off.transform.position + Vector3.up * 1f); yield return null; }
         w.DebugFire();
         yield return null;
-        bool down = off.Stunned;
-        Log($"player stuns the officer: hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}, stunned {down}, force now {disp.ForceLevel}");
+        float level = off.StunState.Level;
+        Log($"player stuns the officer: hit {(PlayerWeapon.LastShotCollider != null ? PlayerWeapon.LastShotCollider.name : "nothing")}, stun level {level:0.0}, force now {disp.ForceLevel}");
         yield return Shot("officer_stunned");
-        yield return new WaitForSeconds(2.2f);
-        Log(down && !off.Stunned && disp.ForceLevel == PoliceDispatch.Force.Lethal ? "PASS stun drops an officer for 2 s (and brings lethal force)" : "FAIL officer stun");
+        Log(level >= 1f && !off.Frozen && disp.ForceLevel == PoliceDispatch.Force.Lethal ? "PASS a stun shot adds a level on an officer (and brings lethal force)" : "FAIL officer stun");
     }
 
     // ---------- one-handed aiming ----------

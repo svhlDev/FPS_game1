@@ -47,6 +47,7 @@ public class FigureAnimator : MonoBehaviour
     public bool FollowLook { get; set; }
     public bool Straining { get; set; }    // mashing against restraints
     public bool ThrowReady { get; set; }   // grenade: right arm drawn back
+    public bool Frozen { get; set; }       // full stun: holds the pose it's in, mid-motion
 
     // Fight stance (metres at figure height 1.5, from the eyes along the look).
     public float guardForward = 0.2f, guardDrop = 0.11f, guardSide = 0.12f;
@@ -216,6 +217,7 @@ public class FigureAnimator : MonoBehaviour
         if (Figure == null) Figure = GetComponent<CharacterFigure>();
         var f = Figure;
         if (f == null || f.Hips == null) return;
+        if (Frozen) return;
         RestoreUnreacted();
         float dt = Time.deltaTime;
         float k = 1f - Mathf.Exp(-blend * dt);

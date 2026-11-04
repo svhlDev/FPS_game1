@@ -15,7 +15,8 @@ using UnityEngine;
 // Stands on moving cars like the player does (carried by the car it's standing on).
 // Weapon: a T-gun on the hip; while PoliceDispatch calls AimAt it is drawn and aimed with the shared
 // arm IK (ArmAim) at the target plus an error that shrinks the longer it tracks, and shots leave the
-// muzzle along the barrel (LaserWeapon), so cover stops them. Stun(s) drops it like the player.
+// muzzle along the barrel (LaserWeapon), so cover stops them. Stun lasers build up on its StunMeter like
+// on the player; Stun(s) (the arc caster's shock) drops it for s seconds.
 // Health (CharacterHealth, 100): at 0 the gun drops (GunPickup, thrown with the hand's velocity), the
 // dispatcher is told (PoliceDispatch.OnOfficerDown) and the body becomes a ragdoll. A fall of 10 m or
 // more is fatal.
@@ -39,7 +40,7 @@ public class OfficerAgent : MonoBehaviour
     public Phase State { get; private set; }
     public PoliceDriver Home { get; private set; }
     public bool Grounded { get; private set; }
-    public bool Staggered => Time.time < staggerUntil;
+    public bool Staggered => Time.time < staggerUntil || Frozen;
     public bool AtGoal { get; private set; }
     public FlyingVehicle Platform => platform;
 
@@ -77,6 +78,9 @@ public class OfficerAgent : MonoBehaviour
     float trackTime, seed;
     float stunUntil;
     public bool Stunned => Time.time < stunUntil;
+    readonly StunMeter stun = new StunMeter();
+    public StunMeter StunState => stun;
+    public bool Frozen => stun.Frozen;
     public float deadlyFall = 10f;
     float peakY;
     Vector3 lastWrist, handVelocity;
@@ -191,8 +195,12 @@ public class OfficerAgent : MonoBehaviour
         return true;
     }
 
-    // Stun shot: down (Stunned pose) for `seconds`, no moving or shooting.
+    // Arc caster's shock: down (Stunned pose) for `seconds`, no moving or shooting.
     public void Stun(float seconds) => stunUntil = Mathf.Max(stunUntil, Time.time + seconds);
+
+    // Stun laser hit: a level on the meter. Slower with each (moving, turning, firing); frozen mid-motion at
+    // full stun. True if this hit froze the officer.
+    public bool StunHit() => stun.Hit();
 
     // Shoved `displacement` (m, eased out over ~0.3 s, walls stop it) and staggered for `seconds`.
     public void Knock(Vector3 displacement, float seconds)
@@ -261,6 +269,7 @@ public class OfficerAgent : MonoBehaviour
         lastPos = transform.position;
         if (platform != null) v -= platform.Velocity;
         anim.Velocity = v;
+        anim.Frozen = Frozen;
         anim.Grounded = State != Phase.Foot || Grounded;
         anim.LookYaw = transform.eulerAngles.y;
         anim.CurrentPose = State != Phase.Foot ? FigureAnimator.Pose.Scooter
@@ -275,13 +284,13 @@ public class OfficerAgent : MonoBehaviour
     void UpdateScooter(float dt)
     {
         cc.enabled = false;
-        if (Stunned) return; // hangs there on the hovering scooter
+        if (Stunned || Frozen) return; // hangs there on the hovering scooter
         Vector3 target = Goal + Vector3.up * 0.3f;
         Vector3 to = target - transform.position;
         Vector3 flat = new Vector3(to.x, 0f, to.z);
         if (flat.sqrMagnitude > 0.01f) Face(flat, dt);
         float d = to.magnitude;
-        if (d > 0.01f) transform.position += to / d * Mathf.Min(d, scooterSpeed * dt);
+        if (d > 0.01f) transform.position += to / d * Mathf.Min(d, scooterSpeed * stun.SpeedFactor * dt);
 
         // Close enough: hop off and walk the rest.
         if (flat.magnitude < dismountRange && Mathf.Abs(to.y) < 3f)
@@ -296,11 +305,12 @@ public class OfficerAgent : MonoBehaviour
     void UpdateReturn(float dt)
     {
         if (Home == null) { Destroy(gameObject); return; }
+        if (Frozen) return;
         Vector3 to = Home.transform.position - transform.position;
         float d = to.magnitude;
         if (d < 2f) { Destroy(gameObject); return; }
         Face(new Vector3(to.x, 0f, to.z), dt);
-        transform.position += to / d * Mathf.Min(d, scooterSpeed * 1.5f * dt);
+        transform.position += to / d * Mathf.Min(d, scooterSpeed * 1.5f * stun.SpeedFactor * dt);
     }
 
     void UpdateFoot(float dt)
@@ -319,7 +329,7 @@ public class OfficerAgent : MonoBehaviour
 
         Vector3 move = Vector3.zero;
         AtGoal = false;
-        if (Stunned) { }
+        if (Stunned || Frozen) { }
         else if (Staggered)
         {
             // Knocked back over the first fraction of the stagger.
@@ -336,7 +346,7 @@ public class OfficerAgent : MonoBehaviour
             float d = to.magnitude;
             if (d > StopDistance)
             {
-                float speed = SpeedOverride ?? (d > walkRange ? runSpeed : walkSpeed);
+                float speed = (SpeedOverride ?? (d > walkRange ? runSpeed : walkSpeed)) * stun.SpeedFactor;
                 Vector3 dir = to / d;
 
                 // Keep apart from other officers.
@@ -407,7 +417,7 @@ public class OfficerAgent : MonoBehaviour
     void Face(Vector3 dir, float dt)
     {
         if (dir.sqrMagnitude < 1e-4f) return;
-        transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(dir), turnRate * dt);
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(dir), turnRate * stun.SpeedFactor * dt);
     }
 
     void SetPlatform(FlyingVehicle car)
@@ -441,7 +451,7 @@ public class OfficerAgent : MonoBehaviour
     public bool FireStun(Vector3 target, float range, float interval)
     {
         if (!CanFire(target, range) || Time.time < nextFire) return false;
-        nextFire = Time.time + interval;
+        nextFire = Time.time + interval / stun.SpeedFactor;
         return Shoot(Weapon.Mode.Stun, range);
     }
 
@@ -457,7 +467,7 @@ public class OfficerAgent : MonoBehaviour
         if (Time.time < nextFire) return 0;
         burstLeft--;
         bool hit = Shoot(Weapon.Mode.Lethal, range);
-        nextFire = Time.time + (burstLeft > 0 ? shotInterval : burstInterval);
+        nextFire = Time.time + (burstLeft > 0 ? shotInterval : burstInterval) / stun.SpeedFactor;
         return hit ? 1 : 0;
     }
 
@@ -475,6 +485,7 @@ public class OfficerAgent : MonoBehaviour
         if (gun.CurrentMode != mode) gun.SetMode(mode);
         Vector3 m = gun.muzzle.position, dir = gun.muzzle.forward;
         bool hit = LaserWeapon.Fire(m, dir, range * 1.5f, transform, mode, out var h);
+        gun.PlayFire();
         arm.Kick(dir, gun);
         Shots++;
         if (!hit) return false;
@@ -487,9 +498,9 @@ public class OfficerAgent : MonoBehaviour
             if (mode == Weapon.Mode.Stun) car.Hiccup(gun.carHiccup);
             else if (car.Health != null) car.Health.Damage(gun.carDamage, h.point, h.normal);
         }
-        PedestrianSystem.Shot(h.collider, mode == Weapon.Mode.Lethal, gun.stunTime, m);
+        PedestrianSystem.Shot(h.collider, mode == Weapon.Mode.Lethal, m);
         if (mode == Weapon.Mode.Lethal) CharacterHealth.LaserHit(h, dir, gun.damage, false);
-        else { var other = h.collider.GetComponentInParent<OfficerAgent>(); if (other != null) other.Stun(gun.stunTime); }
+        else { var other = h.collider.GetComponentInParent<OfficerAgent>(); if (other != null) other.StunHit(); }
         return false;
     }
 
@@ -505,7 +516,7 @@ public class OfficerAgent : MonoBehaviour
             if (handVelocity.sqrMagnitude > 400f) handVelocity = Vector3.zero; // first frame / teleport
             lastWrist = w;
         }
-        if (gun == null || fig == null) return;
+        if (gun == null || fig == null || Frozen) return; // frozen: the arm and gun stay where they are
         bool want = Aiming;
         if (want != gunDrawn)
         {

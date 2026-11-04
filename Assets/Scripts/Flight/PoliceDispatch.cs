@@ -19,8 +19,8 @@ using UnityEngine;
 //              Approach -> Cuffing (2.5 s; stepping 1.5 m away interrupts, the 2nd time brings out
 //              stun guns) -> Dragging (to the nearest police car at 2 m/s; mash the mouse buttons to
 //              break free) -> Loaded: back seat, hands tied, driven to the police station (PlayerRide).
-//   Force    : None -> NonLethal (stun guns: 2 s stun, then cuffing) -> Lethal (car gunfire, sidearms
-//              on foot). Punching an officer, or a carjacking a police officer sees, is Lethal at once.
+//   Force    : None -> NonLethal (stun guns: stun builds up per StunMeter, then cuffing) -> Lethal (car
+//              gunfire, sidearms on foot). Punching an officer, or a carjacking a police officer sees, is Lethal at once.
 //   Station  : arriving = Busted: fine, the stolen car is lost, released at the station door, wanted 0.
 //   Roof     : riding a moving car's roof in sight of police: 5 s to get inside or off, then arrest
 //              (a police car pulls alongside and an officer steps onto the roof). Seen jumping from
@@ -85,7 +85,6 @@ public class PoliceDispatch : MonoBehaviour
     [Header("Force")]
     public float stunRange = 12f;
     public float stunInterval = 2.5f;
-    public float stunTime = 2f;
     public float sidearmRange = 30f;
     public int sidearmBurst = 3;
     public float sidearmBurstInterval = 1.5f;
@@ -1021,9 +1020,9 @@ public class PoliceDispatch : MonoBehaviour
             {
                 if (o.FireStun(aim, stunRange, stunInterval))
                 {
-                    fpc.Stun(stunTime);
+                    bool froze = fpc.StunHit();
                     stunFlashUntil = Time.time + 0.4f;
-                    Show("Stunned!");
+                    Show(froze ? "Stunned!" : $"Stun {Mathf.CeilToInt(fpc.StunState.Level)} / {StunMeter.LevelsToFreeze}");
                 }
             }
             else if (ForceLevel == Force.Lethal && o.FireSidearm(aim, sidearmRange, sidearmBurst, sidearmBurstInterval, sidearmShotInterval) > 0)

@@ -16,9 +16,10 @@ using UnityEngine;
 //   Bodies: each pedestrian has a seed; promotion assembles the pooled generated body for it
 //     (BodyPool.Civilian), or the primitive figure while the pool is still filling.
 //   Promotion at nearRadius, demotion at farRadius (hysteresis).
-// Health (CharacterHealth, 60, near tier only, full again on promotion): stun shots knock down, lethal
-// hits make them run; at 0 the body becomes a ragdoll and the pedestrian leaves the crowd (a new one
-// appears out of view later).
+// Health (CharacterHealth, 60, near tier only, full again on promotion): stun shots build up (StunMeter:
+// they run, slower with each hit, and freeze in place at full stun), a car's hit knocks down, lethal hits
+// make them run; at 0 the body becomes a ragdoll and the pedestrian leaves the crowd (a new one appears
+// out of view later).
 // The near tier is the crowd for blending in (NearAgents).
 [DefaultExecutionOrder(120)]
 public class PedestrianSystem : MonoBehaviour
@@ -37,7 +38,7 @@ public class PedestrianSystem : MonoBehaviour
 
     public static PedestrianSystem Instance { get; private set; }
 
-    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone, Down, Shocked }
+    public enum State : byte { Walking, Waiting, Fleeing, Staring, AtPad, Gone, Down, Shocked, Frozen }
 
     public class Ped
     {
@@ -54,10 +55,10 @@ public class PedestrianSystem : MonoBehaviour
         internal CharacterController cc;
         internal FigureAnimator anim;
         internal float vy, lastStare;
-        internal bool downLethal;
         internal Vector3 knock;           // displacement still to apply (eased out)
         internal float staggerUntil, lastShock = -100f, shockStart;
         internal bool facing;             // backing away: keep facing fleeFrom
+        public readonly StunMeter stun = new StunMeter();
         public int seed;
         internal BodyAsset body;   // cached once the pool is full
         public bool IsNear => near != null;
@@ -89,20 +90,29 @@ public class PedestrianSystem : MonoBehaviour
         dangers.Add((p, radius, Time.time));
     }
 
-    // A T-gun shot hit `c`: if it's a near pedestrian, stun: down stunTime s, then flees from `from`;
-    // lethal: runs from `from` (CharacterHealth decides whether it dies). True if it was a pedestrian.
-    public static bool Shot(Collider c, bool lethal, float stunTime, Vector3 from)
+    // A laser shot hit `c`: if it's a near pedestrian, stun: a level on its StunMeter, it runs from `from`
+    // (slower with each level) and freezes at full stun; lethal: runs from `from` (CharacterHealth decides
+    // whether it dies). True if it was a pedestrian.
+    public static bool Shot(Collider c, bool lethal, Vector3 from)
     {
         var p = Find(c);
         if (p == null) return false;
-        if (lethal)
+        if (!lethal)
         {
-            if (p.state != State.Down) { p.state = State.Fleeing; p.until = Time.time + 6f; p.fleeFrom = from; }
-            return true;
+            p.stun.Hit();
+            if (p.stun.Frozen) { p.state = State.Frozen; return true; }
         }
+        if (p.state != State.Down && p.state != State.Frozen) { p.state = State.Fleeing; p.until = Time.time + 6f; p.fleeFrom = from; }
+        return true;
+    }
+
+    // Hit by a car: down `seconds`, then flees from `from`.
+    public static bool Knockdown(Collider c, float seconds, Vector3 from)
+    {
+        var p = Find(c);
+        if (p == null) return false;
         p.state = State.Down;
-        p.downLethal = p.downLethal || lethal;
-        p.until = Time.time + (p.downLethal ? 30f : stunTime);
+        p.until = Time.time + seconds;
         p.fleeFrom = from;
         return true;
     }
@@ -232,6 +242,7 @@ public class PedestrianSystem : MonoBehaviour
         p.speed = Mathf.Lerp(walkSpeed.x, walkSpeed.y, (float)rng.NextDouble());
         p.lane = (float)rng.NextDouble() * 2f - 1f;
         p.state = State.Walking;
+        p.stun.Reset();
         p.path.Clear();
         p.path.Add(node);
         p.index = 0;
@@ -450,7 +461,7 @@ public class PedestrianSystem : MonoBehaviour
             {
                 bodyCursor = (bodyCursor + 1) % nearList.Count;
                 var p = nearList[bodyCursor];
-                if (p.state == State.Down || p.state == State.Fleeing || p.state == State.Shocked || Time.time - p.lastShock < 30f) continue;
+                if (p.state == State.Down || p.state == State.Frozen || p.state == State.Fleeing || p.state == State.Shocked || Time.time - p.lastShock < 30f) continue;
                 foreach (var r in Ragdoll.All)
                 {
                     if (r == null || r.HipsBody == null) continue;
@@ -514,6 +525,12 @@ public class PedestrianSystem : MonoBehaviour
     Vector3 Steer(Ped p, float dt, Vector3? roofRider)
     {
         p.facing = false;
+        // Full stun: stands frozen, then runs.
+        if (p.state == State.Frozen)
+        {
+            if (p.stun.Frozen) return Vector3.zero;
+            p.state = State.Fleeing; p.until = Time.time + 5f;
+        }
         if (Time.time < p.staggerUntil && p.state != State.Down) return Vector3.zero;
         // A body nearby: stop and stare, back away from it, then run.
         if (p.state == State.Shocked)
@@ -525,11 +542,10 @@ public class PedestrianSystem : MonoBehaviour
             if (t < 2.1f) return from.sqrMagnitude > 0.01f ? from.normalized * 1f : Vector3.zero;
             p.state = State.Fleeing; p.until = Time.time + 5f;
         }
-        // Shot: on the ground, then up and running (or gone).
+        // Knocked down: on the ground, then up and running.
         if (p.state == State.Down)
         {
             if (Time.time < p.until) return Vector3.zero;
-            if (p.downLethal) { p.downLethal = false; Despawn(p); return Vector3.zero; }
             p.state = State.Fleeing; p.until = Time.time + 5f;
         }
         // Danger nearby: run from it.
@@ -618,7 +634,7 @@ public class PedestrianSystem : MonoBehaviour
             float d = r.magnitude;
             if (d < 2f && d > 0.01f) push += r / d * (2f - d) * 2f;
         }
-        Vector3 vel = want + push;
+        Vector3 vel = (want + push) * p.stun.SpeedFactor;
         if (!p.facing && vel.sqrMagnitude > 0.01f) p.yaw = Mathf.MoveTowardsAngle(p.yaw, Mathf.Atan2(vel.x, vel.z) * Mathf.Rad2Deg, 360f * dt);
         if (p.knock.sqrMagnitude > 1e-6f && dt > 0f)
         {
@@ -638,7 +654,8 @@ public class PedestrianSystem : MonoBehaviour
             p.anim.Grounded = p.cc.isGrounded;
             p.anim.LookYaw = p.yaw;
             p.anim.LookPitch = p.state == State.Staring ? -35f : 0f;
-            p.anim.CurrentPose = p.state == State.Down ? (p.downLethal ? FigureAnimator.Pose.Fallen : FigureAnimator.Pose.Stunned)
+            p.anim.Frozen = p.state == State.Frozen;
+            p.anim.CurrentPose = p.state == State.Down ? FigureAnimator.Pose.Stunned
                                : Time.time < p.staggerUntil ? FigureAnimator.Pose.Staggered : FigureAnimator.Pose.Normal;
         }
         // Fell off something: back to the nearest node.

@@ -144,7 +144,8 @@ public class FirstPersonController : MonoBehaviour
     public bool Frozen { get; set; }
     // Cuffed: no movement or interaction, can't hit; an officer drags you (Drag).
     public bool Restrained { get; set; }
-    public bool Stunned => Time.time < stunUntil;
+    public bool Stunned => stun.Frozen;
+    public StunMeter StunState => stun;
     public float Health { get; private set; } = 100f;
     public float maxHealth = 100f;
     // The car whose roof you're standing on, if any.
@@ -191,7 +192,7 @@ public class FirstPersonController : MonoBehaviour
     float staggerUntil = -1f;
     Vector3 animVel;
     float lastDragTime = -10f;
-    float stunUntil = -1f, stunTime = 1f;
+    readonly StunMeter stun = new StunMeter();
     float lastHurt = -100f;
     Vector3 pendingDrag;
     FlyingVehicle lastLeftCar; float leftCarTime;
@@ -285,8 +286,8 @@ public class FirstPersonController : MonoBehaviour
         // Cars moved this frame; make their colliders match before we query against them.
         using (SyncMarker.Auto()) Physics.SyncTransforms();
 
-        // No mouse look while the cursor is released (Esc).
-        Vector2 look = Cursor.lockState == CursorLockMode.Locked ? mouse.delta.ReadValue() * lookSensitivity : Vector2.zero;
+        // No mouse look while the cursor is released (Esc) or frozen by a full stun.
+        Vector2 look = Cursor.lockState == CursorLockMode.Locked && !Stunned ? mouse.delta.ReadValue() * lookSensitivity : Vector2.zero;
         transform.Rotate(0f, look.x, 0f);
         pitch = Mathf.Clamp(pitch - look.y, -85f, 85f);
         cameraRoot.localRotation = Quaternion.Euler(pitch, 0f, 0f);
@@ -303,7 +304,7 @@ public class FirstPersonController : MonoBehaviour
         if (Health < maxHealth && Time.time - lastHurt > 8f) Health = Mathf.Min(maxHealth, Health + 5f * dt);
         float x = noInput ? 0f : (kb.dKey.isPressed ? 1f : 0f) - (kb.aKey.isPressed ? 1f : 0f);
         float z = noInput ? 0f : (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f);
-        float speed = kb.leftShiftKey.isPressed ? sprintSpeed : walkSpeed;
+        float speed = (kb.leftShiftKey.isPressed ? sprintSpeed : walkSpeed) * stun.SpeedFactor;
         Vector3 move = Vector3.ClampMagnitude(transform.right * x + transform.forward * z, 1f) * speed;
 
         // Horizontal motion: on the ground (or a roof, relative to it) input is direct;
@@ -448,11 +449,9 @@ public class FirstPersonController : MonoBehaviour
                 local += Random.insideUnitSphere * camShake * catchShake;
                 camShake = Mathf.MoveTowards(camShake, 0f, 2f * Time.deltaTime);
             }
-            // Hard landings and stuns move the head itself (the body crouches / falls); stunned also
-            // tilts the view.
-            float down = Stunned ? Mathf.Clamp01(Mathf.Min((stunUntil - Time.time) * 4f, (Time.time - (stunUntil - stunTime)) * 4f)) : 0f;
+            // Hard landings move the head itself (the body crouches).
             cam.localPosition = local;
-            cam.localRotation = Quaternion.Euler(0f, 0f, 70f * down);
+            cam.localRotation = Quaternion.identity;
             SetBodyVisible(dist > showBodyDistance);
         }
         UpdateBlob();
@@ -467,9 +466,9 @@ public class FirstPersonController : MonoBehaviour
         Animator.LookPitch = pitch;
         Animator.Velocity = animVel;
         Animator.Grounded = grounded || hang != null;
+        Animator.Frozen = Stunned;
         FigureAnimator.Pose pose;
         if (hang != null) pose = FigureAnimator.Pose.Hang;
-        else if (Stunned) pose = FigureAnimator.Pose.Stunned;
         else if (Restrained) pose = Time.time - lastDragTime < 0.2f ? FigureAnimator.Pose.Dragged : FigureAnimator.Pose.Cuffed;
         else if (Time.time < staggerUntil) pose = FigureAnimator.Pose.Landing;
         else if (gliding) pose = FigureAnimator.Pose.Glide;
@@ -798,7 +797,7 @@ public class FirstPersonController : MonoBehaviour
     {
         Frozen = false;
         Restrained = false;
-        stunUntil = -1f;
+        stun.Reset();
         Heal();
         staggerUntil = -1f;
         hang = null;
@@ -867,12 +866,12 @@ public class FirstPersonController : MonoBehaviour
         leftCarTime = Time.time;
     }
 
-    // Stun gun hit: down for `seconds`, no input.
-    public void Stun(float seconds)
+    // Stun gun hit: a level on the meter (slower with each). True if it froze the player: no input and
+    // no looking round until it wears off.
+    public bool StunHit()
     {
-        stunTime = seconds;
-        stunUntil = Time.time + seconds;
-        camShake = Mathf.Max(camShake, 0.4f);
+        camShake = Mathf.Max(camShake, 0.2f);
+        return stun.Hit();
     }
 
     public void Damage(float amount) => Damage(amount, null);

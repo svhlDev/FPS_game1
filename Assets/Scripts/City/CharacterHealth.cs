@@ -276,7 +276,7 @@ public class CombatSystem : MonoBehaviour
         var fpc = ch.GetComponent<FirstPersonController>();
         if (fpc != null) { fpc.Push(push * 0.5f); fpc.Shake(0.6f); }
         if (PedestrianSystem.Find(ch.GetComponent<Collider>()) != null)
-            PedestrianSystem.Shot(ch.GetComponent<Collider>(), false, 1.5f, car.transform.position);
+            PedestrianSystem.Knockdown(ch.GetComponent<Collider>(), 1.5f, car.transform.position);
         PedestrianSystem.ReportDanger(ch.transform.position, 15f);
     }
 

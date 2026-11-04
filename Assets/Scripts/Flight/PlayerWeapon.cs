@@ -20,9 +20,9 @@ using UnityEngine.InputSystem;
 //   2. ArmAim: arm IK toward it, gun turned so the barrel ray passes through it (AimSolver.cs).
 //   3. If the barrel ray hits something more than 0.5 m before the aim point, a hollow marker shows
 //      where the shot will really land.
-// Shots travel the actual barrel. T-gun / Scatter: LaserWeapon.Fire per beam. Stun: people down
-// stunTime s, cars hiccup, no damage. Lethal: damage (CharacterHealth: head x2, body x1, limbs x0.6), cars
-// through VehicleHealth. The others: WeaponSpecials.cs. Every hit is reported (ShotHit) so the police
+// Shots travel the actual barrel. T-gun / Scatter: LaserWeapon.Fire per beam. Stun: a level per hit on
+// people (StunMeter: slower with each, frozen at 10), cars hiccup, no damage. Lethal: damage
+// (CharacterHealth: head x2, body x1, limbs x0.6), cars through VehicleHealth. The others: WeaponSpecials.cs. Every hit is reported (ShotHit) so the police
 // react the same way to all of them; the non-laser weapons always count as lethal.
 // Drawn = brandishing (police see the mode: PoliceDispatch).
 [DefaultExecutionOrder(105)] // after FigureAnimator (50) and FirstPersonController (100) LateUpdates
@@ -359,6 +359,7 @@ public class PlayerWeapon : MonoBehaviour
             case Weapon.Kind.TGun:
             {
                 bool hit = LaserWeapon.Fire(m, dir, Gun.Range, transform, mode, out var h);
+                Gun.PlayFire();
                 LastShotCollider = hit ? h.collider : null;
                 LastShotPoint = hit ? h.point : m + dir * Gun.Range;
                 ShotFired?.Invoke(m, mode);
@@ -436,8 +437,8 @@ public class PlayerWeapon : MonoBehaviour
         {
             if (car != null) car.Hiccup(Gun.carHiccup);
             var officer = c.GetComponentInParent<OfficerAgent>();
-            if (officer != null) officer.Stun(Gun.stunTime);
-            PedestrianSystem.Shot(c, false, Gun.stunTime, transform.position);
+            if (officer != null) officer.StunHit();
+            PedestrianSystem.Shot(c, false, transform.position);
         }
         else
         {
@@ -445,7 +446,7 @@ public class PlayerWeapon : MonoBehaviour
             if (car != null && car.Health != null) { dmg = carDamage; car.Health.Damage(dmg, h.point, h.normal); }
             // Police hear about it while the victim still stands (an officer shot dead is still an officer).
             ShotHit?.Invoke(c, h.point, dmg, mode);
-            PedestrianSystem.Shot(c, true, 0f, transform.position);
+            PedestrianSystem.Shot(c, true, transform.position);
             CharacterHealth.LaserHit(h, dir, baseDamage, true);
             var rb = c != null ? c.attachedRigidbody : null;
             if (rb != null && !rb.isKinematic) rb.AddForceAtPosition(dir * push, h.point, ForceMode.Impulse);

@@ -88,6 +88,7 @@ public static class BuildScript
 
     static bool Build()
     {
+        TGunImport.EnsureMaterial();
         // 0 = Input Manager (old), 1 = Input System Package, 2 = Both
         int input = ActiveInputHandler();
         if (input != 1 && input != 2)

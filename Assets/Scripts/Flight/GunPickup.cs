@@ -26,8 +26,8 @@ public class GunPickup : MonoBehaviour
         p.Gun = gun;
         p.Born = Time.time;
         var box = gun.gameObject.AddComponent<BoxCollider>();
-        box.center = new Vector3(0f, 0.015f, 0f);
-        box.size = new Vector3(0.04f, 0.12f, 0.22f);
+        box.center = new Vector3(0f, 0.003f, 0f);
+        box.size = new Vector3(0.03f, 0.13f, 0.252f);
         var rb = gun.gameObject.AddComponent<Rigidbody>();
         rb.mass = 1.2f;
         rb.interpolation = RigidbodyInterpolation.Interpolate;

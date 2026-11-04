@@ -114,7 +114,7 @@ public static class ArcCaster
                     if (o != null) o.Stun(gun.stunTime);
                     else n.ch.Knock(WeaponFx.Flat(d) * 0.35f, 0.6f);
                 }
-                if (n.col != null) PedestrianSystem.Shot(n.col, true, 0f, muzzle);
+                if (n.col != null) PedestrianSystem.Shot(n.col, true, muzzle);
             }
             else if (n.car != null)
             {
@@ -329,7 +329,7 @@ public static class Repulsor
                 ch.Knock(push * PeopleShove * power * k, 1.0f);
                 ch.React(BodyPart.Location.Body, null, p, push, 1f);
             }
-            if (col != null) PedestrianSystem.Shot(col, true, 0f, origin);
+            if (col != null) PedestrianSystem.Shot(col, true, origin);
             moved++;
         }
 
